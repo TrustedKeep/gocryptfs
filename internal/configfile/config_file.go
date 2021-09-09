@@ -294,7 +294,7 @@ func getKeyEncrypter(scryptHash []byte, useHKDF bool) *contentenc.ContentEnc {
 	if useHKDF {
 		IVLen = contentenc.DefaultIVBits
 	}
-	cc := cryptocore.New(scryptHash, cryptocore.BackendGoGCM, IVLen, useHKDF, false)
+	cc := cryptocore.New(scryptHash, cryptocore.BackendGoGCM, IVLen, useHKDF)
 	ce := contentenc.New(cc, 4096, false)
 	return ce
 }
