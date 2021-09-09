@@ -101,18 +101,13 @@ func New(key []byte, aeadType AEADTypeEnum, IVBitLen int, useHKDF bool, forceDec
 			// Example: tests/example_filesystems/v0.9
 			gcmKey = append([]byte{}, key...)
 		}
-		switch aeadType {
-		case BackendGoGCM:
-			goGcmBlockCipher, err := aes.NewCipher(gcmKey)
-			if err != nil {
-				log.Panic(err)
-			}
-			aeadCipher, err = cipher.NewGCMWithNonceSize(goGcmBlockCipher, IVBitLen/8)
-			if err != nil {
-				log.Panic(err)
-			}
-		default:
-			log.Panicf("BUG: unhandled case: %v", aeadType)
+		goGcmBlockCipher, err := aes.NewCipher(gcmKey)
+		if err != nil {
+			log.Panic(err)
+		}
+		aeadCipher, err = cipher.NewGCMWithNonceSize(goGcmBlockCipher, IVBitLen/8)
+		if err != nil {
+			log.Panic(err)
 		}
 		for i := range gcmKey {
 			gcmKey[i] = 0
@@ -126,11 +121,7 @@ func New(key []byte, aeadType AEADTypeEnum, IVBitLen int, useHKDF bool, forceDec
 			log.Panic("XChaCha20-Poly1305 must use HKDF, but it is disabled")
 		}
 		derivedKey := hkdfDerive(key, hkdfInfoXChaChaPoly1305Content, chacha20poly1305.KeySize)
-		if aeadType == BackendXChaCha20Poly1305 {
-			aeadCipher, err = chacha20poly1305.NewX(derivedKey)
-		} else {
-			log.Panicf("BUG: unhandled case: %v", aeadType)
-		}
+		aeadCipher, err = chacha20poly1305.NewX(derivedKey)
 		if err != nil {
 			log.Panic(err)
 		}
