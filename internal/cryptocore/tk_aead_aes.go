@@ -4,12 +4,12 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/hex"
-	"fmt"
 	"sync"
 	"time"
 
 	cryptoutil "github.com/TrustedKeep/tkutils/v2/crypto"
 	"github.com/TrustedKeep/tkutils/v2/lru"
+	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 )
 
 const (
@@ -87,21 +87,22 @@ func (t *gcmAead) getAead(additionalData []byte) (aead cipher.AEAD) {
 }
 
 func (t *gcmAead) getKey(ad []byte) []byte {
-	fmt.Printf("GETKEY called\nlen: %d\n", len(ad))
+	// special case where we're decrypting the config file.  this should go away
+	// once we're fully integrated with KMS
 	if len(ad) == 8 {
-		fmt.Printf("Returning config key\n")
 		return t.configKey
 	}
 	t.keyMu.Lock()
 	defer t.keyMu.Unlock()
 
 	id := hex.EncodeToString(ad[8:])
-	fmt.Printf("Fetching key %s\n", id)
 	if iKey, cached := t.keys.Get(id); cached {
 		return iKey.([]byte)
 	}
-	fmt.Printf("Generating new key %s\n", id)
-	key := cryptoutil.NextKey()
+	key, err := tkc.Get().GetKey([]byte(id))
+	if err != nil {
+		panic(err) // TODO: don't panic
+	}
 	t.keys.Add(id, key)
 	return key
 }
