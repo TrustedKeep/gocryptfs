@@ -101,7 +101,6 @@ func (c *TKConnector) Ready() chan struct{} {
 
 // GetKey from KMS
 func (c *TKConnector) GetKey(path []byte) ([]byte, error) {
-	// TODO: formalize this, constants and such.  set c.nodeID on init
 	path = bytes.Join([][]byte{[]byte(c.nodeID), path}, []byte("/"))
 
 	tlog.Debug.Printf("Retrieving key from KMS")

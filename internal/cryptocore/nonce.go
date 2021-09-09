@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"log"
+
+	"github.com/TrustedKeep/tkutils/v2/crypto"
 )
 
 // RandBytes gets "n" random bytes from /dev/urandom or panics
@@ -28,5 +30,5 @@ type nonceGenerator struct {
 
 // Get a random "nonceLen"-byte nonce
 func (n *nonceGenerator) Get() []byte {
-	return randPrefetcher.read(n.nonceLen)
+	return crypto.NextNonce(n.nonceLen)
 }
