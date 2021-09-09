@@ -31,17 +31,17 @@ type AEADTypeEnum struct {
 
 // BackendGoGCM specifies the Go based AES-256-GCM backend.
 // "AES-GCM-256-Go" in gocryptfs -speed.
-var BackendGoGCM AEADTypeEnum = AEADTypeEnum{"AES-GCM-256-Go", 16}
+var BackendGoGCM AEADTypeEnum = AEADTypeEnum{"AES-GCM-256", 16}
 
 // BackendXChaCha20Poly1305 specifies XChaCha20-Poly1305-Go.
 // "XChaCha20-Poly1305-Go" in gocryptfs -speed.
-var BackendXChaCha20Poly1305 AEADTypeEnum = AEADTypeEnum{"XChaCha20-Poly1305-Go", chacha20poly1305.NonceSizeX}
+var BackendXChaCha20Poly1305 AEADTypeEnum = AEADTypeEnum{"XChaCha20-Poly1305", chacha20poly1305.NonceSizeX}
 
 // CryptoCore is the low level crypto implementation.
 type CryptoCore struct {
 	// EME is used for filename encryption.
 	EMECipher *eme.EMECipher
-	// GCM or AES-SIV. This is used for content encryption.
+	// GCM or Chacha - This is used for content encryption.
 	AEADCipher cipher.AEAD
 	// Which backend is behind AEADCipher?
 	AEADBackend AEADTypeEnum
