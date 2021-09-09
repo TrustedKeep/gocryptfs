@@ -3,8 +3,6 @@ package main
 import (
 	"reflect"
 	"testing"
-
-	"github.com/rfjakob/gocryptfs/v2/internal/stupidgcm"
 )
 
 // TestPrefixOArgs checks that the "-o x,y,z" parsing works correctly.
@@ -119,7 +117,6 @@ func TestParseCliOpts(t *testing.T) {
 		longnames: true,
 		raw64:     true,
 		hkdf:      true,
-		openssl:   stupidgcm.PreferOpenSSLAES256GCM(), // depends on CPU and build flags
 		scryptn:   16,
 	}
 

@@ -16,7 +16,6 @@ import (
 
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
 	"github.com/rfjakob/gocryptfs/v2/internal/siv_aead"
-	"github.com/rfjakob/gocryptfs/v2/internal/stupidgcm"
 )
 
 // 128-bit file ID + 64 bit block number = 192 bits = 24 bytes
@@ -32,11 +31,9 @@ func Run() {
 		f         func(*testing.B)
 		preferred bool
 	}{
-		{name: cryptocore.BackendOpenSSL.Name, f: bStupidGCM, preferred: stupidgcm.PreferOpenSSLAES256GCM()},
-		{name: cryptocore.BackendGoGCM.Name, f: bGoGCM, preferred: !stupidgcm.PreferOpenSSLAES256GCM()},
+		{name: cryptocore.BackendGoGCM.Name, f: bGoGCM, preferred: true},
 		{name: cryptocore.BackendAESSIV.Name, f: bAESSIV, preferred: false},
-		{name: cryptocore.BackendXChaCha20Poly1305OpenSSL.Name, f: bStupidXchacha, preferred: stupidgcm.PreferOpenSSLXchacha20poly1305()},
-		{name: cryptocore.BackendXChaCha20Poly1305.Name, f: bXchacha20poly1305, preferred: !stupidgcm.PreferOpenSSLXchacha20poly1305()},
+		{name: cryptocore.BackendXChaCha20Poly1305.Name, f: bXchacha20poly1305, preferred: false},
 	}
 	for _, b := range bTable {
 		fmt.Printf("%-26s\t", b.name)
@@ -109,14 +106,6 @@ func bDecrypt(b *testing.B, c cipher.AEAD) {
 	}
 }
 
-// bStupidGCM benchmarks stupidgcm's openssl GCM
-func bStupidGCM(b *testing.B) {
-	if stupidgcm.BuiltWithoutOpenssl {
-		b.Skip("openssl has been disabled at compile-time")
-	}
-	bEncrypt(b, stupidgcm.NewAES256GCM(randBytes(32), false))
-}
-
 // bGoGCM benchmarks Go stdlib GCM
 func bGoGCM(b *testing.B) {
 	gAES, err := aes.NewCipher(randBytes(32))
@@ -140,12 +129,4 @@ func bAESSIV(b *testing.B) {
 func bXchacha20poly1305(b *testing.B) {
 	c, _ := chacha20poly1305.NewX(randBytes(32))
 	bEncrypt(b, c)
-}
-
-// bStupidXchacha benchmarks OpenSSL XChaCha20
-func bStupidXchacha(b *testing.B) {
-	if stupidgcm.BuiltWithoutOpenssl {
-		b.Skip("openssl has been disabled at compile-time")
-	}
-	bEncrypt(b, stupidgcm.NewXchacha20poly1305(randBytes(32)))
 }

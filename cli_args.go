@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,16 +19,15 @@ import (
 
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
-	"github.com/rfjakob/gocryptfs/v2/internal/stupidgcm"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
 // argContainer stores the parsed CLI options and arguments
 type argContainer struct {
-	debug, init, zerokey, fusedebug, openssl, passwd, fg, version,
+	debug, init, zerokey, fusedebug, passwd, fg, version,
 	plaintextnames, quiet, nosyslog, wpanic,
 	longnames, allow_other, reverse, aessiv, nonempty, raw64,
-	noprealloc, speed, hkdf, serialize_reads, forcedecode, hh, info,
+	noprealloc, speed, hkdf, serialize_reads, hh, info,
 	sharedstorage, fsck, one_file_system, deterministic_names,
 	xchacha bool
 	// Mount options with opposites
@@ -134,7 +132,6 @@ func convertToDoubleDash(osArgs []string) (out []string) {
 // parseCliOpts - parse command line options (i.e. arguments that start with "-")
 func parseCliOpts(osArgs []string) (args argContainer) {
 	var err error
-	var opensslAuto string
 
 	osArgsPreprocessed, err := prefixOArgs(osArgs)
 	if err != nil {
@@ -151,7 +148,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.init, "init", false, "Initialize encrypted directory")
 	flagSet.BoolVar(&args.zerokey, "zerokey", false, "Use all-zero dummy master key")
 	// Tri-state true/false/auto
-	flagSet.StringVar(&opensslAuto, "openssl", "auto", "Use OpenSSL instead of built-in Go crypto")
 	flagSet.BoolVar(&args.passwd, "passwd", false, "Change password")
 	flagSet.BoolVar(&args.fg, "f", false, "")
 	flagSet.BoolVar(&args.fg, "fg", false, "Stay in the foreground")
@@ -172,8 +168,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.speed, "speed", false, "Run crypto speed test")
 	flagSet.BoolVar(&args.hkdf, "hkdf", true, "Use HKDF as an additional key derivation step")
 	flagSet.BoolVar(&args.serialize_reads, "serialize_reads", false, "Try to serialize read operations")
-	flagSet.BoolVar(&args.forcedecode, "forcedecode", false, "Force decode of files even if integrity check fails."+
-		" Requires gocryptfs to be compiled with openssl support and implies -openssl true")
 	flagSet.BoolVar(&args.hh, "hh", false, "Show this long help text")
 	flagSet.BoolVar(&args.info, "info", false, "Display information about CIPHERDIR")
 	flagSet.BoolVar(&args.sharedstorage, "sharedstorage", false, "Make concurrent access to a shared CIPHERDIR safer")
@@ -250,46 +244,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	// We want to know if -scryptn was passed explicitly
 	if isFlagPassed(flagSet, scryptn) {
 		args._explicitScryptn = true
-	}
-	// "-openssl" needs some post-processing
-	if opensslAuto == "auto" {
-		if args.xchacha {
-			args.openssl = stupidgcm.PreferOpenSSLXchacha20poly1305()
-		} else {
-			args.openssl = stupidgcm.PreferOpenSSLAES256GCM()
-		}
-	} else {
-		args.openssl, err = strconv.ParseBool(opensslAuto)
-		if err != nil {
-			tlog.Fatal.Printf("Invalid \"-openssl\" setting: %v", err)
-			os.Exit(exitcodes.Usage)
-		}
-	}
-	// "-forcedecode" only works with openssl. Check compilation and command line parameters
-	if args.forcedecode {
-		if stupidgcm.BuiltWithoutOpenssl {
-			tlog.Fatal.Printf("The -forcedecode flag requires openssl support, but gocryptfs was compiled without it!")
-			os.Exit(exitcodes.Usage)
-		}
-		if args.aessiv {
-			tlog.Fatal.Printf("The -forcedecode and -aessiv flags are incompatible because they use different crypto libs (openssl vs native Go)")
-			os.Exit(exitcodes.Usage)
-		}
-		if args.reverse {
-			tlog.Fatal.Printf("The reverse mode and the -forcedecode option are not compatible")
-			os.Exit(exitcodes.Usage)
-		}
-		// Has the user explicitly disabled openssl using "-openssl=false/0"?
-		if !args.openssl && opensslAuto != "auto" {
-			tlog.Fatal.Printf("-forcedecode requires openssl, but is disabled via command-line option")
-			os.Exit(exitcodes.Usage)
-		}
-		args.openssl = true
-
-		// Try to make it harder for the user to shoot himself in the foot.
-		args.ro = true
-		args.allow_other = false
-		args.ko = "noexec"
 	}
 	if len(args.extpass) > 0 && len(args.passfile) != 0 {
 		tlog.Fatal.Printf("The options -extpass and -passfile cannot be used at the same time")

@@ -2,8 +2,6 @@ package cryptocore
 
 import (
 	"testing"
-
-	"github.com/rfjakob/gocryptfs/v2/internal/stupidgcm"
 )
 
 // "New" should accept at least these param combinations
@@ -15,13 +13,6 @@ func TestCryptoCoreNew(t *testing.T) {
 			t.Fail()
 		}
 		c = New(key, BackendGoGCM, 128, useHKDF, false)
-		if c.IVLen != 16 {
-			t.Fail()
-		}
-		if stupidgcm.BuiltWithoutOpenssl {
-			continue
-		}
-		c = New(key, BackendOpenSSL, 128, useHKDF, false)
 		if c.IVLen != 16 {
 			t.Fail()
 		}
@@ -37,5 +28,5 @@ func TestNewPanic(t *testing.T) {
 	}()
 
 	key := make([]byte, 16)
-	New(key, BackendOpenSSL, 128, true, false)
+	New(key, BackendGoGCM, 128, true, false)
 }

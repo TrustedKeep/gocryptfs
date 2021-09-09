@@ -14,7 +14,6 @@ import (
 	"github.com/rfjakob/eme"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/siv_aead"
-	"github.com/rfjakob/gocryptfs/v2/internal/stupidgcm"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
@@ -32,10 +31,6 @@ type AEADTypeEnum struct {
 	NonceSize int
 }
 
-// BackendOpenSSL specifies the OpenSSL AES-256-GCM backend.
-// "AES-GCM-256-OpenSSL" in gocryptfs -speed.
-var BackendOpenSSL AEADTypeEnum = AEADTypeEnum{"AES-GCM-256-OpenSSL", 16}
-
 // BackendGoGCM specifies the Go based AES-256-GCM backend.
 // "AES-GCM-256-Go" in gocryptfs -speed.
 var BackendGoGCM AEADTypeEnum = AEADTypeEnum{"AES-GCM-256-Go", 16}
@@ -47,9 +42,6 @@ var BackendAESSIV AEADTypeEnum = AEADTypeEnum{"AES-SIV-512-Go", siv_aead.NonceSi
 // BackendXChaCha20Poly1305 specifies XChaCha20-Poly1305-Go.
 // "XChaCha20-Poly1305-Go" in gocryptfs -speed.
 var BackendXChaCha20Poly1305 AEADTypeEnum = AEADTypeEnum{"XChaCha20-Poly1305-Go", chacha20poly1305.NonceSizeX}
-
-// BackendXChaCha20Poly1305OpenSSL specifies XChaCha20-Poly1305-OpenSSL.
-var BackendXChaCha20Poly1305OpenSSL AEADTypeEnum = AEADTypeEnum{"XChaCha20-Poly1305-OpenSSL", chacha20poly1305.NonceSizeX}
 
 // CryptoCore is the low level crypto implementation.
 type CryptoCore struct {
@@ -106,7 +98,7 @@ func New(key []byte, aeadType AEADTypeEnum, IVBitLen int, useHKDF bool, forceDec
 
 	// Initialize an AEAD cipher for file content encryption.
 	var aeadCipher cipher.AEAD
-	if aeadType == BackendOpenSSL || aeadType == BackendGoGCM {
+	if aeadType == BackendGoGCM {
 		var gcmKey []byte
 		if useHKDF {
 			gcmKey = hkdfDerive(key, hkdfInfoGCMContent, KeyLen)
@@ -116,11 +108,6 @@ func New(key []byte, aeadType AEADTypeEnum, IVBitLen int, useHKDF bool, forceDec
 			gcmKey = append([]byte{}, key...)
 		}
 		switch aeadType {
-		case BackendOpenSSL:
-			if IVBitLen != 128 {
-				log.Panicf("stupidgcm only supports 128-bit IVs, you wanted %d", IVBitLen)
-			}
-			aeadCipher = stupidgcm.NewAES256GCM(gcmKey, forceDecode)
 		case BackendGoGCM:
 			goGcmBlockCipher, err := aes.NewCipher(gcmKey)
 			if err != nil {
@@ -156,7 +143,7 @@ func New(key []byte, aeadType AEADTypeEnum, IVBitLen int, useHKDF bool, forceDec
 		for i := range key64 {
 			key64[i] = 0
 		}
-	} else if aeadType == BackendXChaCha20Poly1305 || aeadType == BackendXChaCha20Poly1305OpenSSL {
+	} else if aeadType == BackendXChaCha20Poly1305 {
 		// We don't support legacy modes with XChaCha20-Poly1305
 		if IVBitLen != chacha20poly1305.NonceSizeX*8 {
 			log.Panicf("XChaCha20-Poly1305 must use 192-bit IVs, you wanted %d", IVBitLen)
@@ -167,8 +154,6 @@ func New(key []byte, aeadType AEADTypeEnum, IVBitLen int, useHKDF bool, forceDec
 		derivedKey := hkdfDerive(key, hkdfInfoXChaChaPoly1305Content, chacha20poly1305.KeySize)
 		if aeadType == BackendXChaCha20Poly1305 {
 			aeadCipher, err = chacha20poly1305.NewX(derivedKey)
-		} else if aeadType == BackendXChaCha20Poly1305OpenSSL {
-			aeadCipher = stupidgcm.NewXchacha20poly1305(derivedKey)
 		} else {
 			log.Panicf("BUG: unhandled case: %v", aeadType)
 		}
@@ -204,7 +189,7 @@ type wiper interface {
 // still raises to bar for extracting the key.
 func (c *CryptoCore) Wipe() {
 	be := c.AEADBackend
-	if be == BackendOpenSSL || be == BackendAESSIV {
+	if be == BackendAESSIV {
 		tlog.Debug.Printf("CryptoCore.Wipe: Wiping AEADBackend %s key", be.Name)
 		// We don't use "x, ok :=" because we *want* to crash loudly if the
 		// type assertion fails.

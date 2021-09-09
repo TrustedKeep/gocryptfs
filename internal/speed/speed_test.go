@@ -8,7 +8,6 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/siv_aead"
-	"github.com/rfjakob/gocryptfs/v2/internal/stupidgcm"
 )
 
 /*
@@ -22,17 +21,6 @@ BenchmarkAESSIV-2      	   10000	    104623 ns/op	  39.15 MB/s
 PASS
 ok  	github.com/rfjakob/gocryptfs/v2/internal/speed	6.022s
 */
-
-func BenchmarkStupidGCM(b *testing.B) {
-	bStupidGCM(b)
-}
-
-func BenchmarkStupidGCMDecrypt(b *testing.B) {
-	if stupidgcm.BuiltWithoutOpenssl {
-		b.Skip("openssl has been disabled at compile-time")
-	}
-	bDecrypt(b, stupidgcm.NewAES256GCM(randBytes(32), false))
-}
 
 func BenchmarkGoGCM(b *testing.B) {
 	bGoGCM(b)
@@ -65,20 +53,4 @@ func BenchmarkXchacha(b *testing.B) {
 func BenchmarkXchachaDecrypt(b *testing.B) {
 	c, _ := chacha20poly1305.NewX(randBytes(32))
 	bDecrypt(b, c)
-}
-
-func BenchmarkStupidXchacha(b *testing.B) {
-	bStupidXchacha(b)
-}
-
-func BenchmarkStupidXchachaDecrypt(b *testing.B) {
-	bDecrypt(b, stupidgcm.NewXchacha20poly1305(randBytes(32)))
-}
-
-func BenchmarkStupidChacha(b *testing.B) {
-	bEncrypt(b, stupidgcm.NewChacha20poly1305(randBytes(32)))
-}
-
-func BenchmarkStupidChachaDecrypt(b *testing.B) {
-	bDecrypt(b, stupidgcm.NewChacha20poly1305(randBytes(32)))
 }

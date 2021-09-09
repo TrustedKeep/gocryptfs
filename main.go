@@ -20,7 +20,6 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/fido2"
 	"github.com/rfjakob/gocryptfs/v2/internal/readpassword"
 	"github.com/rfjakob/gocryptfs/v2/internal/speed"
-	"github.com/rfjakob/gocryptfs/v2/internal/stupidgcm"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
@@ -133,9 +132,6 @@ func changePassword(args *argContainer) {
 // gocryptfs v1.7-32-gcf99cfd; go-fuse v1.0.0-174-g22a9cb9; 2019-05-12 go1.12 linux/amd64
 func printVersion() {
 	var tagsSlice []string
-	if stupidgcm.BuiltWithoutOpenssl {
-		tagsSlice = append(tagsSlice, "without_openssl")
-	}
 	tags := ""
 	if tagsSlice != nil {
 		tags = " " + strings.Join(tagsSlice, " ")
@@ -179,7 +175,6 @@ func main() {
 	tlog.Debug.Printf("cli args: %q", os.Args)
 	// "-v"
 	if args.version {
-		tlog.Debug.Printf("openssl=%v\n", args.openssl)
 		tlog.Debug.Printf("on-disk format %d\n", contentenc.CurrentVersion)
 		printVersion()
 		os.Exit(0)

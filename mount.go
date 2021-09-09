@@ -252,18 +252,11 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 	// that is passed to the filesystem implementation
 	cryptoBackend := cryptocore.BackendGoGCM
 	IVBits := contentenc.DefaultIVBits
-	if args.openssl {
-		cryptoBackend = cryptocore.BackendOpenSSL
-	}
 	if args.aessiv {
 		cryptoBackend = cryptocore.BackendAESSIV
 	}
 	if args.xchacha {
-		if args.openssl {
-			cryptoBackend = cryptocore.BackendXChaCha20Poly1305OpenSSL
-		} else {
-			cryptoBackend = cryptocore.BackendXChaCha20Poly1305
-		}
+		cryptoBackend = cryptocore.BackendXChaCha20Poly1305
 		IVBits = chacha20poly1305.NonceSizeX * 8
 	}
 	// forceOwner implies allow_other, as documented.
@@ -277,7 +270,6 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 		LongNames:          args.longnames,
 		ConfigCustom:       args._configCustom,
 		NoPrealloc:         args.noprealloc,
-		ForceDecode:        args.forcedecode,
 		ForceOwner:         args._forceOwner,
 		Exclude:            args.exclude,
 		ExcludeWildcard:    args.excludeWildcard,
@@ -306,15 +298,6 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 			tlog.Fatal.Printf("AES-SIV is required by reverse mode, but not enabled in the config file")
 			os.Exit(exitcodes.Usage)
 		}
-		// Upgrade to OpenSSL variant if requested
-		if args.openssl {
-			switch cryptoBackend {
-			case cryptocore.BackendGoGCM:
-				cryptoBackend = cryptocore.BackendOpenSSL
-			case cryptocore.BackendXChaCha20Poly1305:
-				cryptoBackend = cryptocore.BackendXChaCha20Poly1305OpenSSL
-			}
-		}
 	}
 	// If allow_other is set and we run as root, try to give newly created files to
 	// the right user.
@@ -323,8 +306,8 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 	}
 
 	// Init crypto backend
-	cCore := cryptocore.New(masterkey, cryptoBackend, IVBits, args.hkdf, args.forcedecode)
-	cEnc := contentenc.New(cCore, contentenc.DefaultBS, args.forcedecode)
+	cCore := cryptocore.New(masterkey, cryptoBackend, IVBits, args.hkdf, false)
+	cEnc := contentenc.New(cCore, contentenc.DefaultBS, false)
 	nameTransform := nametransform.New(cCore.EMECipher, frontendArgs.LongNames,
 		args.raw64, []string(args.badname), frontendArgs.DeterministicNames)
 	// After the crypto backend is initialized,
@@ -407,10 +390,6 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 	}
 	if args.acl {
 		mOpts.EnableAcl = true
-	}
-	if args.forcedecode {
-		tlog.Info.Printf(tlog.ColorYellow + "THE OPTION \"-forcedecode\" IS ACTIVE. GOCRYPTFS WILL RETURN CORRUPT DATA!" +
-			tlog.ColorReset)
 	}
 	// fusermount from libfuse 3.x removed the "nonempty" option and exits
 	// with an error if it sees it. Only add it to the options on libfuse 2.x.
