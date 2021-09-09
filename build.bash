@@ -82,7 +82,7 @@ fi
 # Actual "go build" call for gocryptfs
 go build "-ldflags=$GO_LDFLAGS" "$@"
 # Additional binaries
-for d in gocryptfs-xray contrib/statfs contrib/findholes contrib/atomicrename ; do
+for d in contrib/statfs contrib/findholes contrib/atomicrename ; do
 	(cd "$d"; go build "-ldflags=$GO_LDFLAGS" "$@")
 done
 

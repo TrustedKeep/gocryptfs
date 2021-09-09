@@ -101,20 +101,6 @@ func New(key []byte, aeadType AEADTypeEnum, IVBitLen int, useHKDF bool) *CryptoC
 			// Example: tests/example_filesystems/v0.9
 			gcmKey = append([]byte{}, key...)
 		}
-		// TODO: possibly re-use this old code for a single-key filesystem if speed is more
-		// important than security of key per file
-
-		// goGcmBlockCipher, err := aes.NewCipher(gcmKey)
-		// if err != nil {
-		// 	log.Panic(err)
-		// }
-		// aeadCipher, err = cipher.NewGCMWithNonceSize(goGcmBlockCipher, IVBitLen/8)
-		// if err != nil {
-		// 	log.Panic(err)
-		// }
-		// for i := range gcmKey {
-		// 	gcmKey[i] = 0
-		// }
 		aeadCipher = newTkAes(gcmKey, IVBitLen/8)
 	} else if aeadType == BackendXChaCha20Poly1305 {
 		// We don't support legacy modes with XChaCha20-Poly1305
