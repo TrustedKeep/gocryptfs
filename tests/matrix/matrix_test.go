@@ -1,4 +1,4 @@
-// Tests run for (almost all) combinations of openssl, aessiv, plaintextnames.
+// Tests run for (almost all) combinations of openssl, plaintextnames.
 package matrix
 
 // File reading, writing, modification, truncate, ...
@@ -24,7 +24,6 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/stupidgcm"
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
 
@@ -34,8 +33,6 @@ var testcase testcaseMatrix
 
 type testcaseMatrix struct {
 	plaintextnames bool
-	openssl        string
-	aessiv         bool
 	raw64          bool
 	extraArgs      []string
 }
@@ -52,24 +49,20 @@ func (tc *testcaseMatrix) isSet(extraArg string) bool {
 
 var matrix = []testcaseMatrix{
 	// Normal
-	{false, "auto", false, false, nil},
-	{false, "true", false, false, nil},
-	{false, "false", false, false, nil},
+	{false, false, nil},
 	// Plaintextnames
-	{true, "true", false, false, nil},
-	{true, "false", false, false, nil},
+	{true, false, nil},
 	// AES-SIV (does not use openssl, no need to test permutations)
-	{false, "auto", true, false, nil},
-	{true, "auto", true, false, nil},
+	{false, false, nil},
+	{true, false, nil},
 	// Raw64
-	{false, "auto", false, true, nil},
+	{false, true, nil},
 	// -serialize_reads
-	{false, "auto", false, false, []string{"-serialize_reads"}},
-	{false, "auto", false, false, []string{"-sharedstorage"}},
-	{false, "auto", false, false, []string{"-deterministic-names"}},
-	// Test xchacha with and without openssl
-	{false, "true", false, true, []string{"-xchacha"}},
-	{false, "false", false, true, []string{"-xchacha"}},
+	{false, false, []string{"-serialize_reads"}},
+	{false, false, []string{"-sharedstorage"}},
+	{false, false, []string{"-deterministic-names"}},
+	// Test xchacha
+	{false, true, []string{"-xchacha"}},
 }
 
 // This is the entry point for the tests
@@ -78,9 +71,6 @@ func TestMain(m *testing.M) {
 	flag.Parse()
 	var i int
 	for i, testcase = range matrix {
-		if testcase.openssl == "true" && stupidgcm.BuiltWithoutOpenssl {
-			continue
-		}
 		if testing.Verbose() {
 			fmt.Printf("matrix: testcase = %#v\n", testcase)
 		}
@@ -93,9 +83,7 @@ func TestMain(m *testing.M) {
 		test_helpers.ResetTmpDir(createDirIV)
 		opts := []string{"-zerokey"}
 		//opts = append(opts, "-fusedebug")
-		opts = append(opts, fmt.Sprintf("-openssl=%v", testcase.openssl))
 		opts = append(opts, fmt.Sprintf("-plaintextnames=%v", testcase.plaintextnames))
-		opts = append(opts, fmt.Sprintf("-aessiv=%v", testcase.aessiv))
 		opts = append(opts, fmt.Sprintf("-raw64=%v", testcase.raw64))
 		opts = append(opts, testcase.extraArgs...)
 		test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir, opts...)

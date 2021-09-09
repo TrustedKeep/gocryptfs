@@ -257,10 +257,6 @@ func (ck *fsckObj) xattrs(relPath string) {
 
 // entrypoint from main()
 func fsck(args *argContainer) (exitcode int) {
-	if args.reverse {
-		tlog.Fatal.Printf("Running -fsck with -reverse is not supported")
-		os.Exit(exitcodes.Usage)
-	}
 	args.allow_other = false
 	args.ro = true
 	var err error

@@ -62,9 +62,6 @@ type RootNode struct {
 }
 
 func NewRootNode(args Args, c *contentenc.ContentEnc, n *nametransform.NameTransform) *RootNode {
-	if len(args.Exclude) > 0 {
-		tlog.Warn.Printf("Forward mode does not support -exclude")
-	}
 	ivLen := nametransform.DirIVLen
 	if args.PlaintextNames {
 		ivLen = 0

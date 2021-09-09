@@ -54,20 +54,12 @@ func isDir(dir string) error {
 // In reverse mode, we create .gocryptfs.reverse.conf and the directory does
 // not need to be empty.
 func initDir(args *argContainer) {
-	var err error
-	if args.reverse {
-		_, err = os.Stat(args.config)
-		if err == nil {
-			tlog.Fatal.Printf("Config file %q already exists", args.config)
-			os.Exit(exitcodes.Init)
-		}
-	} else {
-		err = isEmptyDir(args.cipherdir)
-		if err != nil {
-			tlog.Fatal.Printf("Invalid cipherdir: %v", err)
-			os.Exit(exitcodes.CipherDir)
-		}
+	err := isEmptyDir(args.cipherdir)
+	if err != nil {
+		tlog.Fatal.Printf("Invalid cipherdir: %v", err)
+		os.Exit(exitcodes.CipherDir)
 	}
+
 	// Choose password for config file
 	if len(args.extpass) == 0 && args.fido2 == "" {
 		tlog.Info.Printf("Choose a password for protecting your files.")
@@ -92,7 +84,6 @@ func initDir(args *argContainer) {
 			PlaintextNames:     args.plaintextnames,
 			LogN:               args.scryptn,
 			Creator:            creator,
-			AESSIV:             args.aessiv,
 			Fido2CredentialID:  fido2CredentialID,
 			Fido2HmacSalt:      fido2HmacSalt,
 			DeterministicNames: args.deterministic_names,
@@ -108,7 +99,7 @@ func initDir(args *argContainer) {
 	}
 	// Forward mode with filename encryption enabled needs a gocryptfs.diriv file
 	// in the root dir
-	if !args.plaintextnames && !args.reverse && !args.deterministic_names {
+	if !args.plaintextnames && !args.deterministic_names {
 		// Open cipherdir (following symlinks)
 		dirfd, err := syscall.Open(args.cipherdir, syscall.O_DIRECTORY|syscallcompat.O_PATH, 0)
 		if err == nil {
@@ -122,10 +113,6 @@ func initDir(args *argContainer) {
 	}
 	mountArgs := ""
 	fsName := "gocryptfs"
-	if args.reverse {
-		mountArgs = " -reverse"
-		fsName = "gocryptfs-reverse"
-	}
 	tlog.Info.Printf(tlog.ColorGreen+"The %s filesystem has been created successfully."+tlog.ColorReset,
 		fsName)
 	wd, _ := os.Getwd()

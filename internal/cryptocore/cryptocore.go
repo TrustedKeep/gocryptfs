@@ -5,7 +5,6 @@ package cryptocore
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/sha512"
 	"log"
 	"runtime"
 
@@ -13,7 +12,6 @@ import (
 
 	"github.com/rfjakob/eme"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/siv_aead"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
@@ -34,10 +32,6 @@ type AEADTypeEnum struct {
 // BackendGoGCM specifies the Go based AES-256-GCM backend.
 // "AES-GCM-256-Go" in gocryptfs -speed.
 var BackendGoGCM AEADTypeEnum = AEADTypeEnum{"AES-GCM-256-Go", 16}
-
-// BackendAESSIV specifies an AESSIV backend.
-// "AES-SIV-512-Go" in gocryptfs -speed.
-var BackendAESSIV AEADTypeEnum = AEADTypeEnum{"AES-SIV-512-Go", siv_aead.NonceSize}
 
 // BackendXChaCha20Poly1305 specifies XChaCha20-Poly1305-Go.
 // "XChaCha20-Poly1305-Go" in gocryptfs -speed.
@@ -123,26 +117,6 @@ func New(key []byte, aeadType AEADTypeEnum, IVBitLen int, useHKDF bool, forceDec
 		for i := range gcmKey {
 			gcmKey[i] = 0
 		}
-	} else if aeadType == BackendAESSIV {
-		if IVBitLen != 128 {
-			// SIV supports any nonce size, but we only use 128.
-			log.Panicf("AES-SIV must use 128-bit IVs, you wanted %d", IVBitLen)
-		}
-		// AES-SIV uses 1/2 of the key for authentication, 1/2 for
-		// encryption, so we need a 64-bytes key for AES-256. Derive it from
-		// the 32-byte master key using HKDF, or, for older filesystems, with
-		// SHA256.
-		var key64 []byte
-		if useHKDF {
-			key64 = hkdfDerive(key, hkdfInfoSIVContent, siv_aead.KeyLen)
-		} else {
-			s := sha512.Sum512(key)
-			key64 = s[:]
-		}
-		aeadCipher = siv_aead.New(key64)
-		for i := range key64 {
-			key64[i] = 0
-		}
 	} else if aeadType == BackendXChaCha20Poly1305 {
 		// We don't support legacy modes with XChaCha20-Poly1305
 		if IVBitLen != chacha20poly1305.NonceSizeX*8 {
@@ -188,16 +162,7 @@ type wiper interface {
 // This is not bulletproof due to possible GC copies, but
 // still raises to bar for extracting the key.
 func (c *CryptoCore) Wipe() {
-	be := c.AEADBackend
-	if be == BackendAESSIV {
-		tlog.Debug.Printf("CryptoCore.Wipe: Wiping AEADBackend %s key", be.Name)
-		// We don't use "x, ok :=" because we *want* to crash loudly if the
-		// type assertion fails.
-		w := c.AEADCipher.(wiper)
-		w.Wipe()
-	} else {
-		tlog.Debug.Printf("CryptoCore.Wipe: Only nil'ing stdlib refs")
-	}
+	tlog.Debug.Printf("CryptoCore.Wipe: Only nil'ing stdlib refs")
 	// We have no access to the keys (or key-equivalents) stored inside the
 	// Go stdlib. Best we can is to nil the references and force a GC.
 	c.AEADCipher = nil

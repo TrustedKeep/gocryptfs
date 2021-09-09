@@ -26,15 +26,6 @@ type Args struct {
 	ConfigCustom bool
 	// NoPrealloc disables automatic preallocation before writing
 	NoPrealloc bool
-	// Exclude is a list of paths to make inaccessible, starting match at
-	// the filesystem root
-	Exclude []string
-	// ExcludeWildcards is a list of paths to make inaccessible, matched
-	// anywhere, and supporting wildcards
-	ExcludeWildcard []string
-	// ExcludeFrom is a list of files from which to read exclusion patterns
-	// (with wildcard syntax)
-	ExcludeFrom []string
 	// Suid is true if the filesystem has been mounted with the "-suid" flag.
 	// If it is false, we can ignore the GETXATTR "security.capability" calls,
 	// which are a performance problem for writes. See

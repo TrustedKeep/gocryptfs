@@ -26,7 +26,7 @@ import (
 type argContainer struct {
 	debug, init, zerokey, fusedebug, passwd, fg, version,
 	plaintextnames, quiet, nosyslog, wpanic,
-	longnames, allow_other, reverse, aessiv, nonempty, raw64,
+	longnames, allow_other, nonempty, raw64,
 	noprealloc, speed, hkdf, serialize_reads, hh, info,
 	sharedstorage, fsck, one_file_system, deterministic_names,
 	xchacha bool
@@ -36,8 +36,6 @@ type argContainer struct {
 	memprofile, ko, ctlsock, fsname, force_owner, trace, fido2 string
 	// -extpass, -badname, -passfile can be passed multiple times
 	extpass, badname, passfile []string
-	// For reverse mode, several ways to specify exclusions. All can be specified multiple times.
-	exclude, excludeWildcard, excludeFrom []string
 	// Configuration file name override
 	config             string
 	notifypid, scryptn int
@@ -160,8 +158,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.longnames, "longnames", true, "Store names longer than 176 bytes in extra files")
 	flagSet.BoolVar(&args.allow_other, "allow_other", false, "Allow other users to access the filesystem. "+
 		"Only works if user_allow_other is set in /etc/fuse.conf.")
-	flagSet.BoolVar(&args.reverse, "reverse", false, "Reverse mode")
-	flagSet.BoolVar(&args.aessiv, "aessiv", false, "AES-SIV encryption")
 	flagSet.BoolVar(&args.nonempty, "nonempty", false, "Allow mounting over non-empty directories")
 	flagSet.BoolVar(&args.raw64, "raw64", true, "Use unpadded base64 for file names")
 	flagSet.BoolVar(&args.noprealloc, "noprealloc", false, "Disable preallocation before writing")
@@ -198,13 +194,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.StringVar(&args.force_owner, "force_owner", "", "uid:gid pair to coerce ownership")
 	flagSet.StringVar(&args.trace, "trace", "", "Write execution trace to file")
 	flagSet.StringVar(&args.fido2, "fido2", "", "Protect the masterkey using a FIDO2 token instead of a password")
-
-	// Exclusion options
-	flagSet.StringSliceVar(&args.exclude, "e", nil, "Alias for -exclude")
-	flagSet.StringSliceVar(&args.exclude, "exclude", nil, "Exclude relative path from reverse view")
-	flagSet.StringSliceVar(&args.excludeWildcard, "ew", nil, "Alias for -exclude-wildcard")
-	flagSet.StringSliceVar(&args.excludeWildcard, "exclude-wildcard", nil, "Exclude path from reverse view, supporting wildcards")
-	flagSet.StringSliceVar(&args.excludeFrom, "exclude-from", nil, "File from which to read exclusion patterns (with -exclude-wildcard syntax)")
 
 	// multipleStrings options ([]string)
 	flagSet.StringSliceVar(&args.extpass, "extpass", nil, "Use external program for the password prompt")

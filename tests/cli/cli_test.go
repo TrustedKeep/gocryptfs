@@ -37,12 +37,9 @@ func TestMain(m *testing.M) {
 // Test -init flag
 func TestInit(t *testing.T) {
 	dir := test_helpers.InitFS(t)
-	_, c, err := configfile.LoadAndDecrypt(dir+"/"+configfile.ConfDefaultName, testPw)
+	_, _, err := configfile.LoadAndDecrypt(dir+"/"+configfile.ConfDefaultName, testPw)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if c.IsFeatureFlagSet(configfile.FlagAESSIV) {
-		t.Error("AESSIV flag should not be set")
 	}
 }
 
@@ -71,30 +68,6 @@ func TestInitFilePerms(t *testing.T) {
 // Test -init with -devrandom flag
 func TestInitDevRandom(t *testing.T) {
 	test_helpers.InitFS(t, "-devrandom")
-}
-
-// Test -init with -aessiv
-func TestInitAessiv(t *testing.T) {
-	dir := test_helpers.InitFS(t, "-aessiv")
-	_, c, err := configfile.LoadAndDecrypt(dir+"/"+configfile.ConfDefaultName, testPw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !c.IsFeatureFlagSet(configfile.FlagAESSIV) {
-		t.Error("AESSIV flag should be set but is not")
-	}
-}
-
-// Test -init with -reverse
-func TestInitReverse(t *testing.T) {
-	dir := test_helpers.InitFS(t, "-reverse")
-	_, c, err := configfile.LoadAndDecrypt(dir+"/"+configfile.ConfReverseName, testPw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !c.IsFeatureFlagSet(configfile.FlagAESSIV) {
-		t.Error("AESSIV flag should be set but is not")
-	}
 }
 
 // testPasswd changes the password from "test" to "test" using

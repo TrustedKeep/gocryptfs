@@ -17,7 +17,6 @@ func helpShort() {
 	fmt.Printf(tUsage)
 	fmt.Printf(`
 Common Options (use -hh to show all):
-  -aessiv            Use AES-SIV encryption (with -init)
   -allow_other       Allow other users to access the mount
   -i, -idle          Unmount automatically after specified idle duration
   -config            Custom path to config file

@@ -111,29 +111,9 @@ func TestCreateConfPlaintextnames(t *testing.T) {
 	}
 }
 
-// Reverse mode uses AESSIV
-func TestCreateConfFileAESSIV(t *testing.T) {
-	err := Create(&CreateArgs{
-		Filename: "config_test/tmp.conf",
-		Password: testPw,
-		LogN:     10,
-		Creator:  "test",
-		AESSIV:   true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, c, err := LoadAndDecrypt("config_test/tmp.conf", testPw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !c.IsFeatureFlagSet(FlagAESSIV) {
-		t.Error("AESSIV flag should be set but is not")
-	}
-}
-
 func TestIsFeatureFlagKnown(t *testing.T) {
 	// Test a few hardcoded values
-	testKnownFlags := []string{"DirIV", "PlaintextNames", "EMENames", "GCMIV128", "LongNames", "AESSIV"}
+	testKnownFlags := []string{"DirIV", "PlaintextNames", "EMENames", "GCMIV128", "LongNames"}
 	// And also everything in knownFlags (yes, it is likely that we end up with
 	// some duplicates. Does not matter.)
 	for _, f := range knownFlags {

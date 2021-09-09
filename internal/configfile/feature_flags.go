@@ -16,8 +16,6 @@ const (
 	FlagGCMIV128
 	// FlagLongNames allows file names longer than 176 bytes.
 	FlagLongNames
-	// FlagAESSIV selects an AES-SIV based crypto backend.
-	FlagAESSIV
 	// FlagRaw64 enables raw (unpadded) base64 encoding for file names
 	FlagRaw64
 	// FlagHKDF enables HKDF-derived keys for use with GCM, EME and SIV
@@ -40,7 +38,6 @@ var knownFlags = map[flagIota]string{
 	FlagEMENames:          "EMENames",
 	FlagGCMIV128:          "GCMIV128",
 	FlagLongNames:         "LongNames",
-	FlagAESSIV:            "AESSIV",
 	FlagRaw64:             "Raw64",
 	FlagHKDF:              "HKDF",
 	FlagFIDO2:             "FIDO2",

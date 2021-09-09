@@ -261,10 +261,8 @@ func (be *ContentEnc) EncryptBlock(plaintext []byte, blockNo uint64, fileID []by
 // The output is nonce + ciphertext + tag.
 // This function can only be used in SIV mode.
 func (be *ContentEnc) EncryptBlockNonce(plaintext []byte, blockNo uint64, fileID []byte, nonce []byte) []byte {
-	if be.cryptoCore.AEADBackend != cryptocore.BackendAESSIV {
-		log.Panic("deterministic nonces are only secure in SIV mode")
-	}
-	return be.doEncryptBlock(plaintext, blockNo, fileID, nonce)
+	log.Panic("deterministic nonces are not secure")
+	return nil
 }
 
 // doEncryptBlock is the backend for EncryptBlock and EncryptBlockNonce.

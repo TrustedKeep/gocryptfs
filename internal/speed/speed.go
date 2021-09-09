@@ -15,7 +15,6 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
-	"github.com/rfjakob/gocryptfs/v2/internal/siv_aead"
 )
 
 // 128-bit file ID + 64 bit block number = 192 bits = 24 bytes
@@ -32,7 +31,6 @@ func Run() {
 		preferred bool
 	}{
 		{name: cryptocore.BackendGoGCM.Name, f: bGoGCM, preferred: true},
-		{name: cryptocore.BackendAESSIV.Name, f: bAESSIV, preferred: false},
 		{name: cryptocore.BackendXChaCha20Poly1305.Name, f: bXchacha20poly1305, preferred: false},
 	}
 	for _, b := range bTable {
@@ -117,12 +115,6 @@ func bGoGCM(b *testing.B) {
 		b.Fatal(err)
 	}
 	bEncrypt(b, gGCM)
-}
-
-// bAESSIV benchmarks AES-SIV from github.com/jacobsa/crypto/siv
-func bAESSIV(b *testing.B) {
-	c := siv_aead.New(randBytes(64))
-	bEncrypt(b, c)
 }
 
 // bXchacha20poly1305 benchmarks XChaCha20 from golang.org/x/crypto/chacha20poly1305

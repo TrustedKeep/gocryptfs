@@ -30,7 +30,6 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/ctlsocksrv"
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 	"github.com/rfjakob/gocryptfs/v2/internal/fusefrontend"
-	"github.com/rfjakob/gocryptfs/v2/internal/fusefrontend_reverse"
 	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
 	"github.com/rfjakob/gocryptfs/v2/internal/openfiletable"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
@@ -155,7 +154,7 @@ func doMount(args *argContainer) {
 	// stuff that is no longer needed to the OS
 	debug.FreeOSMemory()
 	// Set up autounmount, if requested.
-	if args.idle > 0 && !args.reverse {
+	if args.idle > 0 {
 		// Not being in reverse mode means we always have a forward file system.
 		fwdFs := fs.(*fusefrontend.RootNode)
 		go idleMonitor(args.idle, fwdFs, srv, args.mountpoint)
@@ -252,9 +251,6 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 	// that is passed to the filesystem implementation
 	cryptoBackend := cryptocore.BackendGoGCM
 	IVBits := contentenc.DefaultIVBits
-	if args.aessiv {
-		cryptoBackend = cryptocore.BackendAESSIV
-	}
 	if args.xchacha {
 		cryptoBackend = cryptocore.BackendXChaCha20Poly1305
 		IVBits = chacha20poly1305.NonceSizeX * 8
@@ -271,9 +267,6 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 		ConfigCustom:       args._configCustom,
 		NoPrealloc:         args.noprealloc,
 		ForceOwner:         args._forceOwner,
-		Exclude:            args.exclude,
-		ExcludeWildcard:    args.excludeWildcard,
-		ExcludeFrom:        args.excludeFrom,
 		Suid:               args.suid,
 		KernelCache:        args.kernel_cache,
 		SharedStorage:      args.sharedstorage,
@@ -294,10 +287,6 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 			os.Exit(exitcodes.DeprecatedFS)
 		}
 		IVBits = cryptoBackend.NonceSize * 8
-		if cryptoBackend != cryptocore.BackendAESSIV && args.reverse {
-			tlog.Fatal.Printf("AES-SIV is required by reverse mode, but not enabled in the config file")
-			os.Exit(exitcodes.Usage)
-		}
 	}
 	// If allow_other is set and we run as root, try to give newly created files to
 	// the right user.
@@ -318,14 +307,8 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 	masterkey = nil
 	// Spawn fusefrontend
 	tlog.Debug.Printf("frontendArgs: %s", tlog.JSONDump(frontendArgs))
-	if args.reverse {
-		if cryptoBackend != cryptocore.BackendAESSIV {
-			log.Panic("reverse mode must use AES-SIV, everything else is insecure")
-		}
-		rootNode = fusefrontend_reverse.NewRootNode(frontendArgs, cEnc, nameTransform)
-	} else {
-		rootNode = fusefrontend.NewRootNode(frontendArgs, cEnc, nameTransform)
-	}
+	rootNode = fusefrontend.NewRootNode(frontendArgs, cEnc, nameTransform)
+
 	// We have opened the socket early so that we cannot fail here after
 	// asking the user for the password
 	if args._ctlsockFd != nil {
@@ -410,9 +393,6 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 	mOpts.Options = append(mOpts.Options, "fsname="+fsname)
 	// Second column, "Type", will be shown as "fuse." + Name
 	mOpts.Name = "gocryptfs"
-	if args.reverse {
-		mOpts.Name += "-reverse"
-	}
 	// Add a volume name if running osxfuse. Otherwise the Finder will show it as
 	// something like "osxfuse Volume 0 (gocryptfs)".
 	if runtime.GOOS == "darwin" {
@@ -420,8 +400,7 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 		mOpts.Options = append(mOpts.Options, "volname="+volname)
 	}
 	// The kernel enforces read-only operation, we just have to pass "ro".
-	// Reverse mounts are always read-only.
-	if args.ro || args.reverse {
+	if args.ro {
 		mOpts.Options = append(mOpts.Options, "ro")
 	} else if args.rw {
 		mOpts.Options = append(mOpts.Options, "rw")

@@ -66,7 +66,6 @@ type CreateArgs struct {
 	PlaintextNames     bool
 	LogN               int
 	Creator            string
-	AESSIV             bool
 	Fido2CredentialID  []byte
 	Fido2HmacSalt      []byte
 	DeterministicNames bool
@@ -100,9 +99,6 @@ func Create(args *CreateArgs) error {
 		cf.setFeatureFlag(FlagEMENames)
 		cf.setFeatureFlag(FlagLongNames)
 		cf.setFeatureFlag(FlagRaw64)
-	}
-	if args.AESSIV {
-		cf.setFeatureFlag(FlagAESSIV)
 	}
 	if len(args.Fido2CredentialID) > 0 {
 		cf.setFeatureFlag(FlagFIDO2)
@@ -310,9 +306,6 @@ func (cf *ConfFile) ContentEncryption() (algo cryptocore.AEADTypeEnum, err error
 	}
 	if cf.IsFeatureFlagSet(FlagXChaCha20Poly1305) {
 		return cryptocore.BackendXChaCha20Poly1305, nil
-	}
-	if cf.IsFeatureFlagSet(FlagAESSIV) {
-		return cryptocore.BackendAESSIV, nil
 	}
 	// If neither AES-SIV nor XChaCha are selected, we must be using AES-GCM
 	return cryptocore.BackendGoGCM, nil

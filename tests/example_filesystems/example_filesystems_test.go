@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/stupidgcm"
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
 
@@ -28,11 +27,7 @@ func TestMain(m *testing.M) {
 	// Make "testing.Verbose()" return the correct value
 	flag.Parse()
 	variants := []string{"-openssl=false"}
-	if !stupidgcm.BuiltWithoutOpenssl {
-		variants = append(variants, "-openssl=true")
-	} else {
-		fmt.Println("Skipping OpenSSL tests, I have been compiled without openssl support")
-	}
+
 	for _, opensslOpt = range variants {
 		if testing.Verbose() {
 			fmt.Printf("example_filesystems: testing with %q\n", opensslOpt)
@@ -164,26 +159,6 @@ func TestExampleFSv09(t *testing.T) {
 	test_helpers.UnmountPanic(pDir)
 }
 
-// gocryptfs v1.1 introduced AES-SIV
-func TestExampleFSv11(t *testing.T) {
-	cDir := "v1.1-aessiv"
-	pDir := test_helpers.TmpDir + "/" + cDir
-	cDir = tmpFsPath + cDir
-	err := os.Mkdir(pDir, 0777)
-	if err != nil {
-		t.Fatal(err)
-	}
-	test_helpers.MountOrFatal(t, cDir, pDir, "-extpass", "echo test", opensslOpt)
-	checkExampleFSLongnames(t, pDir)
-	test_helpers.UnmountPanic(pDir)
-	pDir = pDir + ".2"
-	test_helpers.MountOrFatal(t, cDir, pDir, "-masterkey",
-		"eaf371c3-f9a55336-8819f22b-7bccd7c2-a738cf61-7261c658-14c28a03-9428992b",
-		"-aessiv", "-raw64=false", "-hkdf=false", opensslOpt)
-	checkExampleFSLongnames(t, pDir)
-	test_helpers.UnmountPanic(pDir)
-}
-
 // gocryptfs v1.1 introduced reverse mode
 func TestExampleFSv11reverse(t *testing.T) {
 	dirA := "v1.1-reverse"
@@ -214,11 +189,6 @@ func TestExampleFSv11reverse(t *testing.T) {
 	if !test_helpers.VerifyExistence(t, c) {
 		t.Errorf("%s missing", c)
 	}
-	test_helpers.MountOrFatal(t, dirB, dirC, "-aessiv", "-masterkey", m,
-		"-raw64=false", "-hkdf=false", opensslOpt)
-	checkExampleFSrw(t, dirC, false)
-	test_helpers.UnmountPanic(dirC)
-	test_helpers.UnmountPanic(dirB)
 }
 
 // gocryptfs v1.1 introduced reverse mode
@@ -251,11 +221,6 @@ func TestExampleFSv11reversePlaintextnames(t *testing.T) {
 	if !test_helpers.VerifyExistence(t, c) {
 		t.Errorf("%s missing", c)
 	}
-	test_helpers.MountOrFatal(t, dirB, dirC, "-aessiv", "-masterkey", m,
-		"-raw64=false", "-hkdf=false", opensslOpt)
-	checkExampleFSrw(t, dirC, false)
-	test_helpers.UnmountPanic(dirC)
-	test_helpers.UnmountPanic(dirB)
 }
 
 // gocryptfs v1.3 introduced HKDF
@@ -362,23 +327,6 @@ func TestExampleFSv13reverse(t *testing.T) {
 		t.Errorf("wrong md5")
 	}
 	// Unmount
-	test_helpers.UnmountPanic(dirC)
-	test_helpers.UnmountPanic(dirB)
-
-	// Mount using masterkey
-	m := "2290a7f4-3e1908fb-b006f7d9-261bdaf1-4b72bc38-3b24956c-db7d8a8d-d996076a"
-	test_helpers.MountOrFatal(t, dirA, dirB, "-reverse", "-masterkey", m, opensslOpt)
-	if !test_helpers.VerifyExistence(t, c) {
-		t.Errorf("%s missing", c)
-	}
-	test_helpers.MountOrFatal(t, dirB, dirC, "-aessiv", "-masterkey", m, opensslOpt)
-	// Test
-	checkExampleFSrw(t, dirC, false)
-	actual = test_helpers.Md5fn(cPath)
-	if actual != want {
-		t.Errorf("wrong md5")
-	}
-	// Unmmount
 	test_helpers.UnmountPanic(dirC)
 	test_helpers.UnmountPanic(dirB)
 }

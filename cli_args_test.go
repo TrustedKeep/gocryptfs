@@ -153,16 +153,6 @@ func TestParseCliOpts(t *testing.T) {
 		o: o,
 	})
 
-	o = defaultArgs
-	o.exclude = []string{"foo", "bar"}
-	testcases = append(testcases, testcaseContainer{
-		i: []string{"gocryptfs", "-e", "foo", "-e", "bar"},
-		o: o,
-	})
-	testcases = append(testcases, testcaseContainer{
-		i: []string{"gocryptfs", "--exclude", "foo", "--exclude", "bar"},
-		o: o,
-	})
 	/* TODO BROKEN
 	testcases = append(testcases, testcaseContainer{
 		i: []string{"gocryptfs", "--exclude", "foo", "-e", "bar"},

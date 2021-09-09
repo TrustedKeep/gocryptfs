@@ -217,15 +217,6 @@ func main() {
 	if args.quiet {
 		tlog.Info.Enabled = false
 	}
-	// "-reverse" implies "-aessiv"
-	if args.reverse {
-		args.aessiv = true
-	} else {
-		if args.exclude != nil {
-			tlog.Fatal.Printf("-exclude only works in reverse mode")
-			os.Exit(exitcodes.ExcludeError)
-		}
-	}
 	// "-config"
 	if args.config != "" {
 		args.config, err = filepath.Abs(args.config)
@@ -235,8 +226,6 @@ func main() {
 		}
 		tlog.Info.Printf("Using config file at custom location %s", args.config)
 		args._configCustom = true
-	} else if args.reverse {
-		args.config = filepath.Join(args.cipherdir, configfile.ConfReverseName)
 	} else {
 		args.config = filepath.Join(args.cipherdir, configfile.ConfDefaultName)
 	}
