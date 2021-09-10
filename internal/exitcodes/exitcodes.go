@@ -30,8 +30,6 @@ const (
 	// PasswordIncorrect - the password was incorrect when mounting or when
 	// changing the password.
 	PasswordIncorrect = 12
-	// ScryptParams means that scrypt was called with invalid parameters
-	ScryptParams = 13
 	// MasterKey means that something went wrong when parsing the "-masterkey"
 	// command line option
 	MasterKey = 14

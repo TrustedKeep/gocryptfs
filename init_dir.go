@@ -66,7 +66,6 @@ func initDir(args *argContainer) {
 		err = configfile.Create(&configfile.CreateArgs{
 			Filename:           args.config,
 			PlaintextNames:     args.plaintextnames,
-			LogN:               args.scryptn,
 			Creator:            creator,
 			DeterministicNames: args.deterministic_names,
 			XChaCha20Poly1305:  args.xchacha})

@@ -117,7 +117,6 @@ func TestParseCliOpts(t *testing.T) {
 		longnames: true,
 		raw64:     true,
 		hkdf:      true,
-		scryptn:   16,
 	}
 
 	type testcaseContainer struct {
@@ -153,12 +152,6 @@ func TestParseCliOpts(t *testing.T) {
 		o: o,
 	})
 
-	/* TODO BROKEN
-	testcases = append(testcases, testcaseContainer{
-		i: []string{"gocryptfs", "--exclude", "foo", "-e", "bar"},
-		o: o,
-	})
-	*/
 	for _, tc := range testcases {
 		o := parseCliOpts(tc.i)
 		if !reflect.DeepEqual(o, tc.o) {

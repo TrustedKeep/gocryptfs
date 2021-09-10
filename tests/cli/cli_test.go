@@ -6,7 +6,6 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -37,7 +36,7 @@ func TestMain(m *testing.M) {
 // Test -init flag
 func TestInit(t *testing.T) {
 	dir := test_helpers.InitFS(t)
-	_, _, err := configfile.LoadAndDecrypt(dir+"/"+configfile.ConfDefaultName, testPw)
+	_, err := configfile.Load(dir + "/" + configfile.ConfDefaultName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,23 +258,6 @@ func TestPasswdReverse(t *testing.T) {
 	// Create FS
 	dir := test_helpers.InitFS(t, "-reverse")
 	testPasswd(t, dir, "-reverse")
-}
-
-// Test -passwd with -scryptn
-func TestPasswdScryptn(t *testing.T) {
-	dir := test_helpers.InitFS(t)
-	cf, err := configfile.Load(dir + "/gocryptfs.conf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	testPasswd(t, dir, "-scryptn", strconv.Itoa(cf.ScryptObject.LogN()+1))
-	cf2, err := configfile.Load(dir + "/gocryptfs.conf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cf2.ScryptObject.LogN() != cf.ScryptObject.LogN()+1 {
-		t.Errorf("wrong logN value %d", cf2.ScryptObject.LogN())
-	}
 }
 
 // Test -init & -config flag

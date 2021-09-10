@@ -29,8 +29,6 @@ type ConfFile struct {
 	// This only documents the config file for humans who look at it. The actual
 	// technical info is contained in FeatureFlags.
 	Creator string
-	// ScryptObject stores parameters for scrypt hashing (key derivation)
-	ScryptObject ScryptKDF
 	// Version is the On-Disk-Format version this filesystem uses
 	Version uint16
 	// FeatureFlags is a list of feature flags this filesystem has enabled.
@@ -46,15 +44,12 @@ type ConfFile struct {
 type CreateArgs struct {
 	Filename           string
 	PlaintextNames     bool
-	LogN               int
 	Creator            string
 	DeterministicNames bool
 	XChaCha20Poly1305  bool
 }
 
-// Create - create a new config with a random key encrypted with
-// "Password" and write it to "Filename".
-// Uses scrypt with cost parameter "LogN".
+// Create - create a new config and write it to "Filename".
 func Create(args *CreateArgs) error {
 	cf := ConfFile{
 		filename: args.Filename,
@@ -79,11 +74,6 @@ func Create(args *CreateArgs) error {
 		cf.setFeatureFlag(FlagEMENames)
 		cf.setFeatureFlag(FlagLongNames)
 		cf.setFeatureFlag(FlagRaw64)
-	}
-	// Catch bugs and invalid cli flag combinations early
-	cf.ScryptObject = NewScryptKDF(args.LogN)
-	if err := cf.Validate(); err != nil {
-		return err
 	}
 	// Write file to disk
 	return cf.WriteFile()

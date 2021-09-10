@@ -184,7 +184,7 @@ func TestDiskFull(t *testing.T) {
 	if err = os.Mkdir(cipherdir, 0600); err != nil {
 		t.Fatal(err)
 	}
-	cmd = exec.Command(test_helpers.GocryptfsBinary, "-q", "-init", "-extpass", "echo test", "-scryptn=10", cipherdir)
+	cmd = exec.Command(test_helpers.GocryptfsBinary, "-q", "-init", "-extpass", "echo test", cipherdir)
 	out, err = cmd.CombinedOutput()
 	if err != nil {
 		t.Log(string(out))

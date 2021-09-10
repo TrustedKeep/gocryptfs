@@ -138,7 +138,7 @@ func isExt4(path string) bool {
 
 // InitFS creates a new empty cipherdir and calls
 //
-//     gocryptfs -q -init -extpass "echo test" -scryptn=10 $extraArgs $cipherdir
+//     gocryptfs -q -init -extpass "echo test" $extraArgs $cipherdir
 //
 // It returns cipherdir without a trailing slash.
 //
@@ -156,7 +156,7 @@ func InitFS(t *testing.T, extraArgs ...string) string {
 			log.Panic(err)
 		}
 	}
-	args := []string{"-q", "-init", "-extpass", "echo test", "-scryptn=10"}
+	args := []string{"-q", "-init", "-extpass", "echo test"}
 	args = append(args, extraArgs...)
 	args = append(args, dir)
 

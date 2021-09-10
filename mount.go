@@ -163,8 +163,7 @@ func doMount(args *argContainer) {
 	// This prevents a dangling "Transport endpoint is not connected"
 	// mountpoint if the user hits CTRL-C.
 	handleSigint(srv, args.mountpoint)
-	// Return memory that was allocated for scrypt (64M by default!) and other
-	// stuff that is no longer needed to the OS
+	// Return memory that was allocated for stuff that is no longer needed to the OS
 	debug.FreeOSMemory()
 	// Set up autounmount, if requested.
 	if args.idle > 0 {

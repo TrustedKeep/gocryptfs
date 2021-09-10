@@ -11,10 +11,6 @@ func (cf *ConfFile) Validate() error {
 	if cf.Version != contentenc.CurrentVersion {
 		return fmt.Errorf("Unsupported on-disk format %d", cf.Version)
 	}
-	// scrypt params ok?
-	if err := cf.ScryptObject.validateParams(); err != nil {
-		return err
-	}
 	// All feature flags that are in the config file are known?
 	for _, flag := range cf.FeatureFlags {
 		if !isFeatureFlagKnown(flag) {

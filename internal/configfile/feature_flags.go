@@ -21,8 +21,6 @@ const (
 	// FlagHKDF enables HKDF-derived keys for use with GCM, EME and SIV
 	// instead of directly using the master key (GCM and EME) or the SHA-512
 	// hashed master key (SIV).
-	// Note that this flag does not change the password hashing algorithm
-	// which always is scrypt.
 	FlagHKDF
 	// FlagXChaCha20Poly1305 means we use XChaCha20-Poly1305 file content encryption
 	FlagXChaCha20Poly1305

@@ -17,7 +17,6 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
@@ -37,8 +36,8 @@ type argContainer struct {
 	// -extpass, -badname, -passfile can be passed multiple times
 	extpass, badname, passfile []string
 	// Configuration file name override
-	config             string
-	notifypid, scryptn int
+	config    string
+	notifypid int
 	// Idle time before autounmount
 	idle time.Duration
 	// Helper variables that are NOT cli options all start with an underscore
@@ -48,8 +47,6 @@ type argContainer struct {
 	_ctlsockFd net.Listener
 	// _forceOwner is, if non-nil, a parsed, validated Owner (as opposed to the string above)
 	_forceOwner *fuse.Owner
-	// _explicitScryptn is true then the user passed "-scryptn=xyz"
-	_explicitScryptn bool
 	// tk specific options
 	tk_config_file string
 }
@@ -205,9 +202,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 
 	flagSet.IntVar(&args.notifypid, "notifypid", 0, "Send USR1 to the specified process after "+
 		"successful mount - used internally for daemonization")
-	const scryptn = "scryptn"
-	flagSet.IntVar(&args.scryptn, scryptn, configfile.ScryptDefaultLogN, "scrypt cost parameter logN. Possible values: 10-28. "+
-		"A lower value speeds up mounting and reduces its memory needs, but makes the password susceptible to brute-force attacks")
 
 	flagSet.DurationVar(&args.idle, "i", 0, "Alias for -idle")
 	flagSet.DurationVar(&args.idle, "idle", 0, "Auto-unmount after specified idle duration (ignored in reverse mode). "+
@@ -232,10 +226,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	if err != nil {
 		tlog.Fatal.Printf("Invalid command line: %s: %v. Try '%s -help'.", prettyArgs(), err, tlog.ProgramName)
 		os.Exit(exitcodes.Usage)
-	}
-	// We want to know if -scryptn was passed explicitly
-	if isFlagPassed(flagSet, scryptn) {
-		args._explicitScryptn = true
 	}
 	if len(args.extpass) > 0 && len(args.passfile) != 0 {
 		tlog.Fatal.Printf("The options -extpass and -passfile cannot be used at the same time")
