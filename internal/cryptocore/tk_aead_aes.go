@@ -10,11 +10,12 @@ import (
 	cryptoutil "github.com/TrustedKeep/tkutils/v2/crypto"
 	"github.com/TrustedKeep/tkutils/v2/lru"
 	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
+	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
 const (
 	keyCacheSize  = 1000
-	keyExpiration = time.Hour
+	keyExpiration = time.Minute * 5
 )
 
 var _ cipher.AEAD = &gcmAead{}
@@ -88,14 +89,27 @@ func (t *gcmAead) getKey(ad []byte) []byte {
 	t.keyMu.Lock()
 	defer t.keyMu.Unlock()
 
+	// from content.go/concatAD, the AD passed in contains the fileID and block# as:
+	// ad = [blockNo.bigEndian fileID]
+	// so, first 8 bytes are bigendian uint64 containing block ID
+	// next 8 bytes are the file identifier
+	// TODO:
+	// should generate a new key based on block to make sure we don't go over 60GB with a single key
+	// something like 60GB / contentenc.DefaultBS
 	id := hex.EncodeToString(ad[8:])
+	// blockNum := binary.BigEndian.Uint64(ad[:8])
+
 	if iKey, cached := t.keys.Get(id); cached {
 		return iKey.([]byte)
 	}
-	key, err := tkc.Get().GetKey([]byte(id))
-	if err != nil {
-		panic(err) // TODO: don't panic
+	for {
+		key, err := tkc.Get().GetKey([]byte(id))
+		if err != nil {
+			tlog.Warn.Printf("Unable to load key from KMS: %v", err)
+			<-time.After(time.Second * 3)
+			continue
+		}
+		t.keys.Add(id, key)
+		return key
 	}
-	t.keys.Add(id, key)
-	return key
 }

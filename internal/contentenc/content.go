@@ -256,15 +256,6 @@ func (be *ContentEnc) EncryptBlock(plaintext []byte, blockNo uint64, fileID []by
 	return be.doEncryptBlock(plaintext, blockNo, fileID, nonce)
 }
 
-// EncryptBlockNonce - Encrypt plaintext using a nonce chosen by the caller.
-// blockNo and fileID are used as associated data.
-// The output is nonce + ciphertext + tag.
-// This function can only be used in SIV mode.
-func (be *ContentEnc) EncryptBlockNonce(plaintext []byte, blockNo uint64, fileID []byte, nonce []byte) []byte {
-	log.Panic("deterministic nonces are not secure")
-	return nil
-}
-
 // doEncryptBlock is the backend for EncryptBlock and EncryptBlockNonce.
 // blockNo and fileID are used as associated data.
 // The output is nonce + ciphertext + tag.
