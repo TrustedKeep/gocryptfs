@@ -1,7 +1,12 @@
 package tkc
 
 import (
+	"encoding/json"
+	"os"
 	"sync"
+
+	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
+	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
 var (
@@ -9,22 +14,21 @@ var (
 	initOnce sync.Once
 )
 
+// Connect starts up our connection to the KMS.  Should be the first thing we do.
+func Connect(cfg *TKConfig) {
+	initOnce.Do(func() {
+		dta, _ := json.Marshal(cfg)
+		tlog.Info.Printf("Connecting to KMS: %s", string(dta))
+		c = NewTKConnector(cfg)
+		tlog.Info.Printf("Successfully connected to KMS")
+	})
+}
+
 // Get retrieves the connection to the KMS
 func Get() KMSConnector {
-	initOnce.Do(func() {
-		c = NewTKConnector(new(TKConfig))
-		// c = NewTKConnector(&TKConfig{
-		// 	NodeID:       "123",
-		// 	TenantID:     "testing",
-		// 	KMSPort:      7070,
-		// 	KMSTrustPort: 7071,
-		// 	KMSClusters: []kmsclient.KMSClusterInfo{
-		// 		{
-		// 			Hosts: []string{"10.85.250.100"},
-		// 			Name:  "local",
-		// 		},
-		// 	},
-		// })
-	})
+	if nil == c {
+		tlog.Fatal.Printf("Attempted to retrieve KMS connection before initialization")
+		os.Exit(exitcodes.Other)
+	}
 	return c
 }

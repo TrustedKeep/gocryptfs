@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/TrustedKeep/tkutils/v2/security"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
@@ -153,7 +152,6 @@ func main() {
 		// But don't override an explicitly set GOMAXPROCS env variable.
 		runtime.GOMAXPROCS(4)
 	}
-	security.Memlock()
 
 	// mount(1) unsets PATH. Since exec.Command does not handle this case, we set
 	// PATH to a default value if it's empty or unset.

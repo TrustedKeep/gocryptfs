@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/crypto/chacha20poly1305"
 
+	"github.com/TrustedKeep/tkutils/v2/security"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/fusefrontend"
 	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
 	"github.com/rfjakob/gocryptfs/v2/internal/openfiletable"
+	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
@@ -117,6 +119,17 @@ func doMount(args *argContainer) {
 	}
 
 	tlog.Info.Println(tlog.ColorGreen + "Filesystem mounted and ready." + tlog.ColorReset)
+
+	if !args.init && len(args.tk_config_file) == 0 {
+		tlog.Fatal.Printf("No KMS configuration file specified")
+		os.Exit(exitcodes.Usage)
+	}
+	if !args.init {
+		tkCfg := tkc.ReadConfig(args.tk_config_file)
+		security.Memlock()
+		tkc.Connect(tkCfg)
+	}
+
 	// We have been forked into the background, as evidenced by the set
 	// "notifypid".
 	if args.notifypid > 0 {

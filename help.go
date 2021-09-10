@@ -29,6 +29,7 @@ Common Options (use -hh to show all):
   -hh                Long help text with all options
   -init              Initialize encrypted directory
   -info              Display information about encrypted directory
+  -kms-config        Path to KMS configuration file
   -masterkey         Mount with explicit master key instead of password
   -nonempty          Allow mounting over non-empty directory
   -nosyslog          Do not redirect log messages to syslog
