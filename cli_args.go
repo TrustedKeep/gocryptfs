@@ -24,7 +24,7 @@ import (
 
 // argContainer stores the parsed CLI options and arguments
 type argContainer struct {
-	debug, init, zerokey, fusedebug, passwd, fg, version,
+	debug, init, zerokey, fusedebug, fg, version,
 	plaintextnames, quiet, nosyslog, wpanic,
 	longnames, allow_other, nonempty, raw64,
 	noprealloc, speed, hkdf, serialize_reads, hh, info,
@@ -148,7 +148,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.init, "init", false, "Initialize encrypted directory")
 	flagSet.BoolVar(&args.zerokey, "zerokey", false, "Use all-zero dummy master key")
 	// Tri-state true/false/auto
-	flagSet.BoolVar(&args.passwd, "passwd", false, "Change password")
 	flagSet.BoolVar(&args.fg, "f", false, "")
 	flagSet.BoolVar(&args.fg, "fg", false, "Stay in the foreground")
 	flagSet.BoolVar(&args.version, "version", false, "Print version and exit")
@@ -283,9 +282,6 @@ func prettyArgs() string {
 func countOpFlags(args *argContainer) int {
 	var count int
 	if args.info {
-		count++
-	}
-	if args.passwd {
 		count++
 	}
 	if args.init {

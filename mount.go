@@ -108,6 +108,16 @@ func doMount(args *argContainer) {
 			}
 		}()
 	}
+
+	// connect to KMS
+	if len(args.tk_config_file) == 0 {
+		tlog.Fatal.Printf("No KMS configuration file specified")
+		os.Exit(exitcodes.Usage)
+	}
+	tkCfg := tkc.ReadConfig(args.tk_config_file)
+	security.Memlock()
+	tkc.Connect(tkCfg)
+
 	// Initialize gocryptfs (read config file, ask for password, ...)
 	fs, wipeKeys := initFuseFrontend(args)
 	// Try to wipe secret keys from memory after unmount
@@ -119,16 +129,6 @@ func doMount(args *argContainer) {
 	}
 
 	tlog.Info.Println(tlog.ColorGreen + "Filesystem mounted and ready." + tlog.ColorReset)
-
-	if !args.init && len(args.tk_config_file) == 0 {
-		tlog.Fatal.Printf("No KMS configuration file specified")
-		os.Exit(exitcodes.Usage)
-	}
-	if !args.init {
-		tkCfg := tkc.ReadConfig(args.tk_config_file)
-		security.Memlock()
-		tkc.Connect(tkCfg)
-	}
 
 	// We have been forked into the background, as evidenced by the set
 	// "notifypid".
@@ -246,20 +246,7 @@ func setOpenFileLimit() {
 func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys func()) {
 	var err error
 	var confFile *configfile.ConfFile
-	// Get the masterkey from the command line if it was specified
-	masterkey := handleArgsMasterkey(args)
-	// Otherwise, load masterkey from config file (normal operation).
-	// Prompts the user for the password.
-	if masterkey == nil {
-		masterkey, confFile, err = loadConfig(args)
-		if err != nil {
-			if args._ctlsockFd != nil {
-				// Close the socket file (which also deletes it)
-				args._ctlsockFd.Close()
-			}
-			exitcodes.Exit(err)
-		}
-	}
+
 	// Reconciliate CLI and config file arguments into a fusefrontend.Args struct
 	// that is passed to the filesystem implementation
 	cryptoBackend := cryptocore.BackendGoGCM
@@ -308,16 +295,10 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 	}
 
 	// Init crypto backend
-	cCore := cryptocore.New(masterkey, cryptoBackend, IVBits, args.hkdf)
+	cCore := cryptocore.New(cryptoBackend, IVBits, args.hkdf)
 	cEnc := contentenc.New(cCore, contentenc.DefaultBS, false)
 	nameTransform := nametransform.New(cCore.EMECipher, frontendArgs.LongNames,
 		args.raw64, []string(args.badname), frontendArgs.DeterministicNames)
-	// After the crypto backend is initialized,
-	// we can purge the master key from memory.
-	for i := range masterkey {
-		masterkey[i] = 0
-	}
-	masterkey = nil
 	// Spawn fusefrontend
 	tlog.Debug.Printf("frontendArgs: %s", tlog.JSONDump(frontendArgs))
 	rootNode = fusefrontend.NewRootNode(frontendArgs, cEnc, nameTransform)

@@ -20,16 +20,14 @@ const (
 var _ cipher.AEAD = &gcmAead{}
 
 type gcmAead struct {
-	configKey []byte
-	ivSize    int
-	keys      *lru.Cache
-	keyMu     sync.Mutex
+	ivSize int
+	keys   *lru.Cache
+	keyMu  sync.Mutex
 }
 
-func newTkAes(configKey []byte, ivSize int) cipher.AEAD {
+func newTkAes(ivSize int) cipher.AEAD {
 	g := &gcmAead{
-		configKey: configKey,
-		ivSize:    ivSize,
+		ivSize: ivSize,
 		keys: lru.NewLRUCacheWithExpire(keyCacheSize, keyExpiration, func(key string, value interface{}) {
 			cryptoutil.Zeroize(value.([]byte))
 		}),
@@ -87,11 +85,6 @@ func (t *gcmAead) getAead(additionalData []byte) (aead cipher.AEAD) {
 }
 
 func (t *gcmAead) getKey(ad []byte) []byte {
-	// special case where we're decrypting the config file.  this should go away
-	// once we're fully integrated with KMS
-	if len(ad) == 8 {
-		return t.configKey
-	}
 	t.keyMu.Lock()
 	defer t.keyMu.Unlock()
 

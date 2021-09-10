@@ -37,7 +37,6 @@ func info(filename string) {
 	// Pretty-print
 	fmt.Printf("Creator:      %s\n", cf.Creator)
 	fmt.Printf("FeatureFlags: %s\n", strings.Join(cf.FeatureFlags, " "))
-	fmt.Printf("EncryptedKey: %dB\n", len(cf.EncryptedKey))
 	s := cf.ScryptObject
 	fmt.Printf("ScryptObject: Salt=%dB N=%d R=%d P=%d KeyLen=%d\n",
 		len(s.Salt), s.N, s.R, s.P, s.KeyLen)

@@ -12,12 +12,13 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
 	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
+	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 )
 
 func newTestFS(args Args) *RootNode {
 	// Init crypto backend
-	key := make([]byte, cryptocore.KeyLen)
-	cCore := cryptocore.New(key, cryptocore.BackendGoGCM, contentenc.DefaultIVBits, true)
+	tkc.Connect(new(tkc.TKConfig))
+	cCore := cryptocore.New(cryptocore.BackendGoGCM, contentenc.DefaultIVBits, true)
 	cEnc := contentenc.New(cCore, contentenc.DefaultBS, false)
 	n := nametransform.New(cCore.EMECipher, true, true, nil, false)
 	rn := NewRootNode(args, cEnc, n)

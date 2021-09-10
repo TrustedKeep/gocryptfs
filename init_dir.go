@@ -13,7 +13,6 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 	"github.com/rfjakob/gocryptfs/v2/internal/fido2"
 	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
-	"github.com/rfjakob/gocryptfs/v2/internal/readpassword"
 	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
@@ -65,22 +64,18 @@ func initDir(args *argContainer) {
 		tlog.Info.Printf("Choose a password for protecting your files.")
 	}
 	{
-		var password []byte
 		var fido2CredentialID, fido2HmacSalt []byte
 		if args.fido2 != "" {
 			fido2CredentialID = fido2.Register(args.fido2, filepath.Base(args.cipherdir))
 			fido2HmacSalt = cryptocore.RandBytes(32)
-			password = fido2.Secret(args.fido2, fido2CredentialID, fido2HmacSalt)
 		} else {
 			// normal password entry
-			password = readpassword.Twice([]string(args.extpass), []string(args.passfile))
 			fido2CredentialID = nil
 			fido2HmacSalt = nil
 		}
 		creator := tlog.ProgramName + " " + GitVersion
 		err = configfile.Create(&configfile.CreateArgs{
 			Filename:           args.config,
-			Password:           password,
 			PlaintextNames:     args.plaintextnames,
 			LogN:               args.scryptn,
 			Creator:            creator,
@@ -92,10 +87,6 @@ func initDir(args *argContainer) {
 			tlog.Fatal.Println(err)
 			os.Exit(exitcodes.WriteConf)
 		}
-		for i := range password {
-			password[i] = 0
-		}
-		// password runs out of scope here
 	}
 	// Forward mode with filename encryption enabled needs a gocryptfs.diriv file
 	// in the root dir

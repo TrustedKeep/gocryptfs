@@ -37,9 +37,6 @@ type ConfFile struct {
 	// This only documents the config file for humans who look at it. The actual
 	// technical info is contained in FeatureFlags.
 	Creator string
-	// EncryptedKey holds an encrypted AES key, unlocked using a password
-	// hashed with scrypt
-	EncryptedKey []byte
 	// ScryptObject stores parameters for scrypt hashing (key derivation)
 	ScryptObject ScryptKDF
 	// Version is the On-Disk-Format version this filesystem uses
@@ -58,7 +55,6 @@ type ConfFile struct {
 // CreateArgs exists because the argument list to Create became too long.
 type CreateArgs struct {
 	Filename           string
-	Password           []byte
 	PlaintextNames     bool
 	LogN               int
 	Creator            string
@@ -108,49 +104,8 @@ func Create(args *CreateArgs) error {
 	if err := cf.Validate(); err != nil {
 		return err
 	}
-	{
-		// Generate new random master key
-		key := cryptocore.RandBytes(cryptocore.KeyLen)
-		tlog.PrintMasterkeyReminder(key)
-		// Encrypt it using the password
-		// This sets ScryptObject and EncryptedKey
-		// Note: this looks at the FeatureFlags, so call it AFTER setting them.
-		cf.EncryptKey(key, args.Password, args.LogN)
-		for i := range key {
-			key[i] = 0
-		}
-		// key runs out of scope here
-	}
 	// Write file to disk
 	return cf.WriteFile()
-}
-
-// LoadAndDecrypt - read config file from disk and decrypt the
-// contained key using "password".
-// Returns the decrypted key and the ConfFile object
-//
-// If "password" is empty, the config file is read
-// but the key is not decrypted (returns nil in its place).
-func LoadAndDecrypt(filename string, password []byte) ([]byte, *ConfFile, error) {
-	cf, err := Load(filename)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(password) == 0 {
-		// We have validated the config file, but without a password we cannot
-		// decrypt the master key. Return only the parsed config.
-		return nil, cf, nil
-		// TODO: Make this an error in gocryptfs v1.7. All code should now call
-		// Load() instead of calling LoadAndDecrypt() with an empty password.
-	}
-
-	// Decrypt the masterkey using the password
-	key, err := cf.DecryptMasterKey(password)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return key, cf, err
 }
 
 // Load loads and parses the config file at "filename".
@@ -190,58 +145,6 @@ func (cf *ConfFile) setFeatureFlag(flag flagIota) {
 	cf.FeatureFlags = append(cf.FeatureFlags, knownFlags[flag])
 }
 
-// DecryptMasterKey decrypts the masterkey stored in cf.EncryptedKey using
-// password.
-func (cf *ConfFile) DecryptMasterKey(password []byte) (masterkey []byte, err error) {
-	// Generate derived key from password
-	scryptHash := cf.ScryptObject.DeriveKey(password)
-
-	// Unlock master key using password-based key
-	useHKDF := cf.IsFeatureFlagSet(FlagHKDF)
-	ce := getKeyEncrypter(scryptHash, useHKDF)
-
-	tlog.Warn.Enabled = false // Silence DecryptBlock() error messages on incorrect password
-	masterkey, err = ce.DecryptBlock(cf.EncryptedKey, 0, nil)
-	tlog.Warn.Enabled = true
-
-	// Purge scrypt-derived key
-	for i := range scryptHash {
-		scryptHash[i] = 0
-	}
-	scryptHash = nil
-	ce.Wipe()
-	ce = nil
-
-	if err != nil {
-		tlog.Warn.Printf("failed to unlock master key: %s", err.Error())
-		return nil, exitcodes.NewErr("Password incorrect.", exitcodes.PasswordIncorrect)
-	}
-	return masterkey, nil
-}
-
-// EncryptKey - encrypt "key" using an scrypt hash generated from "password"
-// and store it in cf.EncryptedKey.
-// Uses scrypt with cost parameter logN and stores the scrypt parameters in
-// cf.ScryptObject.
-func (cf *ConfFile) EncryptKey(key []byte, password []byte, logN int) {
-	// Generate scrypt-derived key from password
-	cf.ScryptObject = NewScryptKDF(logN)
-	scryptHash := cf.ScryptObject.DeriveKey(password)
-
-	// Lock master key using password-based key
-	useHKDF := cf.IsFeatureFlagSet(FlagHKDF)
-	ce := getKeyEncrypter(scryptHash, useHKDF)
-	cf.EncryptedKey = ce.EncryptBlock(key, 0, nil)
-
-	// Purge scrypt-derived key
-	for i := range scryptHash {
-		scryptHash[i] = 0
-	}
-	scryptHash = nil
-	ce.Wipe()
-	ce = nil
-}
-
 // WriteFile - write out config in JSON format to file "filename.tmp"
 // then rename over "filename".
 // This way a password change atomically replaces the file.
@@ -279,20 +182,6 @@ func (cf *ConfFile) WriteFile() error {
 	}
 	err = os.Rename(tmp, cf.filename)
 	return err
-}
-
-// getKeyEncrypter is a helper function that returns the right ContentEnc
-// instance for the "useHKDF" setting.
-func getKeyEncrypter(scryptHash []byte, useHKDF bool) *contentenc.ContentEnc {
-	IVLen := 96
-	// gocryptfs v1.2 and older used 96-bit IVs for master key encryption.
-	// v1.3 adds the "HKDF" feature flag, which also enables 128-bit nonces.
-	if useHKDF {
-		IVLen = contentenc.DefaultIVBits
-	}
-	cc := cryptocore.New(scryptHash, cryptocore.BackendGoGCM, IVLen, useHKDF)
-	ce := contentenc.New(cc, 4096, false)
-	return ce
 }
 
 // ContentEncryption tells us which content encryption algorithm is selected

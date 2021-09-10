@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
+	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 )
 
 type testRange struct {
@@ -12,6 +13,7 @@ type testRange struct {
 }
 
 func TestSplitRange(t *testing.T) {
+	tkc.Connect(new(tkc.TKConfig))
 	var ranges []testRange
 
 	ranges = append(ranges, testRange{0, 70000},
@@ -22,8 +24,7 @@ func TestSplitRange(t *testing.T) {
 		testRange{0, 65536},
 		testRange{6654, 8945})
 
-	key := make([]byte, cryptocore.KeyLen)
-	cc := cryptocore.New(key, cryptocore.BackendGoGCM, DefaultIVBits, true)
+	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, true)
 	f := New(cc, DefaultBS, false)
 
 	for _, r := range ranges {
@@ -42,6 +43,7 @@ func TestSplitRange(t *testing.T) {
 }
 
 func TestCiphertextRange(t *testing.T) {
+	tkc.Connect(new(tkc.TKConfig))
 	var ranges []testRange
 
 	ranges = append(ranges, testRange{0, 70000},
@@ -50,8 +52,7 @@ func TestCiphertextRange(t *testing.T) {
 		testRange{65444, 54},
 		testRange{6654, 8945})
 
-	key := make([]byte, cryptocore.KeyLen)
-	cc := cryptocore.New(key, cryptocore.BackendGoGCM, DefaultIVBits, true)
+	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, true)
 	f := New(cc, DefaultBS, false)
 
 	for _, r := range ranges {
@@ -73,8 +74,8 @@ func TestCiphertextRange(t *testing.T) {
 }
 
 func TestBlockNo(t *testing.T) {
-	key := make([]byte, cryptocore.KeyLen)
-	cc := cryptocore.New(key, cryptocore.BackendGoGCM, DefaultIVBits, true)
+	tkc.Connect(new(tkc.TKConfig))
+	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, true)
 	f := New(cc, DefaultBS, false)
 
 	b := f.CipherOffToBlockNo(788)

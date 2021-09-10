@@ -12,6 +12,7 @@ import (
 
 	"github.com/rfjakob/eme"
 
+	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
@@ -56,23 +57,21 @@ type CryptoCore struct {
 // Even though the "GCMIV128" feature flag is now mandatory, we must still
 // support 96-bit IVs here because they were used for encrypting the master
 // key in gocryptfs.conf up to gocryptfs v1.2. v1.3 switched to 128 bits.
-//
-// Note: "key" is either the scrypt hash of the password (when decrypting
-// a config file) or the masterkey (when finally mounting the filesystem).
-func New(key []byte, aeadType AEADTypeEnum, IVBitLen int, useHKDF bool) *CryptoCore {
-	tlog.Debug.Printf("cryptocore.New: key=%d bytes, aeadType=%v, IVBitLen=%d, useHKDF=%v",
-		len(key), aeadType, IVBitLen, useHKDF)
+func New(aeadType AEADTypeEnum, IVBitLen int, useHKDF bool) *CryptoCore {
+	tlog.Debug.Printf("cryptocore.New: aeadType=%v, IVBitLen=%d, useHKDF=%v",
+		aeadType, IVBitLen, useHKDF)
 
-	if len(key) != KeyLen {
-		log.Panicf("Unsupported key length of %d bytes", len(key))
-	}
 	if IVBitLen != 96 && IVBitLen != 128 && IVBitLen != chacha20poly1305.NonceSizeX*8 {
 		log.Panicf("Unsupported IV length of %d bits", IVBitLen)
 	}
 
+	key, err := tkc.Get().GetKey([]byte("eme_fn_key"))
+	if err != nil {
+		log.Panicf("Unable to retrieve filename encryption key: %v", err)
+	}
+
 	// Initialize EME for filename encryption.
 	var emeCipher *eme.EMECipher
-	var err error
 	{
 		var emeBlockCipher cipher.Block
 		if useHKDF {
@@ -93,15 +92,7 @@ func New(key []byte, aeadType AEADTypeEnum, IVBitLen int, useHKDF bool) *CryptoC
 	// Initialize an AEAD cipher for file content encryption.
 	var aeadCipher cipher.AEAD
 	if aeadType == BackendGoGCM {
-		var gcmKey []byte
-		if useHKDF {
-			gcmKey = hkdfDerive(key, hkdfInfoGCMContent, KeyLen)
-		} else {
-			// Filesystems created by gocryptfs v0.7 through v1.2 don't use HKDF.
-			// Example: tests/example_filesystems/v0.9
-			gcmKey = append([]byte{}, key...)
-		}
-		aeadCipher = newTkAes(gcmKey, IVBitLen/8)
+		aeadCipher = newTkAes(IVBitLen / 8)
 	} else if aeadType == BackendXChaCha20Poly1305 {
 		// We don't support legacy modes with XChaCha20-Poly1305
 		if IVBitLen != chacha20poly1305.NonceSizeX*8 {
