@@ -1,0 +1,13 @@
+TenantID: TKFS_Dev_Tenant
+KMSPort: 7070
+KMSTrustPort: 7071
+KMSClusters:
+- hosts: ["10.85.250.100"]
+  name: localdev
+
+# KMSClusters:
+# - name: mockkms
+
+# SignerPath: /Users/schafke/Downloads/signer.pem
+# SignerInsecure: true
+# FailureTolerance: 2
