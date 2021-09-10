@@ -57,7 +57,7 @@ installGo() {
 
 verifyBoring() {
     echo "Verifying boring crypto"
-    local isBoring=`goversion -crypto $GOPATH/bin/tkfs | grep "boring"`
+    local isBoring=`goversion -crypto $GOPATH/bin/gocryptfs | grep "boring"`
     if [ "$isBoring" == "" ]; then 
         message "Boring Crypto not found!"
         exit 1
@@ -92,7 +92,7 @@ installTkfs() {
 
     rm -rf /root/build/artifacts
     mkdir /root/build/artifacts
-    cp $GOPATH/bin/gocryptfs /root/build/artifacts/tkfs
+    cp $GOPATH/bin/gocryptfs /root/build/artifacts
 }
 
 buildRPM() {
