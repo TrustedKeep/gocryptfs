@@ -9,9 +9,7 @@ import (
 	"syscall"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
-	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
-	"github.com/rfjakob/gocryptfs/v2/internal/fido2"
 	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
 	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
@@ -60,27 +58,16 @@ func initDir(args *argContainer) {
 	}
 
 	// Choose password for config file
-	if len(args.extpass) == 0 && args.fido2 == "" {
+	if len(args.extpass) == 0 {
 		tlog.Info.Printf("Choose a password for protecting your files.")
 	}
 	{
-		var fido2CredentialID, fido2HmacSalt []byte
-		if args.fido2 != "" {
-			fido2CredentialID = fido2.Register(args.fido2, filepath.Base(args.cipherdir))
-			fido2HmacSalt = cryptocore.RandBytes(32)
-		} else {
-			// normal password entry
-			fido2CredentialID = nil
-			fido2HmacSalt = nil
-		}
 		creator := tlog.ProgramName + " " + GitVersion
 		err = configfile.Create(&configfile.CreateArgs{
 			Filename:           args.config,
 			PlaintextNames:     args.plaintextnames,
 			LogN:               args.scryptn,
 			Creator:            creator,
-			Fido2CredentialID:  fido2CredentialID,
-			Fido2HmacSalt:      fido2HmacSalt,
 			DeterministicNames: args.deterministic_names,
 			XChaCha20Poly1305:  args.xchacha})
 		if err != nil {

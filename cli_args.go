@@ -33,7 +33,7 @@ type argContainer struct {
 	// Mount options with opposites
 	dev, nodev, suid, nosuid, exec, noexec, rw, ro, kernel_cache, acl bool
 	masterkey, mountpoint, cipherdir, cpuprofile,
-	memprofile, ko, ctlsock, fsname, force_owner, trace, fido2 string
+	memprofile, ko, ctlsock, fsname, force_owner, trace string
 	// -extpass, -badname, -passfile can be passed multiple times
 	extpass, badname, passfile []string
 	// Configuration file name override
@@ -197,7 +197,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.StringVar(&args.fsname, "fsname", "", "Override the filesystem name")
 	flagSet.StringVar(&args.force_owner, "force_owner", "", "uid:gid pair to coerce ownership")
 	flagSet.StringVar(&args.trace, "trace", "", "Write execution trace to file")
-	flagSet.StringVar(&args.fido2, "fido2", "", "Protect the masterkey using a FIDO2 token instead of a password")
 
 	// multipleStrings options ([]string)
 	flagSet.StringSliceVar(&args.extpass, "extpass", nil, "Use external program for the password prompt")
@@ -248,10 +247,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	}
 	if len(args.extpass) > 0 && args.masterkey != "" {
 		tlog.Fatal.Printf("The options -extpass and -masterkey cannot be used at the same time")
-		os.Exit(exitcodes.Usage)
-	}
-	if len(args.extpass) > 0 && args.fido2 != "" {
-		tlog.Fatal.Printf("The options -extpass and -fido2 cannot be used at the same time")
 		os.Exit(exitcodes.Usage)
 	}
 	if args.idle < 0 {

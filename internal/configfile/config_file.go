@@ -23,14 +23,6 @@ const (
 	ConfDefaultName = "gocryptfs.conf"
 )
 
-// FIDO2Params is a structure for storing FIDO2 parameters.
-type FIDO2Params struct {
-	// FIDO2 credential
-	CredentialID []byte
-	// FIDO2 hmac-secret salt
-	HMACSalt []byte
-}
-
 // ConfFile is the content of a config file.
 type ConfFile struct {
 	// Creator is the gocryptfs version string.
@@ -46,8 +38,6 @@ type ConfFile struct {
 	// mounting. This mechanism is analogous to the ext4 feature flags that are
 	// stored in the superblock.
 	FeatureFlags []string
-	// FIDO2 parameters
-	FIDO2 *FIDO2Params `json:",omitempty"`
 	// Filename is the name of the config file. Not exported to JSON.
 	filename string
 }
@@ -58,8 +48,6 @@ type CreateArgs struct {
 	PlaintextNames     bool
 	LogN               int
 	Creator            string
-	Fido2CredentialID  []byte
-	Fido2HmacSalt      []byte
 	DeterministicNames bool
 	XChaCha20Poly1305  bool
 }
@@ -91,13 +79,6 @@ func Create(args *CreateArgs) error {
 		cf.setFeatureFlag(FlagEMENames)
 		cf.setFeatureFlag(FlagLongNames)
 		cf.setFeatureFlag(FlagRaw64)
-	}
-	if len(args.Fido2CredentialID) > 0 {
-		cf.setFeatureFlag(FlagFIDO2)
-		cf.FIDO2 = &FIDO2Params{
-			CredentialID: args.Fido2CredentialID,
-			HMACSalt:     args.Fido2HmacSalt,
-		}
 	}
 	// Catch bugs and invalid cli flag combinations early
 	cf.ScryptObject = NewScryptKDF(args.LogN)

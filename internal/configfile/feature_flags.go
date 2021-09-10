@@ -24,9 +24,6 @@ const (
 	// Note that this flag does not change the password hashing algorithm
 	// which always is scrypt.
 	FlagHKDF
-	// FlagFIDO2 means that "-fido2" was used when creating the filesystem.
-	// The masterkey is protected using a FIDO2 token instead of a password.
-	FlagFIDO2
 	// FlagXChaCha20Poly1305 means we use XChaCha20-Poly1305 file content encryption
 	FlagXChaCha20Poly1305
 )
@@ -40,7 +37,6 @@ var knownFlags = map[flagIota]string{
 	FlagLongNames:         "LongNames",
 	FlagRaw64:             "Raw64",
 	FlagHKDF:              "HKDF",
-	FlagFIDO2:             "FIDO2",
 	FlagXChaCha20Poly1305: "XChaCha20Poly1305",
 }
 
