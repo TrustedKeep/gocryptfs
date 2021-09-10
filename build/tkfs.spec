@@ -14,6 +14,8 @@ Encrypted filesystem powered by TrustedKeep (https://www.trustedkeep.com)
 cd $RPM_BUILD_ROOT
 mkdir -p usr/local/tkfs/bin
 mkdir -p usr/local/tkfs/config
+mkdir -p usr/local/tkfs/cipher
+mkdir -p usr/local/tkfs/data
 mkdir -p usr/lib/systemd/system/
 
 cp /root/build/artifacts/gocryptfs usr/local/tkfs/bin/tkfs

@@ -1,13 +1,17 @@
-TenantID: TKFS_Dev_Tenant
+TenantID: TKFS_Sample_Tenant
 KMSPort: 7070
 KMSTrustPort: 7071
+
+# Remove this and enter your cluster information below
 KMSClusters:
-- hosts: ["10.85.250.100"]
-  name: localdev
+- name: mockkms
 
+# Enter your KMS cluster here
 # KMSClusters:
-# - name: mockkms
+# - hosts: ["10.85.250.100"]
+#   name: localdev
 
-# SignerPath: /Users/schafke/Downloads/signer.pem
-# SignerInsecure: true
+# Auto-approval configuration
+# SignerPath: /usr/local/tkfs/config/signer.pem
+# SignerInsecure: false
 # FailureTolerance: 2
