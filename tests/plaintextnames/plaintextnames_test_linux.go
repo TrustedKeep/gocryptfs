@@ -14,9 +14,6 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
 
-var cDir string
-var pDir string
-
 var testPw = []byte("test")
 
 // Create and mount "-plaintextnames" fs

@@ -14,6 +14,9 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/contrib/findholes/holes"
 )
 
+var cDir string
+var pDir string
+
 func findHolesPretty(t *testing.T, path string) string {
 	f, err := os.Open(path)
 	if err != nil {
