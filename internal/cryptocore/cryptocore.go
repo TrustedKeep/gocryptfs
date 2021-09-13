@@ -119,7 +119,7 @@ func New(aeadType AEADTypeEnum, IVBitLen int, useHKDF bool) *CryptoCore {
 		EMECipher:   emeCipher,
 		AEADCipher:  aeadCipher,
 		AEADBackend: aeadType,
-		IVGenerator: &nonceGenerator{nonceLen: IVBitLen / 8},
+		IVGenerator: newNonceGenerator(IVBitLen / 8),
 		IVLen:       IVBitLen / 8,
 	}
 }

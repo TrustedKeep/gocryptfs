@@ -25,10 +25,26 @@ func RandUint64() uint64 {
 }
 
 type nonceGenerator struct {
-	nonceLen int // bytes
+	nonceLen  int // bytes
+	nonceChan chan []byte
+}
+
+func newNonceGenerator(nonceLen int) *nonceGenerator {
+	ng := &nonceGenerator{
+		nonceLen:  nonceLen,
+		nonceChan: make(chan []byte, 500),
+	}
+	go ng.gen()
+	return ng
+}
+
+func (n *nonceGenerator) gen() {
+	for {
+		n.nonceChan <- crypto.NextNonce(n.nonceLen)
+	}
 }
 
 // Get a random "nonceLen"-byte nonce
 func (n *nonceGenerator) Get() []byte {
-	return crypto.NextNonce(n.nonceLen)
+	return <-n.nonceChan
 }
