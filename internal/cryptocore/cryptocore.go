@@ -98,14 +98,7 @@ func New(aeadType AEADTypeEnum, IVBitLen int, useHKDF bool) *CryptoCore {
 		if IVBitLen != chacha20poly1305.NonceSizeX*8 {
 			log.Panicf("XChaCha20-Poly1305 must use 192-bit IVs, you wanted %d", IVBitLen)
 		}
-		if !useHKDF {
-			log.Panic("XChaCha20-Poly1305 must use HKDF, but it is disabled")
-		}
-		derivedKey := hkdfDerive(key, hkdfInfoXChaChaPoly1305Content, chacha20poly1305.KeySize)
-		aeadCipher, err = chacha20poly1305.NewX(derivedKey)
-		if err != nil {
-			log.Panic(err)
-		}
+		aeadCipher = newTkCha()
 	} else {
 		log.Panicf("unknown cipher backend %q", aeadType.Name)
 	}
