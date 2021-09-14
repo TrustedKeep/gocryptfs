@@ -29,3 +29,6 @@ cp /root/build/tkfs.service usr/lib/systemd/system/tkfs.service
 
 %post
 /usr/bin/systemctl enable tkfs
+mkdir -p /usr/local/tkfs/cipher
+mkdir -p /usr/local/tkfs/data
+/usr/local/tkfs/bin/tkfs -init /usr/local/tkfs/cipher
