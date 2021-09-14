@@ -28,7 +28,7 @@ type argContainer struct {
 	longnames, allow_other, nonempty, raw64,
 	noprealloc, speed, hkdf, serialize_reads, hh, info,
 	sharedstorage, fsck, one_file_system, deterministic_names,
-	xchacha bool
+	xchacha, xts bool
 	// Mount options with opposites
 	dev, nodev, suid, nosuid, exec, noexec, rw, ro, kernel_cache, acl bool
 	masterkey, mountpoint, cipherdir, cpuprofile,
@@ -169,6 +169,7 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.one_file_system, "one-file-system", false, "Don't cross filesystem boundaries")
 	flagSet.BoolVar(&args.deterministic_names, "deterministic-names", false, "Disable diriv file name randomisation")
 	flagSet.BoolVar(&args.xchacha, "xchacha", false, "Use XChaCha20-Poly1305 file content encryption")
+	flagSet.BoolVar(&args.xts, "xts", false, "Use XTS file content encryption")
 
 	// TK specific options
 	flagSet.StringVar(&args.tk_config_file, "kms-config", "", "Path to TrustedKeep configuration file")

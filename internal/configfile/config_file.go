@@ -47,6 +47,7 @@ type CreateArgs struct {
 	Creator            string
 	DeterministicNames bool
 	XChaCha20Poly1305  bool
+	XTS                bool
 }
 
 // Create - create a new config and write it to "Filename".
@@ -64,6 +65,9 @@ func Create(args *CreateArgs) error {
 		// 128-bit IVs are mandatory for AES-GCM (default is 96!) and AES-SIV,
 		// XChaCha20Poly1305 uses even an even longer IV of 192 bits.
 		cf.setFeatureFlag(FlagGCMIV128)
+	}
+	if args.XTS {
+		cf.setFeatureFlag(FlagXTS)
 	}
 	if args.PlaintextNames {
 		cf.setFeatureFlag(FlagPlaintextNames)
@@ -162,6 +166,9 @@ func (cf *ConfFile) ContentEncryption() (algo cryptocore.AEADTypeEnum, err error
 	}
 	if cf.IsFeatureFlagSet(FlagXChaCha20Poly1305) {
 		return cryptocore.BackendXChaCha20Poly1305, nil
+	}
+	if cf.IsFeatureFlagSet(FlagXTS) {
+		return cryptocore.BackendXTS, nil
 	}
 	// If neither AES-SIV nor XChaCha are selected, we must be using AES-GCM
 	return cryptocore.BackendGoGCM, nil

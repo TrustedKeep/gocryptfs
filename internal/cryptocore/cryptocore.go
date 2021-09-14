@@ -38,6 +38,9 @@ var BackendGoGCM AEADTypeEnum = AEADTypeEnum{"AES-GCM-256", 16}
 // "XChaCha20-Poly1305-Go" in gocryptfs -speed.
 var BackendXChaCha20Poly1305 AEADTypeEnum = AEADTypeEnum{"XChaCha20-Poly1305", chacha20poly1305.NonceSizeX}
 
+// BackendXTS specifies XTS encryption
+var BackendXTS AEADTypeEnum = AEADTypeEnum{"XTS", 0}
+
 // CryptoCore is the low level crypto implementation.
 type CryptoCore struct {
 	// EME is used for filename encryption.
@@ -61,7 +64,7 @@ func New(aeadType AEADTypeEnum, IVBitLen int, useHKDF bool) *CryptoCore {
 	tlog.Debug.Printf("cryptocore.New: aeadType=%v, IVBitLen=%d, useHKDF=%v",
 		aeadType, IVBitLen, useHKDF)
 
-	if IVBitLen != 96 && IVBitLen != 128 && IVBitLen != chacha20poly1305.NonceSizeX*8 {
+	if aeadType != BackendXTS && IVBitLen != 96 && IVBitLen != 128 && IVBitLen != chacha20poly1305.NonceSizeX*8 {
 		log.Panicf("Unsupported IV length of %d bits", IVBitLen)
 	}
 
@@ -92,13 +95,18 @@ func New(aeadType AEADTypeEnum, IVBitLen int, useHKDF bool) *CryptoCore {
 	// Initialize an AEAD cipher for file content encryption.
 	var aeadCipher cipher.AEAD
 	if aeadType == BackendGoGCM {
+		tlog.Info.Printf("Using AES-GCM content encryption")
 		aeadCipher = newTkAes(IVBitLen / 8)
 	} else if aeadType == BackendXChaCha20Poly1305 {
 		// We don't support legacy modes with XChaCha20-Poly1305
 		if IVBitLen != chacha20poly1305.NonceSizeX*8 {
 			log.Panicf("XChaCha20-Poly1305 must use 192-bit IVs, you wanted %d", IVBitLen)
 		}
+		tlog.Info.Printf("Using XChaCha20-Poly1305 content encryption")
 		aeadCipher = newTkCha()
+	} else if aeadType == BackendXTS {
+		tlog.Info.Printf("Using XTS content encryption")
+		aeadCipher = newTkXts()
 	} else {
 		log.Panicf("unknown cipher backend %q", aeadType.Name)
 	}

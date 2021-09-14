@@ -38,17 +38,16 @@ func (t *xtsAead) Overhead() int {
 // Seal encrypts the plaintext using xts
 func (t *xtsAead) Seal(dst, nonce, plaintext, additionalData []byte) (cipherText []byte) {
 	t.ensureCipher()
-	tlog.Info.Printf("Encrypting %d bytes with XTS", len(plaintext))
 	blockNum := binary.BigEndian.Uint64(additionalData[:8])
 
 	plain := plaintext
 	if rem := len(plaintext) % aes.BlockSize; rem > 0 {
-		plain = make([]byte, len(plain)+rem)
+		plain = make([]byte, len(plain)+(aes.BlockSize-rem))
 		copy(plain, plaintext)
 	}
 	cipherText = make([]byte, len(plain))
 	t.c.Encrypt(cipherText, plain, blockNum)
-	return nil
+	return
 }
 
 // Open decrypts the plaintext

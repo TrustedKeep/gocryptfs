@@ -31,10 +31,13 @@ type nonceGenerator struct {
 
 func newNonceGenerator(nonceLen int) *nonceGenerator {
 	ng := &nonceGenerator{
-		nonceLen:  nonceLen,
-		nonceChan: make(chan []byte, 500),
+		nonceLen: nonceLen,
+		// nonceChan: make(chan []byte, 500),
 	}
-	go ng.gen()
+	if nonceLen > 0 {
+		ng.nonceChan = make(chan []byte, 500)
+		go ng.gen()
+	}
 	return ng
 }
 
@@ -46,5 +49,8 @@ func (n *nonceGenerator) gen() {
 
 // Get a random "nonceLen"-byte nonce
 func (n *nonceGenerator) Get() []byte {
+	if n.nonceLen == 0 {
+		return []byte{}
+	}
 	return <-n.nonceChan
 }

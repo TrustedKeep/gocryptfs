@@ -68,7 +68,9 @@ func initDir(args *argContainer) {
 			PlaintextNames:     args.plaintextnames,
 			Creator:            creator,
 			DeterministicNames: args.deterministic_names,
-			XChaCha20Poly1305:  args.xchacha})
+			XChaCha20Poly1305:  args.xchacha,
+			XTS:                args.xts,
+		})
 		if err != nil {
 			tlog.Fatal.Println(err)
 			os.Exit(exitcodes.WriteConf)

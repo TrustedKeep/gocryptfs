@@ -3,6 +3,7 @@ package contentenc
 import (
 	"log"
 
+	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
@@ -141,6 +142,9 @@ func (be *ContentEnc) ExplodeCipherRange(offset uint64, length uint64) []IntraBl
 
 // BlockOverhead returns the per-block overhead.
 func (be *ContentEnc) BlockOverhead() uint64 {
+	if be.cryptoCore.AEADBackend == cryptocore.BackendXTS {
+		return 0
+	}
 	return be.cipherBS - be.plainBS
 }
 
