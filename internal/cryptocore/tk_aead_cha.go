@@ -2,30 +2,17 @@ package cryptocore
 
 import (
 	"crypto/cipher"
-	"sync"
-	"time"
 
-	cryptoutil "github.com/TrustedKeep/tkutils/v2/crypto"
-	"github.com/TrustedKeep/tkutils/v2/lru"
-	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
 var _ cipher.AEAD = &chaAead{}
 
 type chaAead struct {
-	keys  *lru.Cache
-	keyMu sync.Mutex
 }
 
 func newTkCha() cipher.AEAD {
-	g := &chaAead{
-		keys: lru.NewLRUCacheWithExpire(keyCacheSize, keyExpiration, func(key string, value interface{}) {
-			cryptoutil.Zeroize(value.([]byte))
-		}),
-	}
-	return g
+	return &chaAead{}
 }
 
 // NonceSize returns the size of the nonce that must be passed to Seal
@@ -67,31 +54,9 @@ func (t *chaAead) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte, e
 }
 
 func (t *chaAead) getAead(additionalData []byte) (aead cipher.AEAD) {
-	aead, err := chacha20poly1305.NewX(t.getKey(additionalData))
+	aead, err := chacha20poly1305.NewX(getKey(additionalData))
 	if err != nil {
 		panic(err)
 	}
 	return aead
-}
-
-func (t *chaAead) getKey(ad []byte) []byte {
-	t.keyMu.Lock()
-	defer t.keyMu.Unlock()
-
-	id := getKeyName(ad)
-	tlog.Debug.Printf("Retrieving key %s", id)
-
-	if iKey, cached := t.keys.Get(id); cached {
-		return iKey.([]byte)
-	}
-	for {
-		key, err := tkc.Get().GetKey([]byte(id))
-		if err != nil {
-			tlog.Warn.Printf("Unable to load key from KMS: %v", err)
-			<-time.After(time.Second * 3)
-			continue
-		}
-		t.keys.Add(id, key)
-		return key
-	}
 }
