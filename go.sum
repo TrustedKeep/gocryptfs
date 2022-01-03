@@ -4,6 +4,8 @@ github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03
 github.com/StackExchange/wmi v0.0.0-20190523213315-cbe66965904d/go.mod h1:3eOhrUMpNV+6aFIbp5/iudMxNCF27Vw2OZgy4xEx0Fg=
 github.com/TrustedKeep/boundary v1.0.9-0.20220103144909-3c46d3002399 h1:B1CA7ysXE69SuEid2W6DASgwLAcufQr5hyz3s9BualU=
 github.com/TrustedKeep/boundary v1.0.9-0.20220103144909-3c46d3002399/go.mod h1:DIkVuBpso4KDVC8GD97JlHbTyS/m/zeDI0POHDCpkig=
+github.com/TrustedKeep/boundary v1.0.9-0.20220103161636-ea3e5e0ef47f h1:X2boXsyAJJ5Xl9h+7aNQOMSTew8Jl9hFSRRsaMXrQ+Y=
+github.com/TrustedKeep/boundary v1.0.9-0.20220103161636-ea3e5e0ef47f/go.mod h1:DIkVuBpso4KDVC8GD97JlHbTyS/m/zeDI0POHDCpkig=
 github.com/TrustedKeep/tkutils/v2 v2.2.33 h1:KKOWRR8+rqL9WtITrwPwh13RfLTMCjeXkN4hX8spitU=
 github.com/TrustedKeep/tkutils/v2 v2.2.33/go.mod h1:n8u3l370i2qzXk4DPijZaXW2EhFeLrfzve7/D8Jmkjo=
 github.com/aws/aws-sdk-go v1.35.37 h1:XA71k5PofXJ/eeXdWrTQiuWPEEyq8liguR+Y/QUELhI=
