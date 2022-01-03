@@ -3,7 +3,7 @@ module github.com/rfjakob/gocryptfs/v2
 go 1.15
 
 require (
-	github.com/TrustedKeep/boundary v1.0.9-0.20211227162729-d11d9f6997c7
+	github.com/TrustedKeep/boundary v1.0.9-0.20220103144909-3c46d3002399
 	github.com/TrustedKeep/tkutils/v2 v2.2.33
 	github.com/hanwen/go-fuse/v2 v2.1.1-0.20210825171523-3ab5d95a30ae
 	github.com/kr/pretty v0.2.0 // indirect

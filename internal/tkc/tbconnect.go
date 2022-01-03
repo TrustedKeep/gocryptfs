@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 
 	client "github.com/TrustedKeep/boundary/client"
+	"github.com/TrustedKeep/boundary/common"
 	"github.com/TrustedKeep/boundary/tcmproto"
 	"github.com/TrustedKeep/tkutils/v2/certutil"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
@@ -28,14 +29,21 @@ func NewTBConnector(cfg *TKConfig) KMSConnector {
 	tbc := &TBConnector{
 		nodeID: cfg.NodeID,
 	}
+
+	var ac client.AuthProvider
+	if cfg.MockConnector {
+		ac = client.NewMockAWSAuthProvider()
+	} else {
+		ac = client.NewAWSAuthProvider("")
+	}
+
 	var err error
-	//  TODO: remove Mock stuff
-	if tbc.c, err = client.NewClient(cfg.BoundaryHost, client.NewMockAWSAuthProvider()); err != nil {
+	if tbc.c, err = client.NewClient(common.TKFS, cfg.BoundaryHost, ac); err != nil {
 		tlog.Fatal.Printf("Unable to connect to TrustedBoundary: %v\n", err)
 	}
 	go func() {
 		for {
-			// TODO: do we want to ignore these?
+			// ignore hearbeats
 			<-tbc.c.Heartbeat()
 		}
 	}()

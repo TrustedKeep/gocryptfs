@@ -2,8 +2,8 @@ cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMT
 github.com/BurntSushi/toml v0.3.1 h1:WXkYYl6Yr3qBf1K79EBnL4mak0OimBfB0XUf9Vl28OQ=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/StackExchange/wmi v0.0.0-20190523213315-cbe66965904d/go.mod h1:3eOhrUMpNV+6aFIbp5/iudMxNCF27Vw2OZgy4xEx0Fg=
-github.com/TrustedKeep/boundary v1.0.9-0.20211227162729-d11d9f6997c7 h1:mxHS2JVZsX0+Ixl0/0TJRxzympagkNFQYNRX1p6ECYI=
-github.com/TrustedKeep/boundary v1.0.9-0.20211227162729-d11d9f6997c7/go.mod h1:DIkVuBpso4KDVC8GD97JlHbTyS/m/zeDI0POHDCpkig=
+github.com/TrustedKeep/boundary v1.0.9-0.20220103144909-3c46d3002399 h1:B1CA7ysXE69SuEid2W6DASgwLAcufQr5hyz3s9BualU=
+github.com/TrustedKeep/boundary v1.0.9-0.20220103144909-3c46d3002399/go.mod h1:DIkVuBpso4KDVC8GD97JlHbTyS/m/zeDI0POHDCpkig=
 github.com/TrustedKeep/tkutils/v2 v2.2.33 h1:KKOWRR8+rqL9WtITrwPwh13RfLTMCjeXkN4hX8spitU=
 github.com/TrustedKeep/tkutils/v2 v2.2.33/go.mod h1:n8u3l370i2qzXk4DPijZaXW2EhFeLrfzve7/D8Jmkjo=
 github.com/aws/aws-sdk-go v1.35.37 h1:XA71k5PofXJ/eeXdWrTQiuWPEEyq8liguR+Y/QUELhI=

@@ -14,9 +14,10 @@ import (
 
 // TKConfig represents the configuration values needed to connect to TK
 type TKConfig struct {
-	NodeID       string `yaml:"NodeID"`
-	TenantID     string `yaml:"TenantID"`
-	BoundaryHost string `yaml:"BoundaryHost"`
+	NodeID        string `yaml:"NodeID"`
+	TenantID      string `yaml:"TenantID"`
+	BoundaryHost  string `yaml:"BoundaryHost"`
+	MockConnector bool   `yaml:"MockConnector"`
 }
 
 // ReadConfig will create the configuration by reading the specified file.  It will

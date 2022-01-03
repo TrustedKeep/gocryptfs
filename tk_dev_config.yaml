@@ -1,3 +1,4 @@
 TenantID: TKFS_Dev_Tenant
 # NodeID: 1
 # BoundaryHost: host:port
+MockConnector: true

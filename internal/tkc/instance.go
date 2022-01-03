@@ -23,7 +23,6 @@ func Connect(cfg *TKConfig) {
 	initOnce.Do(func() {
 		tlog.Info.Printf("Connecting to TrustedBoundary: %s", cfg.BoundaryHost)
 		c = NewTBConnector(cfg)
-		tlog.Info.Printf("Successfully connected to TrustedBoundary")
 	})
 }
 
