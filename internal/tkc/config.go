@@ -15,7 +15,6 @@ import (
 // TKConfig represents the configuration values needed to connect to TK
 type TKConfig struct {
 	NodeID        string `yaml:"NodeID"`
-	TenantID      string `yaml:"TenantID"`
 	BoundaryHost  string `yaml:"BoundaryHost"`
 	MockConnector bool   `yaml:"MockConnector"`
 }
