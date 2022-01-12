@@ -124,7 +124,7 @@ func doMount(args *argContainer) {
 		args.nodeID = hex.EncodeToString(h.Sum(nil))
 	}
 	security.Memlock()
-	tkc.Connect(args.boundaryHost, args.nodeID, args.useMock)
+	tkc.Connect(args.boundaryHost, args.nodeID, args.mockAWS)
 
 	// Initialize gocryptfs (read config file, ask for password, ...)
 	fs, wipeKeys := initFuseFrontend(args)
