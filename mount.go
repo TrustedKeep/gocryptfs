@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"log/syslog"
 	"math"
@@ -21,6 +23,7 @@ import (
 
 	"golang.org/x/crypto/chacha20poly1305"
 
+	"github.com/TrustedKeep/tkutils/v2/network"
 	"github.com/TrustedKeep/tkutils/v2/security"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -110,13 +113,18 @@ func doMount(args *argContainer) {
 	}
 
 	// connect to KMS
-	if len(args.tk_config_file) == 0 {
-		tlog.Fatal.Printf("No KMS configuration file specified")
+	if len(args.boundaryHost) == 0 {
+		tlog.Fatal.Printf("No TrustedBoundary host specified")
 		os.Exit(exitcodes.Usage)
 	}
-	tkCfg := tkc.ReadConfig(args.tk_config_file)
+	if len(args.nodeID) == 0 {
+		h := fnv.New64a()
+		h.Write([]byte(network.GetLocalIP()))
+		h.Write([]byte(args.mountpoint))
+		args.nodeID = hex.EncodeToString(h.Sum(nil))
+	}
 	security.Memlock()
-	tkc.Connect(tkCfg)
+	tkc.Connect(args.boundaryHost, args.nodeID, args.useMock)
 
 	// Initialize gocryptfs (read config file, ask for password, ...)
 	fs, wipeKeys := initFuseFrontend(args)

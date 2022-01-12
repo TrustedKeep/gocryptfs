@@ -4,6 +4,7 @@ import (
 	// Should be initialized before anything else.
 	// This import line MUST be in the alphabetically first source code file of
 	// package main!
+	"github.com/TrustedKeep/tkutils/v2/network"
 	_ "github.com/rfjakob/gocryptfs/v2/internal/ensurefds012"
 
 	"fmt"
@@ -47,8 +48,10 @@ type argContainer struct {
 	_ctlsockFd net.Listener
 	// _forceOwner is, if non-nil, a parsed, validated Owner (as opposed to the string above)
 	_forceOwner *fuse.Owner
+
 	// tk specific options
-	tk_config_file string
+	boundaryHost, nodeID string
+	useMock              bool
 }
 
 var flagSet *flag.FlagSet
@@ -171,7 +174,9 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.xchacha, "xchacha", false, "Use XChaCha20-Poly1305 file content encryption")
 
 	// TK specific options
-	flagSet.StringVar(&args.tk_config_file, "kms-config", "", "Path to TrustedKeep configuration file")
+	flagSet.StringVar(&args.boundaryHost, "boundary-host", fmt.Sprintf("%s:%d", network.GetLocalIP(), 5050), "Host:port of TrustedBoundary")
+	flagSet.StringVar(&args.nodeID, "node-id", "", "Unique identifier for the mount")
+	flagSet.BoolVarP(&args.useMock, "mock-aws", "", false, "Mock AWS connection for development")
 
 	// Mount options with opposites
 	flagSet.BoolVar(&args.dev, "dev", false, "Allow device files")

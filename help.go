@@ -15,31 +15,43 @@ func helpShort() {
 	printVersion()
 	fmt.Printf("\n")
 	fmt.Printf(tUsage)
+	// 	fmt.Printf(`
+	// Common Options (use -hh to show all):
+	//   -allow_other       Allow other users to access the mount
+	//   -i, -idle          Unmount automatically after specified idle duration
+	//   -config            Custom path to config file
+	//   -ctlsock           Create control socket at location
+	//   -extpass           Call external program to prompt for the password
+	//   -fg                Stay in the foreground
+	//   -fsck              Check filesystem integrity
+	//   -fusedebug         Debug FUSE calls
+	//   -h, -help          This short help text
+	//   -hh                Long help text with all options
+	//   -init              Initialize encrypted directory
+	//   -info              Display information about encrypted directory
+	//   -boundary-host     URL to the TrustedBoundary host in format host:p
+	//   -masterkey         Mount with explicit master key instead of password
+	//   -nonempty          Allow mounting over non-empty directory
+	//   -nosyslog          Do not redirect log messages to syslog
+	//   -passfile          Read password from plain text file(s)
+	//   -passwd            Change password
+	//   -plaintextnames    Do not encrypt file names (with -init)
+	//   -q, -quiet         Silence informational messages
+	//   -reverse           Enable reverse mode
+	//   -ro                Mount read-only
+	//   -speed             Run crypto speed test
+	//   -version           Print version information
+	//   --                 Stop option parsing
+	// `)
 	fmt.Printf(`
 Common Options (use -hh to show all):
-  -allow_other       Allow other users to access the mount
-  -i, -idle          Unmount automatically after specified idle duration
-  -config            Custom path to config file
-  -ctlsock           Create control socket at location
-  -extpass           Call external program to prompt for the password
   -fg                Stay in the foreground
-  -fsck              Check filesystem integrity
   -fusedebug         Debug FUSE calls
   -h, -help          This short help text
-  -hh                Long help text with all options
   -init              Initialize encrypted directory
-  -info              Display information about encrypted directory
-  -kms-config        Path to KMS configuration file
-  -masterkey         Mount with explicit master key instead of password
-  -nonempty          Allow mounting over non-empty directory
-  -nosyslog          Do not redirect log messages to syslog
-  -passfile          Read password from plain text file(s)
-  -passwd            Change password
-  -plaintextnames    Do not encrypt file names (with -init)
-  -q, -quiet         Silence informational messages
-  -reverse           Enable reverse mode
-  -ro                Mount read-only
-  -speed             Run crypto speed test
+  -boundary-host     URL to the TrustedBoundary host in format host:port
+  -node-id           Unique identifier for the mount
+  -mock-aws          Use a mock AWS connection for development and testing
   -version           Print version information
   --                 Stop option parsing
 `)

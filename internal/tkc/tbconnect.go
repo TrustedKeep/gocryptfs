@@ -25,20 +25,20 @@ type TBConnector struct {
 
 // NewTBConnector creates and initializes our connection to Boundary.  If we are
 // unable to connect, this is a fatal error
-func NewTBConnector(cfg *TKConfig) KMSConnector {
+func NewTBConnector(tbHost, id string, useMock bool) KMSConnector {
 	tbc := &TBConnector{
-		nodeID: cfg.NodeID,
+		nodeID: id,
 	}
 
 	var ac client.AuthProvider
-	if cfg.MockConnector {
+	if useMock {
 		ac = client.NewMockAWSAuthProvider()
 	} else {
 		ac = client.NewAWSAuthProvider("")
 	}
 
 	var err error
-	if tbc.c, err = client.NewClient(common.TKFS, cfg.BoundaryHost, ac); err != nil {
+	if tbc.c, err = client.NewClient(common.TKFS, tbHost, ac); err != nil {
 		tlog.Fatal.Printf("Unable to connect to TrustedBoundary: %v\n", err)
 	}
 	go func() {

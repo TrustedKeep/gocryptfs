@@ -10,7 +10,7 @@ import (
 
 // TestSizeToSize tests CipherSizeToPlainSize and PlainSizeToCipherSize
 func TestSizeToSize(t *testing.T) {
-	tkc.Connect(new(tkc.TKConfig))
+	tkc.Connect("", "", true)
 	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, true)
 	ce := New(cc, DefaultBS, false)
 

@@ -13,7 +13,7 @@ type testRange struct {
 }
 
 func TestSplitRange(t *testing.T) {
-	tkc.Connect(new(tkc.TKConfig))
+	tkc.Connect("", "", true)
 	var ranges []testRange
 
 	ranges = append(ranges, testRange{0, 70000},
@@ -43,7 +43,7 @@ func TestSplitRange(t *testing.T) {
 }
 
 func TestCiphertextRange(t *testing.T) {
-	tkc.Connect(new(tkc.TKConfig))
+	tkc.Connect("", "", true)
 	var ranges []testRange
 
 	ranges = append(ranges, testRange{0, 70000},
@@ -74,7 +74,7 @@ func TestCiphertextRange(t *testing.T) {
 }
 
 func TestBlockNo(t *testing.T) {
-	tkc.Connect(new(tkc.TKConfig))
+	tkc.Connect("", "", true)
 	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, true)
 	f := New(cc, DefaultBS, false)
 

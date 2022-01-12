@@ -19,10 +19,10 @@ type KMSConnector interface {
 }
 
 // Connect starts up our connection to the KMS.  Should be the first thing we do.
-func Connect(cfg *TKConfig) {
+func Connect(tbHost, id string, useMock bool) {
 	initOnce.Do(func() {
-		tlog.Info.Printf("Connecting to TrustedBoundary: %s", cfg.BoundaryHost)
-		c = NewTBConnector(cfg)
+		tlog.Info.Printf("Connecting to TrustedBoundary: %s", tbHost)
+		c = NewTBConnector(tbHost, id, useMock)
 	})
 }
 
