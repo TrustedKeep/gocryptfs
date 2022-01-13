@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"hash/fnv"
 	"sync"
 	"time"
 
@@ -31,11 +32,11 @@ func init() {
 	})
 }
 
-func getKey(ad []byte) []byte {
+func getKey(ad []byte, keyPool int) []byte {
 	keyMu.Lock()
 	defer keyMu.Unlock()
 
-	id := getKeyName(ad)
+	id := getKeyName(ad, keyPool)
 	tlog.Debug.Printf("Retrieving key %s", id)
 
 	if iKey, cached := keys.Get(id); cached {
@@ -58,13 +59,20 @@ func getKey(ad []byte) []byte {
 // fileID/block, where fileID is the file node and block is calculated based on the number of
 // bytes to encrypt with a single key...so, ~30Gb with 1 key means the first ~7 million blocks use the
 // same encryption key
-func getKeyName(additionalData []byte) string {
-	// from content.go/concatAD, the AD passed in contains the fileID and block# as:
-	// ad = [blockNo.bigEndian fileID]
-	// so, first 8 bytes are bigendian uint64 containing block ID
-	// next 8 bytes are the file identifier
-	id := hex.EncodeToString(additionalData[8:])
-	blockNum := binary.BigEndian.Uint64(additionalData[:8])
-	blockKey := (int(blockNum) * blockSize) / bytesPerKey
-	return fmt.Sprintf("%s/%d", id, blockKey)
+func getKeyName(additionalData []byte, keyPool int) string {
+	if keyPool <= 0 {
+		// from content.go/concatAD, the AD passed in contains the fileID and block# as:
+		// ad = [blockNo.bigEndian fileID]
+		// so, first 8 bytes are bigendian uint64 containing block ID
+		// next 8 bytes are the file identifier
+		id := hex.EncodeToString(additionalData[8:])
+		blockNum := binary.BigEndian.Uint64(additionalData[:8])
+		blockKey := (int(blockNum) * blockSize) / bytesPerKey
+		return fmt.Sprintf("%s/%d", id, blockKey)
+	}
+	// if we're using a keypool, figure out which key to use with a hash of the ad
+	h := fnv.New32a()
+	h.Write(additionalData)
+	keyID := h.Sum32() % uint32(keyPool)
+	return fmt.Sprintf("tkfs_kp/%d", keyID)
 }

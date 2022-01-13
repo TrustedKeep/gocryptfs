@@ -11,7 +11,7 @@ import (
 // TestSizeToSize tests CipherSizeToPlainSize and PlainSizeToCipherSize
 func TestSizeToSize(t *testing.T) {
 	tkc.Connect("", "", true, true)
-	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, true)
+	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true)
 	ce := New(cc, DefaultBS, false)
 
 	const rangeMax = 10000

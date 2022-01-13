@@ -9,10 +9,13 @@ import (
 var _ cipher.AEAD = &chaAead{}
 
 type chaAead struct {
+	keyPool int
 }
 
-func newTkCha() cipher.AEAD {
-	return &chaAead{}
+func newTkCha(keyPool int) cipher.AEAD {
+	return &chaAead{
+		keyPool: keyPool,
+	}
 }
 
 // NonceSize returns the size of the nonce that must be passed to Seal
@@ -54,7 +57,7 @@ func (t *chaAead) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte, e
 }
 
 func (t *chaAead) getAead(additionalData []byte) (aead cipher.AEAD) {
-	aead, err := chacha20poly1305.NewX(getKey(additionalData))
+	aead, err := chacha20poly1305.NewX(getKey(additionalData, t.keyPool))
 	if err != nil {
 		panic(err)
 	}

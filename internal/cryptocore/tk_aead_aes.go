@@ -8,12 +8,14 @@ import (
 var _ cipher.AEAD = &gcmAead{}
 
 type gcmAead struct {
-	ivSize int
+	ivSize  int
+	keyPool int
 }
 
-func newTkAes(ivSize int) cipher.AEAD {
+func newTkAes(ivSize, keyPool int) cipher.AEAD {
 	return &gcmAead{
-		ivSize: ivSize,
+		ivSize:  ivSize,
+		keyPool: keyPool,
 	}
 }
 
@@ -56,7 +58,7 @@ func (t *gcmAead) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte, e
 }
 
 func (t *gcmAead) getAead(additionalData []byte) (aead cipher.AEAD) {
-	block, err := aes.NewCipher(getKey(additionalData))
+	block, err := aes.NewCipher(getKey(additionalData, t.keyPool))
 	if err != nil {
 		panic(err)
 	}

@@ -18,7 +18,7 @@ import (
 func newTestFS(args Args) *RootNode {
 	// Init crypto backend
 	tkc.Connect("", "", true, true)
-	cCore := cryptocore.New(cryptocore.BackendGoGCM, contentenc.DefaultIVBits, true)
+	cCore := cryptocore.New(cryptocore.BackendGoGCM, contentenc.DefaultIVBits, 0, true)
 	cEnc := contentenc.New(cCore, contentenc.DefaultBS, false)
 	n := nametransform.New(cCore.EMECipher, true, true, nil, false)
 	rn := NewRootNode(args, cEnc, n)

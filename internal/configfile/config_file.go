@@ -43,6 +43,8 @@ type ConfFile struct {
 	MockAWS bool `json:",omitempty"`
 	// MockKMS uses a mock KMS for development
 	MockKMS bool `json:",omitempty"`
+	// KeyPool is the size of the pool of keys to use, zero means 1 / file.
+	KeyPool int `json:",omitempty"`
 	// Filename is the name of the config file. Not exported to JSON.
 	filename string
 }
@@ -57,6 +59,7 @@ type CreateArgs struct {
 	BoundaryHost       string
 	MockAWS            bool
 	MockKMS            bool
+	KeyPool            int
 }
 
 // Create - create a new config and write it to "Filename".
@@ -68,6 +71,7 @@ func Create(args *CreateArgs) error {
 		BoundaryHost: args.BoundaryHost,
 		MockAWS:      args.MockAWS,
 		MockKMS:      args.MockKMS,
+		KeyPool:      args.KeyPool,
 	}
 
 	if cf.NodeID == "" {

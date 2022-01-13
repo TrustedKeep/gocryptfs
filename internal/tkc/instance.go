@@ -27,7 +27,7 @@ func Connect(tbHost, id string, mockAWS, mockKMS bool) {
 			return
 		}
 		tlog.Info.Printf("Connecting to TrustedBoundary: %s", tbHost)
-		c = NewTBConnector(tbHost, id, mockAWS)
+		c = newtbConnector(tbHost, id, mockAWS)
 	})
 }
 

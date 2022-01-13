@@ -15,20 +15,20 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
-var _ KMSConnector = &TBConnector{}
+var _ KMSConnector = &tbConnector{}
 
-// TBConnector connects us to Boundary for key retrieval
-type TBConnector struct {
+// tbConnector connects us to Boundary for key retrieval
+type tbConnector struct {
 	nodeID     string
 	c          *client.Client
 	publicKey  []byte
 	privateKey *rsa.PrivateKey
 }
 
-// NewTBConnector creates and initializes our connection to Boundary.  If we are
+// newtbConnector creates and initializes our connection to Boundary.  If we are
 // unable to connect, this is a fatal error.
-func NewTBConnector(tbHost, id string, mockAWS bool) KMSConnector {
-	tbc := &TBConnector{
+func newtbConnector(tbHost, id string, mockAWS bool) KMSConnector {
+	tbc := &tbConnector{
 		nodeID: id,
 	}
 
@@ -59,10 +59,10 @@ func NewTBConnector(tbHost, id string, mockAWS bool) KMSConnector {
 }
 
 // GetKey from KMS
-func (tbc *TBConnector) GetKey(path []byte) (key []byte, err error) {
+func (tbc *tbConnector) GetKey(path []byte) (key []byte, err error) {
 	path = bytes.Join([][]byte{[]byte(tbc.nodeID), path}, []byte("/"))
 
-	tlog.Debug.Printf("Retrieving key from KMS")
+	tlog.Debug.Printf("Retrieving key from KMS: %s", string(path))
 	var resp *tcmproto.GetKeyResponse
 	if resp, err = tbc.c.Connection().GetKeyRSA(context.Background(), &tcmproto.GetKeyRequest{
 		Path:      path,

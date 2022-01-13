@@ -52,6 +52,7 @@ type argContainer struct {
 	// tk specific options
 	boundaryHost, nodeID string
 	mockAWS, mockKMS     bool
+	keyPool              int
 }
 
 var flagSet *flag.FlagSet
@@ -178,6 +179,7 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.StringVar(&args.nodeID, "node-id", "", "Unique identifier for the mount")
 	flagSet.BoolVarP(&args.mockAWS, "mock-aws", "", false, "Mock AWS connection for development")
 	flagSet.BoolVarP(&args.mockKMS, "mock-kms", "", false, "Use a mock KMS for development, no Boundary required")
+	flagSet.IntVarP(&args.keyPool, "key-pool", "", 0, "Size of pool of encryption keys, zero indicates 1 key / file")
 
 	// Mount options with opposites
 	flagSet.BoolVar(&args.dev, "dev", false, "Allow device files")

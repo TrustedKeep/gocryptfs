@@ -51,6 +51,7 @@ Common Options (use -hh to show all):
   -init              Initialize encrypted directory
   -boundary-host     URL to the TrustedBoundary host in format host:port
   -node-id           Unique identifier for the mount
+  -key-pool          Number indicates size of encryption key pool, zero indicates 1 key / file
   -mock-aws          Use a mock AWS connection for development and testing
   -mock-kms          Use a mock KMS for development and testing
   -version           Print version information

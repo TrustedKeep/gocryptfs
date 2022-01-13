@@ -10,11 +10,11 @@ import (
 func TestCryptoCoreNew(t *testing.T) {
 	tkc.Connect("", "", true, true)
 	for _, useHKDF := range []bool{true, false} {
-		c := New(BackendGoGCM, 96, useHKDF)
+		c := New(BackendGoGCM, 96, 0, useHKDF)
 		if c.IVLen != 12 {
 			t.Fail()
 		}
-		c = New(BackendGoGCM, 128, useHKDF)
+		c = New(BackendGoGCM, 128, 0, useHKDF)
 		if c.IVLen != 16 {
 			t.Fail()
 		}

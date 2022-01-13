@@ -241,7 +241,7 @@ func setOpenFileLimit() {
 // Calls os.Exit on errors
 func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys func()) {
 	var err error
-	var confFile *configfile.ConfFile
+	confFile, _ := loadConfig(args)
 
 	// Reconciliate CLI and config file arguments into a fusefrontend.Args struct
 	// that is passed to the filesystem implementation
@@ -269,6 +269,7 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 		OneFileSystem:      args.one_file_system,
 		DeterministicNames: args.deterministic_names,
 	}
+	var keyPool int
 	// confFile is nil when "-zerokey" or "-masterkey" was used
 	if confFile != nil {
 		// Settings from the config file override command line args
@@ -276,6 +277,7 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 		frontendArgs.DeterministicNames = !confFile.IsFeatureFlagSet(configfile.FlagDirIV)
 		args.raw64 = confFile.IsFeatureFlagSet(configfile.FlagRaw64)
 		args.hkdf = confFile.IsFeatureFlagSet(configfile.FlagHKDF)
+
 		// Note: this will always return the non-openssl variant
 		cryptoBackend, err = confFile.ContentEncryption()
 		if err != nil {
@@ -283,6 +285,7 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 			os.Exit(exitcodes.DeprecatedFS)
 		}
 		IVBits = cryptoBackend.NonceSize * 8
+		keyPool = confFile.KeyPool
 	}
 	// If allow_other is set and we run as root, try to give newly created files to
 	// the right user.
@@ -291,7 +294,7 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 	}
 
 	// Init crypto backend
-	cCore := cryptocore.New(cryptoBackend, IVBits, args.hkdf)
+	cCore := cryptocore.New(cryptoBackend, IVBits, keyPool, args.hkdf)
 	cEnc := contentenc.New(cCore, contentenc.DefaultBS, false)
 	nameTransform := nametransform.New(cCore.EMECipher, frontendArgs.LongNames,
 		args.raw64, []string(args.badname), frontendArgs.DeterministicNames)

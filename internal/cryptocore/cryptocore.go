@@ -57,9 +57,9 @@ type CryptoCore struct {
 // Even though the "GCMIV128" feature flag is now mandatory, we must still
 // support 96-bit IVs here because they were used for encrypting the master
 // key in gocryptfs.conf up to gocryptfs v1.2. v1.3 switched to 128 bits.
-func New(aeadType AEADTypeEnum, IVBitLen int, useHKDF bool) *CryptoCore {
-	tlog.Debug.Printf("cryptocore.New: aeadType=%v, IVBitLen=%d, useHKDF=%v",
-		aeadType, IVBitLen, useHKDF)
+func New(aeadType AEADTypeEnum, IVBitLen, keyPool int, useHKDF bool) *CryptoCore {
+	tlog.Debug.Printf("cryptocore.New: aeadType=%v, IVBitLen=%d, useHKDF=%v, keyPool=%d",
+		aeadType, IVBitLen, useHKDF, keyPool)
 
 	if IVBitLen != 96 && IVBitLen != 128 && IVBitLen != chacha20poly1305.NonceSizeX*8 {
 		log.Panicf("Unsupported IV length of %d bits", IVBitLen)
@@ -92,13 +92,13 @@ func New(aeadType AEADTypeEnum, IVBitLen int, useHKDF bool) *CryptoCore {
 	// Initialize an AEAD cipher for file content encryption.
 	var aeadCipher cipher.AEAD
 	if aeadType == BackendGoGCM {
-		aeadCipher = newTkAes(IVBitLen / 8)
+		aeadCipher = newTkAes(IVBitLen/8, keyPool)
 	} else if aeadType == BackendXChaCha20Poly1305 {
 		// We don't support legacy modes with XChaCha20-Poly1305
 		if IVBitLen != chacha20poly1305.NonceSizeX*8 {
 			log.Panicf("XChaCha20-Poly1305 must use 192-bit IVs, you wanted %d", IVBitLen)
 		}
-		aeadCipher = newTkCha()
+		aeadCipher = newTkCha(keyPool)
 	} else {
 		log.Panicf("unknown cipher backend %q", aeadType.Name)
 	}
