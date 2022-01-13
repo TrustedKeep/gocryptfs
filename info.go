@@ -35,6 +35,5 @@ func info(filename string) {
 		os.Exit(exitcodes.LoadConf)
 	}
 	// Pretty-print
-	fmt.Printf("Creator:      %s\n", cf.Creator)
 	fmt.Printf("FeatureFlags: %s\n", strings.Join(cf.FeatureFlags, " "))
 }

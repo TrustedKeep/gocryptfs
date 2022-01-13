@@ -57,18 +57,16 @@ func initDir(args *argContainer) {
 		os.Exit(exitcodes.CipherDir)
 	}
 
-	// Choose password for config file
-	if len(args.extpass) == 0 {
-		tlog.Info.Printf("Choose a password for protecting your files.")
-	}
 	{
-		creator := tlog.ProgramName + " " + GitVersion
 		err = configfile.Create(&configfile.CreateArgs{
 			Filename:           args.config,
 			PlaintextNames:     args.plaintextnames,
-			Creator:            creator,
 			DeterministicNames: args.deterministic_names,
-			XChaCha20Poly1305:  args.xchacha})
+			XChaCha20Poly1305:  args.xchacha,
+			NodeID:             args.nodeID,
+			MockAWS:            args.mockAWS,
+			BoundaryHost:       args.boundaryHost,
+		})
 		if err != nil {
 			tlog.Fatal.Println(err)
 			os.Exit(exitcodes.WriteConf)

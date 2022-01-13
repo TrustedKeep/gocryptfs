@@ -3,9 +3,11 @@
 package configfile
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"syscall"
 
 	"os"
@@ -25,10 +27,6 @@ const (
 
 // ConfFile is the content of a config file.
 type ConfFile struct {
-	// Creator is the gocryptfs version string.
-	// This only documents the config file for humans who look at it. The actual
-	// technical info is contained in FeatureFlags.
-	Creator string
 	// Version is the On-Disk-Format version this filesystem uses
 	Version uint16
 	// FeatureFlags is a list of feature flags this filesystem has enabled.
@@ -36,6 +34,13 @@ type ConfFile struct {
 	// mounting. This mechanism is analogous to the ext4 feature flags that are
 	// stored in the superblock.
 	FeatureFlags []string
+	// NodeID is the unique identifier for this host/mount
+	NodeID string
+	// BoundaryHost is the host:port of the Boundary instance that will retrieve
+	// our encryption keys
+	BoundaryHost string
+	// MockAWS uses a mock AWS connection for development
+	MockAWS bool
 	// Filename is the name of the config file. Not exported to JSON.
 	filename string
 }
@@ -44,18 +49,29 @@ type ConfFile struct {
 type CreateArgs struct {
 	Filename           string
 	PlaintextNames     bool
-	Creator            string
 	DeterministicNames bool
 	XChaCha20Poly1305  bool
+	NodeID             string
+	BoundaryHost       string
+	MockAWS            bool `json:",omitempty"`
 }
 
 // Create - create a new config and write it to "Filename".
 func Create(args *CreateArgs) error {
 	cf := ConfFile{
-		filename: args.Filename,
-		Creator:  args.Creator,
-		Version:  contentenc.CurrentVersion,
+		filename:     args.Filename,
+		Version:      contentenc.CurrentVersion,
+		NodeID:       args.NodeID,
+		BoundaryHost: args.BoundaryHost,
+		MockAWS:      args.MockAWS,
 	}
+
+	if cf.NodeID == "" {
+		data := make([]byte, 16)
+		rand.Read(data)
+		cf.NodeID = hex.EncodeToString(data)
+	}
+
 	// Feature flags
 	cf.setFeatureFlag(FlagHKDF)
 	if args.XChaCha20Poly1305 {

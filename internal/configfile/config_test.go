@@ -22,9 +22,7 @@ func TestLoadV2StrangeFeature(t *testing.T) {
 }
 
 func TestCreateConfDefault(t *testing.T) {
-	err := Create(&CreateArgs{
-		Filename: "config_test/tmp.conf",
-		Creator:  "test"})
+	err := Create(&CreateArgs{Filename: "config_test/tmp.conf"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,8 +45,7 @@ func TestCreateConfDefault(t *testing.T) {
 func TestCreateConfPlaintextnames(t *testing.T) {
 	err := Create(&CreateArgs{
 		Filename:       "config_test/tmp.conf",
-		PlaintextNames: true,
-		Creator:        "test"})
+		PlaintextNames: true})
 	if err != nil {
 		t.Fatal(err)
 	}

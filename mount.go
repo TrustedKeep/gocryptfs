@@ -2,9 +2,7 @@ package main
 
 import (
 	"bytes"
-	"encoding/hex"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"log/syslog"
 	"math"
@@ -23,7 +21,6 @@ import (
 
 	"golang.org/x/crypto/chacha20poly1305"
 
-	"github.com/TrustedKeep/tkutils/v2/network"
 	"github.com/TrustedKeep/tkutils/v2/security"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -40,7 +37,7 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
-// AfterUnmount is called after the filesystem has been unmounted.
+// AfterUnmounter is called after the filesystem has been unmounted.
 // This can be used for cleanup and printing statistics.
 type AfterUnmounter interface {
 	AfterUnmount()
@@ -56,6 +53,8 @@ func doMount(args *argContainer) {
 		tlog.Fatal.Printf("Invalid mountpoint: %v", err)
 		os.Exit(exitcodes.MountPoint)
 	}
+	cf, _ := loadConfig(args)
+
 	// We cannot mount "/home/user/.cipher" at "/home/user" because the mount
 	// will hide ".cipher" also for us.
 	if args.cipherdir == args.mountpoint || strings.HasPrefix(args.cipherdir, args.mountpoint+"/") {
@@ -113,18 +112,8 @@ func doMount(args *argContainer) {
 	}
 
 	// connect to KMS
-	if len(args.boundaryHost) == 0 {
-		tlog.Fatal.Printf("No TrustedBoundary host specified")
-		os.Exit(exitcodes.Usage)
-	}
-	if len(args.nodeID) == 0 {
-		h := fnv.New64a()
-		h.Write([]byte(network.GetLocalIP()))
-		h.Write([]byte(args.mountpoint))
-		args.nodeID = hex.EncodeToString(h.Sum(nil))
-	}
 	security.Memlock()
-	tkc.Connect(args.boundaryHost, args.nodeID, args.mockAWS)
+	tkc.Connect(cf.BoundaryHost, cf.NodeID, cf.MockAWS)
 
 	// Initialize gocryptfs (read config file, ask for password, ...)
 	fs, wipeKeys := initFuseFrontend(args)
@@ -493,4 +482,15 @@ func unmount(srv *fuse.Server, mountpoint string) {
 			cmd.Run()
 		}
 	}
+}
+
+// loadConfig loads the config file `args.config`
+func loadConfig(args *argContainer) (cf *configfile.ConfFile, err error) {
+	// First check if the file can be read at all.
+	cf, err = configfile.Load(args.config)
+	if err != nil {
+		tlog.Fatal.Printf("Cannot open config file: %v", err)
+		return nil, err
+	}
+	return cf, nil
 }

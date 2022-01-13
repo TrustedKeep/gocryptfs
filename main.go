@@ -33,17 +33,6 @@ var BuildDate = "0000-00-00"
 // raceDetector is set to true by race.go if we are compiled with "go build -race"
 var raceDetector bool
 
-// loadConfig loads the config file `args.config`
-func loadConfig(args *argContainer) (cf *configfile.ConfFile, err error) {
-	// First check if the file can be read at all.
-	cf, err = configfile.Load(args.config)
-	if err != nil {
-		tlog.Fatal.Printf("Cannot open config file: %v", err)
-		return nil, err
-	}
-	return cf, nil
-}
-
 // printVersion prints a version string like this:
 // gocryptfs v1.7-32-gcf99cfd; go-fuse v1.0.0-174-g22a9cb9; 2019-05-12 go1.12 linux/amd64
 func printVersion() {
