@@ -425,7 +425,6 @@ func (f *File) Getattr(ctx context.Context, a *fuse.AttrOut) syscall.Errno {
 	f.fdLock.RLock()
 	defer f.fdLock.RUnlock()
 
-	tlog.Debug.Printf("file.GetAttr()")
 	st := syscall.Stat_t{}
 	err := syscall.Fstat(f.intFd(), &st)
 	if err != nil {
