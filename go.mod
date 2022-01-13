@@ -10,6 +10,7 @@ require (
 	github.com/pkg/xattr v0.4.3
 	github.com/rfjakob/eme v1.1.2
 	github.com/spf13/pflag v1.0.5
+	go.etcd.io/bbolt v1.3.6
 	go.uber.org/zap v1.18.1 // indirect
 	golang.org/x/crypto v0.0.0-20210817164053-32db794688a5
 	golang.org/x/sys v0.0.0-20210817190340-bfb29a6856f2

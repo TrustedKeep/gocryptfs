@@ -65,6 +65,7 @@ func initDir(args *argContainer) {
 			XChaCha20Poly1305:  args.xchacha,
 			NodeID:             args.nodeID,
 			MockAWS:            args.mockAWS,
+			MockKMS:            args.mockKMS,
 			BoundaryHost:       args.boundaryHost,
 		})
 		if err != nil {

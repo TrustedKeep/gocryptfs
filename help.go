@@ -52,6 +52,7 @@ Common Options (use -hh to show all):
   -boundary-host     URL to the TrustedBoundary host in format host:port
   -node-id           Unique identifier for the mount
   -mock-aws          Use a mock AWS connection for development and testing
+  -mock-kms          Use a mock KMS for development and testing
   -version           Print version information
   --                 Stop option parsing
 `)

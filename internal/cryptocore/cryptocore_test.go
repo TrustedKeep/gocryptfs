@@ -8,7 +8,7 @@ import (
 
 // "New" should accept at least these param combinations
 func TestCryptoCoreNew(t *testing.T) {
-	tkc.Connect("", "", true)
+	tkc.Connect("", "", true, true)
 	for _, useHKDF := range []bool{true, false} {
 		c := New(BackendGoGCM, 96, useHKDF)
 		if c.IVLen != 12 {

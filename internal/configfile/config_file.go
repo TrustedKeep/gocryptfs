@@ -40,7 +40,9 @@ type ConfFile struct {
 	// our encryption keys
 	BoundaryHost string
 	// MockAWS uses a mock AWS connection for development
-	MockAWS bool
+	MockAWS bool `json:",omitempty"`
+	// MockKMS uses a mock KMS for development
+	MockKMS bool `json:",omitempty"`
 	// Filename is the name of the config file. Not exported to JSON.
 	filename string
 }
@@ -53,7 +55,8 @@ type CreateArgs struct {
 	XChaCha20Poly1305  bool
 	NodeID             string
 	BoundaryHost       string
-	MockAWS            bool `json:",omitempty"`
+	MockAWS            bool
+	MockKMS            bool
 }
 
 // Create - create a new config and write it to "Filename".
@@ -64,6 +67,7 @@ func Create(args *CreateArgs) error {
 		NodeID:       args.NodeID,
 		BoundaryHost: args.BoundaryHost,
 		MockAWS:      args.MockAWS,
+		MockKMS:      args.MockKMS,
 	}
 
 	if cf.NodeID == "" {

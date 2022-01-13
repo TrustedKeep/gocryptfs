@@ -15,6 +15,8 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
+var _ KMSConnector = &TBConnector{}
+
 // TBConnector connects us to Boundary for key retrieval
 type TBConnector struct {
 	nodeID     string
@@ -24,14 +26,14 @@ type TBConnector struct {
 }
 
 // NewTBConnector creates and initializes our connection to Boundary.  If we are
-// unable to connect, this is a fatal error
-func NewTBConnector(tbHost, id string, useMock bool) KMSConnector {
+// unable to connect, this is a fatal error.
+func NewTBConnector(tbHost, id string, mockAWS bool) KMSConnector {
 	tbc := &TBConnector{
 		nodeID: id,
 	}
 
 	var ac client.AuthProvider
-	if useMock {
+	if mockAWS {
 		ac = client.NewMockAWSAuthProvider()
 	} else {
 		ac = client.NewAWSAuthProvider("")

@@ -19,10 +19,15 @@ type KMSConnector interface {
 }
 
 // Connect starts up our connection to the KMS.  Should be the first thing we do.
-func Connect(tbHost, id string, useMock bool) {
+func Connect(tbHost, id string, mockAWS, mockKMS bool) {
 	initOnce.Do(func() {
+		if mockKMS {
+			tlog.Info.Printf("Opening mock KMS local store")
+			c = newMockConnector(id)
+			return
+		}
 		tlog.Info.Printf("Connecting to TrustedBoundary: %s", tbHost)
-		c = NewTBConnector(tbHost, id, useMock)
+		c = NewTBConnector(tbHost, id, mockAWS)
 	})
 }
 
