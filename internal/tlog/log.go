@@ -15,7 +15,7 @@ import (
 
 const (
 	// ProgramName is used in log reports.
-	ProgramName = "gocryptfs"
+	ProgramName = "tkfs"
 	wpanicMsg   = "-wpanic turns this warning into a panic: "
 )
 
