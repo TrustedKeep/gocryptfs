@@ -3,15 +3,14 @@
 package configfile
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"math/rand"
 	"syscall"
 
 	"os"
 
+	"github.com/google/uuid"
 	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
@@ -75,9 +74,8 @@ func Create(args *CreateArgs) error {
 	}
 
 	if cf.NodeID == "" {
-		data := make([]byte, 16)
-		rand.Read(data)
-		cf.NodeID = hex.EncodeToString(data)
+		uid, _ := uuid.NewRandom()
+		cf.NodeID = uid.String()
 	}
 
 	// Feature flags
