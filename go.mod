@@ -3,8 +3,8 @@ module github.com/rfjakob/gocryptfs/v2
 go 1.15
 
 require (
-	github.com/TrustedKeep/boundary v1.0.9-0.20220103161636-ea3e5e0ef47f
-	github.com/TrustedKeep/tkutils/v2 v2.2.33
+	github.com/TrustedKeep/boundary v1.0.9-0.20220124211221-6429cd059411
+	github.com/TrustedKeep/tkutils/v2 v2.3.0
 	github.com/google/uuid v1.1.2
 	github.com/hanwen/go-fuse/v2 v2.1.1-0.20210825171523-3ab5d95a30ae
 	github.com/kr/pretty v0.2.0 // indirect
