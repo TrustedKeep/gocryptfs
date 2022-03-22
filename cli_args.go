@@ -27,11 +27,11 @@ type argContainer struct {
 	debug, init, zerokey, fusedebug, fg, version,
 	plaintextnames, quiet, nosyslog, wpanic,
 	longnames, allow_other, nonempty, raw64,
-	noprealloc, speed, hkdf, serialize_reads, hh, info,
+	noprealloc, speed, hkdf, hh, info,
 	sharedstorage, fsck, one_file_system, deterministic_names,
 	xchacha bool
 	// Mount options with opposites
-	dev, nodev, suid, nosuid, exec, noexec, rw, ro, kernel_cache, acl bool
+	dev, nodev, suid, nosuid, exec, noexec, rw, ro, kernel_cache bool
 	masterkey, mountpoint, cipherdir, cpuprofile,
 	memprofile, ko, ctlsock, fsname, force_owner, trace string
 	// -extpass, -badname, -passfile can be passed multiple times
@@ -165,7 +165,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.noprealloc, "noprealloc", false, "Disable preallocation before writing")
 	flagSet.BoolVar(&args.speed, "speed", false, "Run crypto speed test")
 	flagSet.BoolVar(&args.hkdf, "hkdf", true, "Use HKDF as an additional key derivation step")
-	flagSet.BoolVar(&args.serialize_reads, "serialize_reads", false, "Try to serialize read operations")
 	flagSet.BoolVar(&args.hh, "hh", false, "Show this long help text")
 	flagSet.BoolVar(&args.info, "info", false, "Display information about CIPHERDIR")
 	flagSet.BoolVar(&args.sharedstorage, "sharedstorage", false, "Make concurrent access to a shared CIPHERDIR safer")
@@ -191,7 +190,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.rw, "rw", false, "Mount the filesystem read-write")
 	flagSet.BoolVar(&args.ro, "ro", false, "Mount the filesystem read-only")
 	flagSet.BoolVar(&args.kernel_cache, "kernel_cache", false, "Enable the FUSE kernel_cache option")
-	flagSet.BoolVar(&args.acl, "acl", false, "Enforce ACLs")
 
 	flagSet.StringVar(&args.masterkey, "masterkey", "", "Mount with explicit master key")
 	flagSet.StringVar(&args.cpuprofile, "cpuprofile", "", "Write cpu profile to specified file")

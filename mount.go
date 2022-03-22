@@ -346,14 +346,6 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 		MaxWrite: fuse.MAX_KERNEL_WRITE,
 		Options:  []string{fmt.Sprintf("max_read=%d", fuse.MAX_KERNEL_WRITE)},
 		Debug:    args.fusedebug,
-		// The kernel usually submits multiple read requests in parallel,
-		// which means we serve them in any order. Out-of-order reads are
-		// expensive on some backing network filesystems
-		// ( https://github.com/rfjakob/gocryptfs/issues/92 ).
-		//
-		// Setting SyncRead disables FUSE_CAP_ASYNC_READ. This makes the kernel
-		// do everything in-order without parallelism.
-		SyncRead: args.serialize_reads,
 	}
 
 	mOpts := &fuseOpts.MountOptions
@@ -364,9 +356,7 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 		// Make the kernel check the file permissions for us
 		mOpts.Options = append(mOpts.Options, "default_permissions")
 	}
-	if args.acl {
-		mOpts.EnableAcl = true
-	}
+
 	// fusermount from libfuse 3.x removed the "nonempty" option and exits
 	// with an error if it sees it. Only add it to the options on libfuse 2.x.
 	if args.nonempty && haveFusermount2() {
