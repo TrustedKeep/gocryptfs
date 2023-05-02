@@ -129,9 +129,18 @@ func doMount(args *argContainer) {
 
 	// We have been forked into the background, as evidenced by the set
 	// "notifypid".
+	// Do what daemons should do: https://man7.org/linux/man-pages/man7/daemon.7.html
 	if args.notifypid > 0 {
 		// Chdir to the root directory so we don't block unmounting the CWD
 		os.Chdir("/")
+		// Disconnect from the controlling terminal by creating a new session.
+		// This prevents us from getting SIGINT when the user presses Ctrl-C
+		// to exit a running script that has called gocryptfs, or SIGHUP when
+		// xfce4-terminal closes itself ( https://github.com/rfjakob/gocryptfs/issues/660 ).
+		_, err = syscall.Setsid()
+		if err != nil {
+			tlog.Warn.Printf("Setsid: %v", err)
+		}
 		// Switch to syslog
 		if !args.nosyslog {
 			// Switch all of our logs and the generic logger to syslog
@@ -142,13 +151,6 @@ func doMount(args *argContainer) {
 			tlog.SwitchLoggerToSyslog()
 			// Daemons should redirect stdin, stdout and stderr
 			redirectStdFds()
-		}
-		// Disconnect from the controlling terminal by creating a new session.
-		// This prevents us from getting SIGINT when the user presses Ctrl-C
-		// to exit a running script that has called gocryptfs.
-		_, err = syscall.Setsid()
-		if err != nil {
-			tlog.Warn.Printf("Setsid: %v", err)
 		}
 		// Send SIGUSR1 to our parent
 		sendUsr1(args.notifypid)
@@ -275,6 +277,8 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 		// Settings from the config file override command line args
 		frontendArgs.PlaintextNames = confFile.IsFeatureFlagSet(configfile.FlagPlaintextNames)
 		frontendArgs.DeterministicNames = !confFile.IsFeatureFlagSet(configfile.FlagDirIV)
+		// Things that don't have to be in frontendArgs are only in args
+		args.longnamemax = confFile.LongNameMax
 		args.raw64 = confFile.IsFeatureFlagSet(configfile.FlagRaw64)
 		args.hkdf = confFile.IsFeatureFlagSet(configfile.FlagHKDF)
 
@@ -295,8 +299,8 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 
 	// Init crypto backend
 	cCore := cryptocore.New(cryptoBackend, IVBits, keyPool, args.hkdf)
-	cEnc := contentenc.New(cCore, contentenc.DefaultBS, false)
-	nameTransform := nametransform.New(cCore.EMECipher, frontendArgs.LongNames,
+	cEnc := contentenc.New(cCore, contentenc.DefaultBS)
+	nameTransform := nametransform.New(cCore.EMECipher, frontendArgs.LongNames, args.longnamemax,
 		args.raw64, []string(args.badname), frontendArgs.DeterministicNames)
 	// Spawn fusefrontend
 	tlog.Debug.Printf("frontendArgs: %s", tlog.JSONDump(frontendArgs))
@@ -356,7 +360,6 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 		// Make the kernel check the file permissions for us
 		mOpts.Options = append(mOpts.Options, "default_permissions")
 	}
-
 	// fusermount from libfuse 3.x removed the "nonempty" option and exits
 	// with an error if it sees it. Only add it to the options on libfuse 2.x.
 	if args.nonempty && haveFusermount2() {

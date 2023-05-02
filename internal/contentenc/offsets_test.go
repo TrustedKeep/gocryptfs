@@ -12,7 +12,7 @@ import (
 func TestSizeToSize(t *testing.T) {
 	tkc.Connect("", "", true, true)
 	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true)
-	ce := New(cc, DefaultBS, false)
+	ce := New(cc, DefaultBS)
 
 	const rangeMax = 10000
 

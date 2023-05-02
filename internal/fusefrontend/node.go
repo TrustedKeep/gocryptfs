@@ -41,6 +41,10 @@ func (n *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (ch 
 	n.translateSize(dirfd, cName, &out.Attr)
 
 	rn := n.rootNode()
+	if rn.args.ForceOwner != nil {
+		out.Owner = *rn.args.ForceOwner
+	}
+
 	if rn.args.SharedStorage {
 		// If we already have a child node that matches what we found on disk*
 		// (as reflected in `ch`), return it here.
@@ -273,7 +277,13 @@ func (n *Node) Mknod(ctx context.Context, name string, mode, rdev uint32, out *f
 		errno = fs.ToErrno(err)
 		return
 	}
+
 	inode = n.newChild(ctx, st, out)
+
+	if rn.args.ForceOwner != nil {
+		out.Owner = *rn.args.ForceOwner
+	}
+
 	return inode, 0
 }
 
@@ -324,6 +334,7 @@ func (n *Node) Link(ctx context.Context, target fs.InodeEmbedder, name string, o
 		return
 	}
 	inode = n.newChild(ctx, st, out)
+	n.translateSize(dirfd, cName, &out.Attr)
 	return inode, 0
 }
 
@@ -381,23 +392,17 @@ func (n *Node) Symlink(ctx context.Context, target, name string, out *fuse.Entry
 	return inode, 0
 }
 
-// xfstests generic/013 now also exercises RENAME_EXCHANGE and RENAME_WHITEOUT,
-// uncovering lots of problems with longnames
-//
-// Reject those flags with syscall.EINVAL.
 // If we can handle the flags, this function returns 0.
 func rejectRenameFlags(flags uint32) syscall.Errno {
-	// Normal rename, we can handle that
-	if flags == 0 {
+	switch flags {
+	case 0, syscallcompat.RENAME_NOREPLACE, syscallcompat.RENAME_EXCHANGE, syscallcompat.RENAME_WHITEOUT:
 		return 0
-	}
-	// We also can handle RENAME_NOREPLACE
-	if flags == syscallcompat.RENAME_NOREPLACE {
+	case syscallcompat.RENAME_NOREPLACE | syscallcompat.RENAME_WHITEOUT:
 		return 0
+	default:
+		tlog.Warn.Printf("rejectRenameFlags: unknown flag combination 0x%x", flags)
+		return syscall.EINVAL
 	}
-	// We cannot handle RENAME_EXCHANGE and RENAME_WHITEOUT yet.
-	// Needs extra code for .name files.
-	return syscall.EINVAL
 }
 
 // Rename - FUSE call.
@@ -461,6 +466,11 @@ func (n *Node) Rename(ctx context.Context, name string, newParent fs.InodeEmbedd
 			nametransform.DeleteLongNameAt(dirfd2, cName2)
 		}
 		return fs.ToErrno(err)
+	}
+	if flags&syscallcompat.RENAME_EXCHANGE != 0 || flags&syscallcompat.RENAME_WHITEOUT != 0 {
+		// These flags mean that there is now a new file at cName and we
+		// should NOT delete its longname file.
+		return 0
 	}
 	if nametransform.IsLongContent(cName) {
 		nametransform.DeleteLongNameAt(dirfd, cName)

@@ -1,13 +1,22 @@
 #!/bin/bash
 
-if [[ -z $TMPDIR ]]; then
+set -eu
+
+VERBOSE=0
+for i in "$@" ; do
+	if [[ $i == "-v" ]] ; then
+		VERBOSE=1
+		set -x
+		break
+	fi
+done
+
+if [[ -z ${TMPDIR:-} ]]; then
 	TMPDIR=/var/tmp
 	export TMPDIR
 else
 	echo "Using TMPDIR=$TMPDIR"
 fi
-
-set -eu
 
 cd "$(dirname "$0")"
 export GO111MODULE=on
@@ -39,7 +48,10 @@ fi
 # Clean up dangling filesystems and don't exit if we found some
 unmount_leftovers || true
 
-./build-without-openssl.bash
+./build-without-openssl.bash || {
+	echo "$MYNAME: build-without-openssl.bash failed"
+	exit 1
+}
 # Don't build with openssl if we were passed "-tags without_openssl"
 if [[ "$*" != *without_openssl* ]] ; then
 	./build.bash
@@ -50,7 +62,7 @@ if ! go tool | grep vet > /dev/null ; then
 elif [[ -d vendor ]] ; then
 	echo "vendor directory exists, skipping 'go tool vet'"
 else
-	go vet "$@" ./...
+	go vet ./...
 fi
 
 if command -v shellcheck > /dev/null ; then
@@ -60,10 +72,18 @@ else
 	echo "shellcheck not installed - skipping"
 fi
 
-#            We don't want all the subprocesses
-#               holding the lock file open
-#                           vvvvv
-go test -count 1 ./... "$@" 200>&-
+EXTRA_ARGS=""
+if [[ $VERBOSE -eq 1 ]]; then
+	# Disabling parallelism disables per-package output buffering, hence enabling
+	# live streaming of result output. And seeing where things hang.
+	EXTRA_ARGS="-p 1"
+fi
+
+#                         We don't want all the subprocesses
+#                              holding the lock file open
+#                                       vvvvv
+# shellcheck disable=SC2086
+go test -count 1 $EXTRA_ARGS ./... "$@" 200>&-
 #       ^^^^^^^^
 #   Disable result caching
 
@@ -87,6 +107,14 @@ fi
 # All functions from the commit msg in https://go-review.googlesource.com/c/go/+/210639
 if find . -type f -name \*.go -print0 | xargs -0 grep -E 'syscall.(Setegid|Seteuid|Setgroups|Setgid|Setregid|Setreuid|Setresgid|Setresuid|Setuid)\(' ; then
 	echo "$MYNAME: You probably want to use unix.Setgroups and friends. See the comments in OpenatUser() for why."
+	exit 1
+fi
+
+if find . -type f -name \*.go -print0 | xargs -0 grep '\.Creat('; then
+	# MacOS does not have syscall.Creat(). Creat() is equivalent to Open(..., O_CREAT|O_WRONLY|O_TRUNC, ...),
+	# but usually you want O_EXCL instead of O_TRUNC because it is safer, so that's what we suggest
+	# instead.
+	echo "$MYNAME: Please use Open(..., O_CREAT|O_WRONLY|O_EXCL, ...) instead of Creat()! https://github.com/rfjakob/gocryptfs/issues/623"
 	exit 1
 fi
 

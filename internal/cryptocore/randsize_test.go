@@ -1,3 +1,4 @@
+//go:build go1.7
 // +build go1.7
 
 // ^^^^^^^^^^^^ we use the "sub-benchmark" feature that was added in Go 1.7
@@ -10,7 +11,7 @@ import (
 )
 
 /*
-The troughput we get from /dev/urandom / getentropy depends a lot on the used
+The throughput we get from /dev/urandom / getentropy depends a lot on the used
 block size. Results on my Pentium G630 running Linux 4.11:
 
 BenchmarkRandSize/16-2         	 3000000	       571 ns/op	  27.98 MB/s

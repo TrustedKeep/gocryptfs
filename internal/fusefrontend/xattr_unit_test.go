@@ -17,10 +17,11 @@ import (
 
 func newTestFS(args Args) *RootNode {
 	// Init crypto backend
+	//might have to add key to the start of New
 	tkc.Connect("", "", true, true)
 	cCore := cryptocore.New(cryptocore.BackendGoGCM, contentenc.DefaultIVBits, 0, true)
-	cEnc := contentenc.New(cCore, contentenc.DefaultBS, false)
-	n := nametransform.New(cCore.EMECipher, true, true, nil, false)
+	cEnc := contentenc.New(cCore, contentenc.DefaultBS)
+	n := nametransform.New(cCore.EMECipher, true, 0, true, nil, false)
 	rn := NewRootNode(args, cEnc, n)
 	oneSec := time.Second
 	options := &fs.Options{

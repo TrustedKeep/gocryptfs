@@ -123,6 +123,28 @@ and https://github.com/rfjakob/gocryptfs/issues/596 for background info.
 Use HKDF to derive separate keys for content and name encryption from
 the master key. Default true.
 
+#### -longnamemax
+
+    integer value, allowed range 62...255
+
+Hash file names that (in encrypted form) exceed this length. The default
+is 255, which aligns with the usual name length limit on Linux and
+provides best performance.
+
+However, online storage may impose lower limits on file name and/or
+path length. In this case, setting -longnamemax to a lower value
+can be helpful.
+
+The lower the value, the more extra `.name` files
+must be created, which slows down directory listings.
+
+Values below 62 are not allowed as then the hashed name
+would be longer than the original name.
+
+Example:
+
+    -longnamemax 100
+
 #### -plaintextnames
 Do not encrypt file names and symlink targets.
 
@@ -135,14 +157,6 @@ mounted using gocryptfs v1.2 and higher. Default true.
 Reverse mode shows a read-only encrypted view of a plaintext
 directory. Implies "-aessiv".
 
-#### -scryptn int
-scrypt cost parameter expressed as scryptn=log2(N). Possible values are
-10 to 28, representing N=2^10 to N=2^28.
-
-Setting this to a lower
-value speeds up mounting and reduces its memory needs, but makes
-the password susceptible to brute-force attacks. The default is 16.
-
 #### -xchacha
 Use XChaCha20-Poly1305 file content encryption. This should be much faster
 than AES-GCM on CPUs that lack AES acceleration.
@@ -154,6 +168,10 @@ MOUNT OPTIONS
 
 Available options for mounting are listed below. Usually, you don't need any.
 Defaults are fine.
+
+#### -acl
+Enable ACL enforcement. When you want to use ACLs, you must enable this
+option.
 
 #### -allow_other
 By default, the Linux kernel prevents any other user (even root) to
@@ -256,21 +274,10 @@ of a case where this may be useful is a situation where content is stored on a
 filesystem that doesn't properly support UNIX ownership and permissions.
 
 #### -forcedecode
-Force decode of encrypted files even if the integrity check fails, instead of
-failing with an IO error. Warning messages are still printed to syslog if corrupted
-files are encountered.
-It can be useful to recover files from disks with bad sectors or other corrupted
-media. It shall not be used if the origin of corruption is unknown, specially
-if you want to run executable files.
+Obsolete and ignored on gocryptfs v2.2 and later.
 
-For corrupted media, note that you probably want to use dd_rescue(1)
-instead, which will recover all but the corrupted 4kB block.
-
-This option makes no sense in reverse mode. It requires gocryptfs to be compiled with openssl
-support and implies -openssl true. Because of this, it is not compatible with -aessiv,
-that uses built-in Go crypto.
-
-Setting this option forces the filesystem to read-only and noexec.
+See https://github.com/rfjakob/gocryptfs/commit/d023cd6c95fcbc6b5056ba1f425d2ac3df4abc5a
+for what it was and why it was dropped.
 
 #### -fsname string
 Override the filesystem name (first column in df -T). Can also be
@@ -298,8 +305,10 @@ runs as root, you can enable device files by passing the opposite mount option,
 "dev", and if you want to enable suid-binaries, pass "suid".
 "ro" (equivalent to passing the "-ro" option) and "noexec" may also be
 interesting. For a complete list see the section
-`FILESYSTEM-INDEPENDENT MOUNT OPTIONS` in mount(8). On MacOS, "local",
-"noapplexattr", "noappledouble" may be interesting.
+`FILESYSTEM-INDEPENDENT MOUNT OPTIONS` in mount(8). On MacOS, "local" enables volume-based trash
+if you have `.Trashes` folder in the root of your volume (might need to be manually created)
+note, though, that "local" is marked as "experimental" in [osxfuse](https://github.com/osxfuse/osxfuse/wiki/Mount-options#local);
+"noapplexattr", "noappledouble" may also be interesting.
 
 Note that unlike "-o", "-ko" is a regular option and must be passed BEFORE
 the directories. Example:
@@ -307,9 +316,10 @@ the directories. Example:
     gocryptfs -ko noexec /tmp/foo /tmp/bar
 
 #### -longnames
-Store names longer than 176 bytes in extra files (default true)
-This flag is useful when recovering old gocryptfs filesystems using
-"-masterkey". It is ignored (stays at the default) otherwise.
+Store names that are longer than 175 bytes in extra files (default true).
+
+This flag is only useful when recovering very old gocryptfs filesystems (gocryptfs v0.8 and earlier)
+using "-masterkey". It is ignored (stays at the default) otherwise.
 
 #### -nodev
 See `-dev, -nodev`.
@@ -463,14 +473,19 @@ to your program, use `"--"`, which is accepted by most programs:
 
 Applies to: all actions that ask for a password.
 
+BUG: In `-extpass -X`, the `-X` will be interpreted as `--X`. Please use
+`-extpass=-X` to prevent that. See **Dash duplication** in the **BUGS** section
+for details.
+
 #### -fido2 DEVICE_PATH
 Use a FIDO2 token to initialize and unlock the filesystem.
 Use "fido2-token -L" to obtain the FIDO2 token device path.
+For linux, "fido2-tools" package is needed.
 
 Applies to: all actions that ask for a password.
 
 #### -masterkey string
-Use a explicit master key specified on the command line or, if the special
+Use an explicit master key specified on the command line or, if the special
 value "stdin" is used, read the masterkey from stdin, instead of reading
 the config file and asking for the decryption password.
 
@@ -548,6 +563,45 @@ Applies to: all actions that ask for a password.
 Quiet - silence informational messages.
 
 Applies to: all actions.
+
+#### -scryptn int
+gocryptfs uses *scrypt* for hashing the password when mounting,
+which protects from brute-force attacks.
+
+`-scryptn` controls the *scrypt* cost parameter "N" expressed as scryptn=log2(N).
+Possible values are `-scryptn=10` to `-scryptn=28`, representing N=2^10 to N=2^28.
+
+Setting this to a lower
+value speeds up mounting and reduces its memory needs, but makes
+the password susceptible to brute-force attacks. The default is 16.
+
+The memory usage for *scrypt* during mounting is as follows:
+
+    scryptn     Memory Usage  
+    =======     ============
+    10          1   MiB
+    11          2 
+    12          4 
+    13          8 
+    14          16  
+    15          32  
+    16          64  
+    17          128 
+    18          256 
+    19          512 
+    20          1   GiB
+    21          2 
+    22          4 
+    23          8 
+    24          16  
+    25          32  
+    26          64  
+    27          128 
+    28          256 
+
+Applies to: `-init`, `-passwd`
+
+See also: the benchmarks in the gocryptfs source code in internal/configfile.
 
 #### -trace string
 Write execution trace to file. View the trace using "go tool trace FILE".
@@ -657,6 +711,13 @@ the `-nofail` option for details).
 
     /tmp/cipher /tmp/plain fuse./usr/local/bin/gocryptfs nofail,allow_other,passfile=/tmp/password 0 0
 
+ENVIRONMENT VARIABLES
+=====================
+
+### NO_COLOR
+
+If `NO_COLOR` is set (regardless of value), colored output is disabled (see https://no-color.org/).
+
 EXIT CODES
 ==========
 
@@ -671,6 +732,29 @@ EXIT CODES
 other: please check the error message
 
 See also: https://github.com/rfjakob/gocryptfs/blob/master/internal/exitcodes/exitcodes.go
+
+BUGS
+====
+
+### Dash duplication
+
+gocryptfs v2.1 switched to the `pflag` library for command-line parsing
+to support flags and positional arguments in any order. To stay compatible
+with single-dash long options like `-extpass`, an ugly hack was added:
+The command line is preprocessed, and all single-dash options are converted to
+double-dash.
+
+Unfortunately, this means that in
+
+    gocryptfs -extpass myapp -extpass -X
+
+gocryptfs transforms the `-X` to `--X`, and it will call `myapp --X` as the extpass program.
+
+Please use
+
+    gocryptfs -extpass myapp -extpass=-X
+
+to work around this bug.
 
 SEE ALSO
 ========

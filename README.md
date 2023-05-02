@@ -62,7 +62,6 @@ distribution must be installed for mounting to work.
 gocryptfs is also available as a package in most distributions. Examples:
 
 * Debian, Ubuntu: `apt install gocryptfs`
-* Fedora: `dnf install gocryptfs`
 * Arch: `pacman -S gocryptfs`
 * MacPorts: `port install gocryptfs`
 
@@ -168,11 +167,13 @@ Example for a CPU with AES-NI:
 
 ```
 $ ./gocryptfs -speed
-gocryptfs v2.0; go-fuse v2.1.1-0.20210508151621-62c5aa1919a7; 2021-06-06 go1.16.5 linux/amd64
-AES-GCM-256-OpenSSL    536.63 MB/s
-AES-GCM-256-Go         831.84 MB/s  (selected in auto mode)
-AES-SIV-512-Go         155.85 MB/s
-XChaCha20-Poly1305-Go  700.02 MB/s  (benchmark only, not selectable yet)
+gocryptfs v2.2.0-beta1-5-g52b0444-dirty; go-fuse v2.1.1-0.20210825171523-3ab5d95a30ae; 2021-09-14 go1.17.1 linux/amd64
+cpu: Intel(R) Core(TM) i5-3470 CPU @ 3.20GHz; with AES acceleration
+AES-GCM-256-OpenSSL              862.79 MB/s
+AES-GCM-256-Go                   997.71 MB/s    (selected in auto mode)
+AES-SIV-512-Go                   159.58 MB/s
+XChaCha20-Poly1305-OpenSSL   729.65 MB/s
+XChaCha20-Poly1305-Go            843.97 MB/s    (selected in auto mode)
 ```
 
 You can run `./benchmark.bash` to run gocryptfs' canonical set of
@@ -194,23 +195,67 @@ RM:    2,367
 Changelog
 ---------
 
-v2.2, IN PROGRESS
-* `-deterministic-names`: new option for `-init`, both for reverse and forward mode.
+#### v2.3.1, 2023-03-04
+* Optimize NFS streaming write performance ([#712](https://github.com/rfjakob/gocryptfs/issues/712),
+  [commit](https://github.com/rfjakob/gocryptfs/commit/8f3ec5dcaa6eb18d11746675190a7aaceb422764)).
+  You should see about a 4x performance increase.
+* Use `debug.ReadBuildInfo()` to provide some
+  version information even when not built with `build.bash` ([#701](https://github.com/rfjakob/gocryptfs/pull/701)) .
+* Fix bug that caused the `logger` process to be killed when started from `xfce4-terminal`,
+  and that terminal window was closed ([#660](https://github.com/rfjakob/gocryptfs/issues/660),
+  [commit](https://github.com/rfjakob/gocryptfs/commit/ff32e9979130e6237b0d97ef88304fa79ce61b06)).
+* MacOS: Fix reverse mount failing with `read-only file system` ([#690](https://github.com/rfjakob/gocryptfs/pull/690))
+* Make gocryptfs compile on riscv64 by switching from [jacobsa/crypto](https://github.com/jacobsa/crypto)
+  to maintained fork [aperturerobotics/jacobsa-crypto](https://github.com/aperturerobotics/jacobsa-crypto)
+  ([#674](https://github.com/rfjakob/gocryptfs/pull/674))
+
+#### v2.3.0, 2022-10-21
+* Identical to v2.3, just tagged once more in full semver x.y.z format. This make Go's fetching logic happy,
+  which ignores v2.3 (without the third digit) completely.
+  Fixes [#694](https://github.com/rfjakob/gocryptfs/issues/694), [#688](https://github.com/rfjakob/gocryptfs/issues/688).
+
+#### v2.3, 2022-08-28
+* Add **`-longnamemax`** flag to `-init` ([#499](https://github.com/rfjakob/gocryptfs/issues/499)).
+  Can be used to work around file or path length restrictions on online storage.
+  See the [man page](https://github.com/rfjakob/gocryptfs/blob/master/Documentation/MANPAGE.md#-longnamemax)
+  for details.
+* Support for [`NO_COLOR`](https://no-color.org/) env variable ([#617](https://github.com/rfjakob/gocryptfs/issues/617))
+* Fix `-force_owner` not not affecting socket files ([#629](https://github.com/rfjakob/gocryptfs/issues/629)
+* MacOS: fix inaccessible `gocryptfs.conf` in reverse mode ([commit](https://github.com/rfjakob/gocryptfs/commit/c9e4e4f74150d2734496e90a4c442a17b79f52c1))
+* Raise ctlsock operation timeout from 1 to 10 seconds ([#683](https://github.com/rfjakob/gocryptfs/issues/683))
+
+#### v2.2.1, 2021-10-20
+* Fix `-force_owner` only taking effect after 2 seconds ([#609](https://github.com/rfjakob/gocryptfs/issues/609)).
+  This was a regression introduced in v2.0.
+* MacOS: Fix build.bash failure with error `date: illegal option -- -` when `SOURCE_DATE_EPOCH` is set
+  ([#570](https://github.com/rfjakob/gocryptfs/issues/570))
+* `-init`: suggest xchacha on CPUs without AES acceleration ([commit](https://github.com/rfjakob/gocryptfs/commit/e8e35982845f36e714b915350eaf6855487aa0e8))
+* `-info`: add contentEncryption to output
+
+#### v2.2.0, 2021-09-25
+* **`-deterministic-names`: new option for `-init`**, both for reverse and forward mode.
    Disables file name randomisation & `gocryptfs.diriv` files
    ([#151](https://github.com/rfjakob/gocryptfs/issues/151), [#402](https://github.com/rfjakob/gocryptfs/issues/402), [#592](https://github.com/rfjakob/gocryptfs/pull/592))
    * New feature flag! You need gocryptfs v2.2 or higher to mount a filesystem that uses this flag.
-* `-xchacha`: new option for `-init` (forward mode only). Selects XChaCha20-Poly1305 for content encryption.
-  Gives [better performance on embedded CPUs](https://gist.github.com/rfjakob/b28383f4c84263ac7c5388ccc262e38b)
-  ([#452](https://github.com/rfjakob/gocryptfs/issues/452))
+* **`-xchacha`: new option for `-init`** (forward mode only). Selects XChaCha20-Poly1305 for content encryption.
+  Gives *much* better performance on CPUs without AES acceleration
+  ([#452](https://github.com/rfjakob/gocryptfs/issues/452)).
    * New feature flag! You need gocryptfs v2.2 or higher to mount a filesystem that uses this flag.
    * Test with `gocryptfs -speed` what is fastest for your CPU, or read [here](https://github.com/rfjakob/gocryptfs/issues/452#issuecomment-908559414)
+* Rewrite [OpenSSL backend](https://pkg.go.dev/github.com/rfjakob/gocryptfs/v2/internal/stupidgcm)
+  for better performance on AES-GCM-256-OpenSSL and XChaCha20-Poly1305-OpenSSL
 * `-serialize_reads`: get rid of delay logic by taking advantage of the kernel flag
   `FUSE_CAP_ASYNC_READ`
   ([go-fuse commit](https://github.com/hanwen/go-fuse/commit/15a8bb029a4e1a51e10043c370970596b1fbb737),
   [gocryptfs commit](https://github.com/rfjakob/gocryptfs/commit/a99051b32452c9a781efe248c0014b65d4abddf7))
 * Make obsolete `-devrandom` flag a no-op ([commit](https://github.com/rfjakob/gocryptfs/commit/61ef6b00a675456ee05d40f1ce44d693bc4be350))
+* Make `-forcedecode` flag a no-op ([commit](https://github.com/rfjakob/gocryptfs/commit/d023cd6c95fcbc6b5056ba1f425d2ac3df4abc5a))
+* Fix reverse mode sometimes remapping most inode numbers to >281474976710656 ([commit](https://github.com/rfjakob/gocryptfs/commit/c9b825c58a9f996379108926754513bca03bb306))
+* This version will be called v2.2.0 (instead of v2.2) to comply with
+  the [Go module versioning](https://golang.org/doc/modules/version-numbers) convention.
+  Later releases will also follow the convention.
 
-v2.1, 2021-08-18
+#### v2.1, 2021-08-18
 * `-fido2`: do not request PIN on `gocryptfs -init` fixing `FIDO_ERR_UNSUPPORTED_OPTION` with YubiKey
   ([#571](https://github.com/rfjakob/gocryptfs/issues/571))
 * `-sharedstorage`: present stable inode numbers, fixing getcwd failures
@@ -229,19 +274,19 @@ v2.1, 2021-08-18
 * Drop support for Go 1.11 & Go 1.12 ([commit](https://github.com/rfjakob/gocryptfs/commit/a5f88e86d186cdbc67e1efabd7aacf389775e027))
   * You must have Go 1.13 or newer now
 
-v2.0.1, 2021-06-07
+#### v2.0.1, 2021-06-07
 * Fix symlink creation reporting the wrong size, causing git to report it as modified
   ([#574](https://github.com/rfjakob/gocryptfs/issues/574))
 
-v2.0, 2021-06-05
+#### v2.0, 2021-06-05
 * Fix a few [issues discovered by xfstests](https://github.com/rfjakob/fuse-xfstests/wiki/results_2021-05-19)
   * Biggest change: rewrite SEEK_HOLE / SEEK_DATA logic (now emulates 4k alignment)
 
-v2.0-beta4, 2021-05-15
+#### v2.0-beta4, 2021-05-15
 * **Make ACLs *actually* work (pass `-acl` to enable)** ([#536](https://github.com/rfjakob/gocryptfs/issues/536))
 * Blocklist `RENAME_EXCHANGE` and `RENAME_WHITEOUT` (broken as discovered by [fuse-xfstest/gocryptfs-2019-12](https://github.com/rfjakob/fuse-xfstests/tree/gocryptfs-2019-12))
 
-v2.0-beta3, 2021-04-24
+#### v2.0-beta3, 2021-04-24
 * MANPAGE: Split options into sections acc. to where they apply ([#517](https://github.com/rfjakob/gocryptfs/issues/517))
 * `-idle`: count cwd inside the mount as busy ([#533](https://github.com/rfjakob/gocryptfs/issues/533))
 * Make `gocryptfs.diriv` and `gocryptfs.xxx.name` files world-readable to make encrypted backups easier
@@ -260,11 +305,11 @@ v2.0-beta3, 2021-04-24
 * Add directory fd caching for 2x - 3x speed boost in small file ops compared to v2.0-beta2
   ([performance numbers](https://github.com/rfjakob/gocryptfs/blob/5cb1e55714aa92a848c0fb5fc3fa7b91625210fe/Documentation/performance.txt#L73))
 
-v2.0-beta2, 2020-11-14
+#### v2.0-beta2, 2020-11-14
 * Improve [performance](Documentation/performance.txt#L69)
 * Fix [GETATTR panic](https://github.com/rfjakob/gocryptfs/issues/519#issuecomment-718790790) in reverse mode
 
-v2.0-beta1, 2020-10-15
+#### v2.0-beta1, 2020-10-15
 * **Switch to the improved go-fuse [v2 API](https://pkg.go.dev/github.com/hanwen/go-fuse/v2@v2.0.3/fs)**
   * This is a big change, a lot of code has been reorganized or rewritten
     to fit the v2 API model.
@@ -283,7 +328,7 @@ v2.0-beta1, 2020-10-15
   ([go-fuse #276](https://github.com/hanwen/go-fuse/issues/276),
   [gocryptfs commit ec74d1d](https://github.com/rfjakob/gocryptfs/commit/ec74d1d2f4217a9a337d1db9902f32ae2aecaf33))
 
-v1.8.0, 2020-05-09
+#### v1.8.0, 2020-05-09
 * Enable ACL support ([#453](https://github.com/rfjakob/gocryptfs/issues/453))
   * **Warning 2021-02-07**: This feature is incomplete! Do not use ACLs before gocryptfs v2.0 final!
     Reading and writing ACLs works, but they are not enforced or inherited ([#542](https://github.com/rfjakob/gocryptfs/issues/542))
@@ -308,7 +353,7 @@ v1.8.0, 2020-05-09
   * Has been disabled since v1.7 due to issues a third-party module.
   * Please use FIDO2 instead (gocryptfs v2.0)
 
-v1.7.1, 2019-10-06
+#### v1.7.1, 2019-10-06
 * Support wild cards in reverse mode via `--exclude-wildcard`
   ([#367](https://github.com/rfjakob/gocryptfs/pull/367)). Thanks @ekalin!
 * Create `gocryptfs.diriv` files with 0440 permissions to make it easier to
@@ -329,7 +374,7 @@ v1.7.1, 2019-10-06
 * tests: use /var/tmp instead of /tmp by default
   ([commit 8c4429](https://github.com/rfjakob/gocryptfs/commit/8c4429408716d9890a98a48c246d616dbfea7e31))
 
-v1.7, 2019-03-17
+#### v1.7, 2019-03-17
 * **Fix possible symlink race attacks in forward mode** when using allow_other + plaintextnames
   * If you use *both* `-allow_other` *and* `-plaintextnames`, you should upgrade.
     Malicious users could trick gocryptfs into modifying files outside of `CIPHERDIR`,
@@ -362,11 +407,11 @@ v1.7, 2019-03-17
   * Trezor support has been broken since Sept 2018 due to issues
     in a third-party module ([#261](https://github.com/rfjakob/gocryptfs/issues/261))
 
-v1.6.1, 2018-12-12
+#### v1.6.1, 2018-12-12
 * Fix "Operation not supported" chmod errors on Go 1.11
   ([#271](https://github.com/rfjakob/gocryptfs/issues/271))
 
-v1.6, 2018-08-18
+#### v1.6, 2018-08-18
 * **Add `-e` / `-exclude` option** for reverse mode
   ([#235](https://github.com/rfjakob/gocryptfs/issues/235),
   [commit](https://github.com/rfjakob/gocryptfs/commit/ec2fdc19cf9358ae7ba09c528a5807b6b0760f9b))
@@ -380,7 +425,7 @@ v1.6, 2018-08-18
 * Fall back to buffered IO even when passed `O_DIRECT`
   ([commit](https://github.com/rfjakob/gocryptfs/commit/893e41149ed353f355047003b89eeff456990e76))
 
-v1.5, 2018-06-12
+#### v1.5, 2018-06-12
 * **Support extended attributes (xattr)** in forward mode
   ([#217](https://github.com/rfjakob/gocryptfs/issues/217)). Older gocryptfs versions
   will ignore the extended attributes.
@@ -400,7 +445,7 @@ v1.5, 2018-06-12
 * Stop printing the help text on a "flag provided but not defined"
   error ([commit](https://github.com/rfjakob/gocryptfs/commit/5ad26495fc86527bbfe75ac6b46528d49a373676))
 
-v1.4.4, 2018-03-18
+#### v1.4.4, 2018-03-18
 * Overwrite secrets in memory with zeros as soon as possible
   ([#211](https://github.com/rfjakob/gocryptfs/issues/211))
 * Fix Getdents problems on i386 and mips64le
@@ -413,7 +458,7 @@ v1.4.4, 2018-03-18
   [commit](https://github.com/hanwen/go-fuse/commit/a9ddcb8a4b609500fc59c89ccc9ee05f00a5fefd))
 * Fix various test issues on MacOS
 
-v1.4.3, 2018-01-21
+#### v1.4.3, 2018-01-21
 * **Fix several symlink race attacks** in connection with reverse mode
   and allow_other. Thanks to @slackner for reporting and helping to fix
   the issues:
@@ -431,7 +476,7 @@ v1.4.3, 2018-01-21
 * MacOS: let OSXFuse create the mountpoint if it does not exist
   ([issue #194](https://github.com/rfjakob/gocryptfs/issues/194))
 
-v1.4.2, 2017-11-01
+#### v1.4.2, 2017-11-01
 * Add `Gopkg.toml` file for `dep` vendoring and reproducible builds
   ([issue #142](https://github.com/rfjakob/gocryptfs/issues/142))
 * MacOS: deal with `.DS_Store` files inside CIPHERDIR
@@ -444,7 +489,7 @@ v1.4.2, 2017-11-01
 * Fix a startup hang when `$PATH` contains the mountpoint
   ([issue #146](https://github.com/rfjakob/gocryptfs/issues/146))
 
-v1.4.1, 2017-08-21
+#### v1.4.1, 2017-08-21
 * **Use memory pools for buffer handling** (
   [3c6fe98](https://github.com/rfjakob/gocryptfs/commit/3c6fe98),
   [b2a23e9](https://github.com/rfjakob/gocryptfs/commit/b2a23e9),
@@ -468,7 +513,7 @@ v1.4.1, 2017-08-21
 * Enable writing to write-only files
   ([issue #125](https://github.com/rfjakob/gocryptfs/issues/125))
 
-v1.4, 2017-06-20
+#### v1.4, 2017-06-20
 * **Switch to static binary releases**
   * From gocryptfs v1.4, I will only release statically-built binaries.
     These support all Linux distributions but cannot use OpenSSL.
@@ -493,7 +538,7 @@ v1.4, 2017-06-20
   ([commit 80516ed](https://github.com/rfjakob/gocryptfs/commit/80516ed3351477793eec882508969b6b29b69b0a))
 * Add `-info` option to pretty-print infos about a filesystem.
 
-v1.3, 2017-04-29
+#### v1.3, 2017-04-29
 * **Use HKDF to derive separate keys for GCM and EME**
   * New feature flag: `HKDF` (enabled by default)
   * This is a forwards-compatible change. gocryptfs v1.3 can mount
@@ -516,14 +561,14 @@ v1.3, 2017-04-29
     that were compiled without Large File Support.
 * Passing "--" now also blocks "-o" parsing
 
-v1.2.1, 2017-02-26
+#### v1.2.1, 2017-02-26
 * Add an integrated speed test, `gocryptfs -speed`
 * Limit password size to 1000 bytes and reject trailing garbage after the newline
 * Make the test suite work on [Mac OS X](https://github.com/rfjakob/gocryptfs/issues/15)
 * Handle additional corner cases in `-ctlsock` path sanitization
 * Use dedicated exit code 12 on "password incorrect"
 
-v1.2, 2016-12-04
+#### v1.2, 2016-12-04
 * Add a control socket interface. Allows to encrypt and decrypt filenames.
   For details see [backintime#644](https://github.com/bit-team/backintime/issues/644#issuecomment-259835183).
   * New command-line option: `-ctlsock`
@@ -542,18 +587,18 @@ v1.2, 2016-12-04
 * Preserve owner for symlinks an device files (fixes bug [#64](https://github.com/rfjakob/gocryptfs/issues/64))
 * Include rendered man page `gocryptfs.1` in the release tarball
 
-v1.1.1, 2016-10-30
+#### v1.1.1, 2016-10-30
 * Fix a panic on setting file timestamps ([go-fuse#131](https://github.com/hanwen/go-fuse/pull/131))
 * Work around an issue in tmpfs that caused a panic in xfstests generic/075
   ([gocryptfs#56](https://github.com/rfjakob/gocryptfs/issues/56))
 * Optimize NFS streaming writes
   ([commit](https://github.com/rfjakob/gocryptfs/commit/a08d55f42d5b11e265a8617bee16babceebfd026))
 
-v1.1, 2016-10-19
+#### v1.1, 2016-10-19
 * **Add reverse mode ([#19](https://github.com/rfjakob/gocryptfs/issues/19))**
   * AES-SIV (RFC5297) encryption to implement deterministic encryption
     securely. Uses the excellent
-    [jacobsa/crypto](https://github.com/jacobsa/crypto) library.
+    [jacobsa/crypto](https://github.com/aperturerobotics/jacobsa-crypto) library.
     The corresponding feature flag is called `AESSIV`.
   * New command-line options: `-reverse`, `-aessiv`
   * Filesystems using reverse mode can only be mounted with gocryptfs v1.1
@@ -575,7 +620,7 @@ v1.1, 2016-10-19
 * Enable changing the password when you only know the master key
   ([#28](https://github.com/rfjakob/gocryptfs/issues/28))
 
-v1.0, 2016-07-17
+#### v1.0, 2016-07-17
 * Deprecate very old filesystems, stage 3/3
   * Filesystems created by v0.6 can no longer be mounted
   * Drop command-line options `-gcmiv128`, `-emenames`, `-diriv`. These
@@ -589,7 +634,7 @@ v1.0, 2016-07-17
 * Experimental Mac OS X support. See
   [ticket #15](https://github.com/rfjakob/gocryptfs/issues/15) for details.
 
-v0.12, 2016-06-19
+#### v0.12, 2016-06-19
 * Deprecate very old filesystems, stage 2/3
   * Filesystems created by v0.6 and older can only be mounted read-only
   * A [message](https://github.com/rfjakob/gocryptfs/blob/v0.12/internal/configfile/config_file.go#L120)
@@ -598,7 +643,7 @@ v0.12, 2016-06-19
   * Mounts the filesystem read-only
 * Accept password from stdin as well ([ticket #30](https://github.com/rfjakob/gocryptfs/issues/30))
 
-v0.11, 2016-06-10
+#### v0.11, 2016-06-10
 * Deprecate very old filesystems, stage 1/3
   * Filesystems created by v0.6 and older can still be mounted but a
     [warning](https://github.com/rfjakob/gocryptfs/blob/v0.11/internal/configfile/config_file.go#L120)
@@ -610,7 +655,7 @@ v0.11, 2016-06-10
 * Build release binaries with Go 1.6.2
   * Big speedup for CPUs with AES-NI, see [ticket #23](https://github.com/rfjakob/gocryptfs/issues/23)
 
-v0.10, 2016-05-30
+#### v0.10, 2016-05-30
 * **Replace `spacemonkeygo/openssl` with `stupidgcm`**
   * gocryptfs now has its own thin wrapper to OpenSSL's GCM implementation
     called `stupidgcm`.
@@ -630,7 +675,7 @@ v0.10, 2016-05-30
 * Fix a fsstress [failure](https://github.com/hanwen/go-fuse/issues/106)
   in the go-fuse library.
 
-v0.9, 2016-04-10
+#### v0.9, 2016-04-10
 * **Long file name support**
   * gocryptfs now supports file names up to 255 characters.
   * This is a forwards-compatible change. gocryptfs v0.9 can mount filesystems
@@ -643,25 +688,25 @@ v0.9, 2016-04-10
   * `-d`: Alias for `-debug`
   * `-q`: Alias for `-quiet`
 
-v0.8, 2016-01-23
+#### v0.8, 2016-01-23
 * Redirect output to syslog when running in the background
 * New command-line option:
   * `-memprofile`: Write a memory allocation debugging profile the specified
     file
 
-v0.7.2, 2016-01-19
+#### v0.7.2, 2016-01-19
 * **Fix performance issue in small file creation**
   * This brings performance on-par with EncFS paranoia mode, with streaming writes
     significantly faster
   * The actual [fix](https://github.com/hanwen/go-fuse/commit/c4b6b7949716d13eec856baffc7b7941ae21778c)
     is in the go-fuse library. There are no code changes in gocryptfs.
 
-v0.7.1, 2016-01-09
+#### v0.7.1, 2016-01-09
 * Make the `build.bash` script compatible with Go 1.3
 * Disable fallocate on OSX (system call not available)
 * Introduce pre-built binaries for Fedora 23 and Debian 8
 
-v0.7, 2015-12-20
+#### v0.7, 2015-12-20
 * **Extend GCM IV size to 128 bit from Go's default of 96 bit**
   * This pushes back the birthday bound to make IV collisions virtually
     impossible
@@ -670,7 +715,7 @@ v0.7, 2015-12-20
 * New command-line option:
   * `-gcmiv128`: Use 128-bit GCM IVs (default true)
 
-v0.6, 2015-12-08
+#### v0.6, 2015-12-08
 * **Wide-block filename encryption using EME + DirIV**
   * EME (ECB-Mix-ECB) provides even better security than CBC as it fixes
     the prefix leak. The used Go EME implementation is
@@ -681,11 +726,11 @@ v0.6, 2015-12-08
 * New command-line option:
   * `-emenames`: Enable EME filename encryption (default true)
 
-v0.5.1, 2015-12-06
+#### v0.5.1, 2015-12-06
 * Fix a rename regression caused by DirIV and add test case
 * Use fallocate to guard against out-of-space errors
 
-v0.5, 2015-12-04
+#### v0.5, 2015-12-04
 * **Stronger filename encryption: DirIV**
   * Each directory gets a random 128 bit file name IV on creation,
     stored in `gocryptfs.diriv`
@@ -701,7 +746,7 @@ v0.5, 2015-12-04
     can be used for faster mounting at the cost of lower brute-force
     resistance. It was mainly added to speed up the automated tests.
 
-v0.4, 2015-11-15
+#### v0.4, 2015-11-15
 * New command-line options:
   * `-plaintextnames`: disables filename encryption, added on user request
   * `-extpass`: calls an external program for prompting for the password
@@ -712,15 +757,15 @@ v0.4, 2015-11-15
     format changes. The first user is `-plaintextnames`.
 * On-disk format 2
 
-v0.3, 2015-11-01
+#### v0.3, 2015-11-01
 * **Add a random 128 bit file header to authenticate file->block ownership**
   * This is an on-disk-format change
 * On-disk format 1
 
-v0.2, 2015-10-11
+#### v0.2, 2015-10-11
 * Replace bash daemonization wrapper with native Go implementation
 * Better user feedback on mount failures
 
-v0.1, 2015-10-07
+#### v0.1, 2015-10-07
 * First release
 * On-disk format 0

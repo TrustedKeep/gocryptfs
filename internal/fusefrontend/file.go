@@ -207,8 +207,8 @@ func (f *File) doRead(dst []byte, off uint64, length uint64) ([]byte, syscall.Er
 	plaintext, err := f.contentEnc.DecryptBlocks(ciphertext, firstBlockNo, fileID)
 	f.rootNode.contentEnc.CReqPool.Put(ciphertext)
 	if err != nil {
-		curruptBlockNo := firstBlockNo + f.contentEnc.PlainOffToBlockNo(uint64(len(plaintext)))
-		tlog.Warn.Printf("doRead %d: corrupt block #%d: %v", f.qIno.Ino, curruptBlockNo, err)
+		corruptBlockNo := firstBlockNo + f.contentEnc.PlainOffToBlockNo(uint64(len(plaintext)))
+		tlog.Warn.Printf("doRead %d: corrupt block #%d: %v", f.qIno.Ino, corruptBlockNo, err)
 		return nil, syscall.EIO
 	}
 
@@ -273,6 +273,10 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 		if err == io.EOF {
 			fileID, err = f.createHeader()
 			fileWasEmpty = true
+		} else if err != nil {
+			// Other errors mean readFileID() found a corrupt header
+			tlog.Warn.Printf("doWrite %d: corrupt header: %v", f.qIno.Ino, err)
+			return 0, syscall.EIO
 		}
 		if err != nil {
 			return 0, fs.ToErrno(err)
@@ -380,7 +384,7 @@ func (f *File) Write(ctx context.Context, data []byte, off int64) (uint32, sysca
 		}
 	}
 	n, errno := f.doWrite(data, off)
-	if errno != 0 {
+	if errno == 0 {
 		f.lastOpCount = openfiletable.WriteOpCount()
 		f.lastWrittenOffset = off + int64(len(data)) - 1
 	}

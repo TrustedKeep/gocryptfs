@@ -67,10 +67,10 @@ func doInit() {
 
 // ResetTmpDir deletes TmpDir, create new dir tree:
 //
-// TmpDir
-// |-- DefaultPlainDir
-// *-- DefaultCipherDir
-//     *-- gocryptfs.diriv
+//	TmpDir
+//	|-- DefaultPlainDir
+//	*-- DefaultCipherDir
+//	    *-- gocryptfs.diriv
 func ResetTmpDir(createDirIV bool) {
 	// Try to unmount and delete everything
 	entries, err := ioutil.ReadDir(TmpDir)

@@ -21,17 +21,24 @@ import (
 const adLen = 24
 
 // gocryptfs uses fixed-size 4 kiB blocks
-const blockSize = 4096
+const gocryptfsBlockSize = 4096
 
 // Run - run the speed the test and print the results.
 func Run() {
+	cpu := cpuModelName()
+	if cpu == "" {
+		cpu = "unknown"
+	}
+	aes := "; no AES acceleration"
+	fmt.Printf("cpu: %s%s\n", cpu, aes)
+
 	bTable := []struct {
 		name      string
 		f         func(*testing.B)
 		preferred bool
 	}{
-		{name: cryptocore.BackendGoGCM.Name, f: bGoGCM, preferred: true},
-		{name: cryptocore.BackendXChaCha20Poly1305.Name, f: bXchacha20poly1305, preferred: false},
+		{name: cryptocore.BackendGoGCM.Algo, f: bGoGCM, preferred: true},
+		{name: cryptocore.BackendXChaCha20Poly1305.Algo, f: bXchacha20poly1305, preferred: false},
 	}
 	for _, b := range bTable {
 		fmt.Printf("%-26s\t", b.name)
@@ -44,7 +51,7 @@ func Run() {
 		if b.preferred {
 			fmt.Printf("\t(selected in auto mode)\n")
 		} else {
-			fmt.Printf("\t\n")
+			fmt.Printf("\n")
 		}
 	}
 }
@@ -68,6 +75,11 @@ func randBytes(n int) []byte {
 
 // bEncrypt benchmarks the encryption speed of cipher "c"
 func bEncrypt(b *testing.B, c cipher.AEAD) {
+	bEncryptBlockSize(b, c, gocryptfsBlockSize)
+}
+
+// bEncryptBlockSize benchmarks the encryption speed of cipher "c" at block size "blockSize"
+func bEncryptBlockSize(b *testing.B, c cipher.AEAD, blockSize int) {
 	authData := randBytes(adLen)
 	iv := randBytes(c.NonceSize())
 	in := make([]byte, blockSize)
@@ -82,13 +94,12 @@ func bEncrypt(b *testing.B, c cipher.AEAD) {
 		// Encrypt and append to nonce
 		c.Seal(dst, iv, in, authData)
 	}
-
 }
 
 func bDecrypt(b *testing.B, c cipher.AEAD) {
 	authData := randBytes(adLen)
 	iv := randBytes(c.NonceSize())
-	plain := randBytes(blockSize)
+	plain := randBytes(gocryptfsBlockSize)
 	ciphertext := c.Seal(iv, iv, plain, authData)
 
 	b.SetBytes(int64(len(plain)))
@@ -106,6 +117,10 @@ func bDecrypt(b *testing.B, c cipher.AEAD) {
 
 // bGoGCM benchmarks Go stdlib GCM
 func bGoGCM(b *testing.B) {
+	bGoGCMBlockSize(b, gocryptfsBlockSize)
+}
+
+func bGoGCMBlockSize(b *testing.B, blockSize int) {
 	gAES, err := aes.NewCipher(randBytes(32))
 	if err != nil {
 		b.Fatal(err)
@@ -114,7 +129,7 @@ func bGoGCM(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	bEncrypt(b, gGCM)
+	bEncryptBlockSize(b, gGCM, blockSize)
 }
 
 // bXchacha20poly1305 benchmarks XChaCha20 from golang.org/x/crypto/chacha20poly1305

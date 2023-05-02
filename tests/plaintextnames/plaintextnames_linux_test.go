@@ -89,10 +89,10 @@ func TestFiltered(t *testing.T) {
 // Only works on filesystems that recycle inode numbers (ext4 does),
 // and then the test causes a hang with these messages:
 //
-//		go-fuse: blocked for 5 seconds waiting for FORGET on i4329366
-//		go-fuse: blocked for 11 seconds waiting for FORGET on i4329366
-//		go-fuse: blocked for 17 seconds waiting for FORGET on i4329366
-//		[...]
+//	go-fuse: blocked for 5 seconds waiting for FORGET on i4329366
+//	go-fuse: blocked for 11 seconds waiting for FORGET on i4329366
+//	go-fuse: blocked for 17 seconds waiting for FORGET on i4329366
+//	[...]
 //
 // The test runs with -plaintextnames because that makes it easier to manipulate
 // cipherdir directly.
@@ -113,7 +113,7 @@ func TestInoReuseEvil(t *testing.T) {
 		}
 		// create a new file that will likely get the same inode number
 		pPath2 := pPath + "2"
-		fd, err := syscall.Creat(pPath2, 0600)
+		fd, err := syscall.Open(pPath2, syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC, 0600)
 		if err != nil {
 			t.Fatal(err)
 		}

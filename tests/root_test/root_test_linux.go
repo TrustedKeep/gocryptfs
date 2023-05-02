@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 // Package root_test contains tests that need root
 // permissions to run
 package root_test
@@ -120,7 +123,7 @@ func writeTillFull(t *testing.T, path string) (int, syscall.Errno) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	fd, err := syscall.Creat(path, 0600)
+	fd, err := syscall.Open(path, syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC, 0600)
 	if err != nil {
 		return 0, err.(syscall.Errno)
 	}
@@ -177,7 +180,13 @@ func TestDiskFull(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer syscall.Unlink(ext4img)
-	defer syscall.Unmount(ext4mnt, 0)
+	defer func() {
+		const MNT_DETACH = 2
+		err := syscall.Unmount(ext4mnt, MNT_DETACH)
+		if err != nil {
+			t.Log(err)
+		}
+	}()
 
 	// gocryptfs -init
 	cipherdir := ext4mnt + "/a"
@@ -359,4 +368,35 @@ func TestBtrfsQuirks(t *testing.T) {
 	if quirk != syscallcompat.QuirkBrokenFalloc {
 		t.Errorf("wrong quirk: %v", quirk)
 	}
+}
+
+func TestOverlay(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("must run as root")
+	}
+	cDir := test_helpers.InitFS(t)
+	if syscallcompat.DetectQuirks(cDir)|syscallcompat.QuirkNoUserXattr != 0 {
+		t.Logf("No user xattrs! overlay mount will likely fail.")
+	}
+	os.Chmod(cDir, 0755)
+	pDir := cDir + ".mnt"
+	test_helpers.MountOrFatal(t, cDir, pDir, "-allow_other", "-extpass=echo test")
+	defer test_helpers.UnmountPanic(pDir)
+
+	for _, d := range []string{"lower", "upper", "work", "merged"} {
+		err := os.Mkdir(pDir+"/"+d, 0700)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	ovlMnt := pDir + "/merged"
+	cmd := exec.Command("mount", "-t", "overlay", "overlay",
+		"-o", "lowerdir="+pDir+"/lower,upperdir="+pDir+"/upper,workdir="+pDir+"/work",
+		ovlMnt)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Log(string(out))
+		t.Fatal(err)
+	}
+	defer syscall.Unmount(ovlMnt, 0)
 }

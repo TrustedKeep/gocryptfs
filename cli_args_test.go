@@ -114,9 +114,10 @@ func TestConvertToDoubleDash(t *testing.T) {
 
 func TestParseCliOpts(t *testing.T) {
 	defaultArgs := argContainer{
-		longnames: true,
-		raw64:     true,
-		hkdf:      true,
+		longnames:   true,
+		longnamemax: 255,
+		raw64:       true,
+		hkdf:        true,
 	}
 
 	type testcaseContainer struct {

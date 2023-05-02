@@ -4,7 +4,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -20,35 +19,6 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/speed"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
-
-// GitVersion is the gocryptfs version according to git, set by build.bash
-var GitVersion = "[GitVersion not set - please compile using ./build.bash]"
-
-// GitVersionFuse is the go-fuse library version, set by build.bash
-var GitVersionFuse = "[GitVersionFuse not set - please compile using ./build.bash]"
-
-// BuildDate is a date string like "2017-09-06", set by build.bash
-var BuildDate = "0000-00-00"
-
-// raceDetector is set to true by race.go if we are compiled with "go build -race"
-var raceDetector bool
-
-// printVersion prints a version string like this:
-// gocryptfs v1.7-32-gcf99cfd; go-fuse v1.0.0-174-g22a9cb9; 2019-05-12 go1.12 linux/amd64
-func printVersion() {
-	var tagsSlice []string
-	tags := ""
-	if tagsSlice != nil {
-		tags = " " + strings.Join(tagsSlice, " ")
-	}
-	built := fmt.Sprintf("%s %s", BuildDate, runtime.Version())
-	if raceDetector {
-		built += " -race"
-	}
-	fmt.Printf("%s %s%s; go-fuse %s; %s %s/%s\n",
-		tlog.ProgramName, GitVersion, tags, GitVersionFuse, built,
-		runtime.GOOS, runtime.GOARCH)
-}
 
 func main() {
 	mxp := runtime.GOMAXPROCS(0)
