@@ -137,7 +137,7 @@ func concatAD(blockNo uint64, fileID []byte) (aData []byte) {
 // Corner case: A full-sized block of all-zero ciphertext bytes is translated
 // to an all-zero plaintext block, i.e. file hole passthrough.
 func (be *ContentEnc) DecryptBlock(ciphertext []byte, blockNo uint64, fileID []byte) ([]byte, error) {
-
+	//tlog.Info.Printf("Decrypting file: %v, blockNo: %d", fileID, blockNo)
 	// Empty block?
 	if len(ciphertext) == 0 {
 		return ciphertext, nil

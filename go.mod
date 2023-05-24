@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/TrustedKeep/boundary v1.1.5-0.20230501211204-50c8221201bc
-	github.com/TrustedKeep/tkutils/v2 v2.9.3
+	github.com/TrustedKeep/tkutils/v2 v2.9.4
 	github.com/google/uuid v1.3.0
 	github.com/hanwen/go-fuse/v2 v2.1.1-0.20221117175120-915cf5413cde
 	github.com/pkg/xattr v0.4.6
@@ -34,3 +34,7 @@ require (
 	google.golang.org/protobuf v1.28.1 // indirect
 	software.sslmate.com/src/go-pkcs12 v0.2.0 // indirect
 )
+
+replace github.com/TrustedKeep/boundary => /home/andrew/go/src/github.com/TrustedKeep/boundary
+
+replace github.com/TrustedKeep/tkutils/v2 => /home/andrew/go/src/github.com/TrustedKeep/tkutils
