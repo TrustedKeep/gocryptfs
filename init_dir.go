@@ -69,6 +69,7 @@ func initDir(args *argContainer) {
 			BoundaryHost:       args.boundaryHost,
 			KeyPool:            args.keyPool,
 			LongNameMax:        args.longnamemax,
+			EnvEncAlg:          args.envEncAlg,
 		})
 		if err != nil {
 			tlog.Fatal.Println(err)

@@ -18,7 +18,8 @@ var (
 )
 
 type mockConnector struct {
-	nodeID string
+	nodeID       string
+	currentKeyID string
 
 	db *bbolt.DB
 	mu sync.Mutex
@@ -71,7 +72,7 @@ func (m *mockConnector) GetEnvelopeKey(id string) (key kem.Kem, err error) {
 	return kem.UnmarshalKem(keyBytes)
 }
 
-func (m *mockConnector) CreateEnvelopeKey(ktStr string) (id string, key kem.Kem, err error) {
+func (m *mockConnector) CreateEnvelopeKey(ktStr string, name string) (id string, key kem.Kem, err error) {
 	//Create the key
 	if key, err = kem.NewKem(kem.KemTypeFromString(ktStr)); err != nil {
 		return
@@ -82,12 +83,25 @@ func (m *mockConnector) CreateEnvelopeKey(ktStr string) (id string, key kem.Kem,
 		return
 	}
 	//throw it into the db
-	id = uuid.NewString()
+	if name == "" {
+		id = uuid.NewString()
+	} else {
+		id = name
+	}
 	if err = m.dbPut([]byte(m.ekPath(id)), keyData); err != nil {
 		return
 	}
-
 	return
+}
+
+func (m *mockConnector) GetCurrentKeyID() string {
+	fmt.Printf("get m.currentKeyID: %v\n", m.currentKeyID)
+	return m.currentKeyID
+}
+
+func (m *mockConnector) SetCurrentKeyID(keyID string) {
+	m.currentKeyID = keyID
+	fmt.Printf("set m.currentKeyID: %v\n", m.currentKeyID)
 }
 
 func (m *mockConnector) dbGet(path []byte) (data []byte, err error) {

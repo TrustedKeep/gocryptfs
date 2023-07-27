@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/TrustedKeep/boundary v1.1.5-0.20230501211204-50c8221201bc
-	github.com/TrustedKeep/tkutils/v2 v2.9.4
+	github.com/TrustedKeep/tkutils/v2 v2.9.11-0.20230627165423-b27cf7afdebf
 	github.com/google/uuid v1.3.0
 	github.com/hanwen/go-fuse/v2 v2.1.1-0.20221117175120-915cf5413cde
 	github.com/pkg/xattr v0.4.6
@@ -18,7 +18,7 @@ require (
 
 require (
 	github.com/aws/aws-sdk-go v1.44.251 // indirect
-	github.com/cloudflare/circl v1.3.2 // indirect
+	github.com/cloudflare/circl v1.3.3 // indirect
 	github.com/fullsailor/pkcs7 v0.0.0-20190404230743-d7302db945fa // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect

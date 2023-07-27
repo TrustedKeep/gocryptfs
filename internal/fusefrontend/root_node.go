@@ -59,9 +59,15 @@ type RootNode struct {
 	// quirks is a bitmap that enables workaround for quirks in the filesystem
 	// backing the cipherdir
 	quirks uint64
+
+	//The things necessary for envelope encryption
+	//might end up putting these somewhere else, but not sure where yet, possibly inside contentEnc or nametransform
+	//or maybe args?
+	rootEnvKeyID   string
+	rootWrappedKey []byte
 }
 
-func NewRootNode(args Args, c *contentenc.ContentEnc, n *nametransform.NameTransform) *RootNode {
+func NewRootNode(args Args, c *contentenc.ContentEnc, n *nametransform.NameTransform, rootEnvKeyID string, rootWrappedKey []byte) *RootNode {
 	var rootDev uint64
 	var st syscall.Stat_t
 	if err := syscall.Stat(args.Cipherdir, &st); err != nil {
@@ -76,12 +82,14 @@ func NewRootNode(args Args, c *contentenc.ContentEnc, n *nametransform.NameTrans
 	}
 
 	rn := &RootNode{
-		args:          args,
-		nameTransform: n,
-		contentEnc:    c,
-		inoMap:        inomap.New(rootDev),
-		dirCache:      dirCache{ivLen: ivLen},
-		quirks:        syscallcompat.DetectQuirks(args.Cipherdir),
+		args:           args,
+		nameTransform:  n,
+		contentEnc:     c,
+		inoMap:         inomap.New(rootDev),
+		dirCache:       dirCache{ivLen: ivLen},
+		quirks:         syscallcompat.DetectQuirks(args.Cipherdir),
+		rootEnvKeyID:   rootEnvKeyID,
+		rootWrappedKey: rootWrappedKey,
 	}
 	return rn
 }
@@ -164,7 +172,7 @@ func (rn *RootNode) decryptSymlinkTarget(cData64 string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := rn.contentEnc.DecryptBlock([]byte(cData), 0, nil)
+	data, err := rn.contentEnc.DecryptBlock([]byte(cData), 0, nil, rn.rootEnvKeyID, rn.rootWrappedKey)
 	if err != nil {
 		return "", err
 	}
@@ -225,7 +233,8 @@ func (rn *RootNode) encryptSymlinkTarget(data string) (cData64 string) {
 	if data == "" {
 		return ""
 	}
-	cData := rn.contentEnc.EncryptBlock([]byte(data), 0, nil)
+
+	cData := rn.contentEnc.EncryptBlock([]byte(data), 0, nil, rn.rootEnvKeyID, rn.rootWrappedKey)
 	cData64 = rn.nameTransform.B64EncodeToString(cData)
 	return cData64
 }
@@ -238,7 +247,8 @@ func (rn *RootNode) encryptXattrValue(data []byte) (cData []byte) {
 	if len(data) == 0 {
 		return []byte{}
 	}
-	return rn.contentEnc.EncryptBlock(data, 0, nil)
+
+	return rn.contentEnc.EncryptBlock(data, 0, nil, rn.rootEnvKeyID, rn.rootWrappedKey)
 }
 
 // decryptXattrValue decrypts the xattr value "cData".
@@ -246,7 +256,7 @@ func (rn *RootNode) decryptXattrValue(cData []byte) (data []byte, err error) {
 	if len(cData) == 0 {
 		return []byte{}, nil
 	}
-	data, err1 := rn.contentEnc.DecryptBlock([]byte(cData), 0, nil)
+	data, err1 := rn.contentEnc.DecryptBlock([]byte(cData), 0, nil, rn.rootEnvKeyID, rn.rootWrappedKey)
 	if err1 == nil {
 		return data, nil
 	}
@@ -258,7 +268,7 @@ func (rn *RootNode) decryptXattrValue(cData []byte) (data []byte, err error) {
 		// Return the original decryption error: err1
 		return nil, err1
 	}
-	return rn.contentEnc.DecryptBlock([]byte(cData), 0, nil)
+	return rn.contentEnc.DecryptBlock([]byte(cData), 0, nil, rn.rootEnvKeyID, rn.rootWrappedKey)
 }
 
 // encryptXattrName transforms "user.foo" to "user.gocryptfs.a5sAd4XAa47f5as6dAf"

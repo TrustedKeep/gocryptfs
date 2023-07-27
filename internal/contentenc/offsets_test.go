@@ -5,13 +5,15 @@ import (
 	"testing"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
-	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 )
 
 // TestSizeToSize tests CipherSizeToPlainSize and PlainSizeToCipherSize
 func TestSizeToSize(t *testing.T) {
-	tkc.Connect("", "", true, true)
-	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true)
+	id, wrapped, err := createTKKeys()
+	if err != nil {
+		t.Fatalf("Couldn't set up tk: %v", err)
+	}
+	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true, id, wrapped)
 	ce := New(cc, DefaultBS)
 
 	const rangeMax = 10000

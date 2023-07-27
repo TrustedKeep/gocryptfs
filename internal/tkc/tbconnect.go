@@ -22,7 +22,9 @@ var _ KMSConnector = &tbConnector{}
 
 // tbConnector connects us to Boundary for key retrieval
 type tbConnector struct {
-	nodeID     string
+	nodeID       string
+	currentKeyID string
+
 	c          *client.Client
 	publicKey  []byte
 	privateKey *rsa.PrivateKey
@@ -91,9 +93,18 @@ func (tbc *tbConnector) GetEnvelopeKey(id string) (key kem.Kem, err error) {
 	return kem.UnmarshalKem(resp.EKBytes)
 }
 
-func (tbc *tbConnector) CreateEnvelopeKey(ktStr string) (id string, key kem.Kem, err error) {
+func (tbc *tbConnector) CreateEnvelopeKey(ktStr string, name string) (id string, key kem.Kem, err error) {
 	// create the new key
-	id = uuid.NewString()
+
+	if name == "" {
+		id = uuid.NewString()
+	} else {
+		if len(name) != EnvelopeIDLength {
+			err = fmt.Errorf("Key Name must be %d bytes long, but was %d bytes long", EnvelopeIDLength, len(name))
+			return
+		}
+		id = name
+	}
 	var resp *tcmproto.CreateEKResponse
 	if resp, err = tbc.c.Connection().CreateEK(context.Background(), &tcmproto.CreateEKRequest{
 		Path: tbc.ekPath(id),
@@ -109,6 +120,15 @@ func (tbc *tbConnector) CreateEnvelopeKey(ktStr string) (id string, key kem.Kem,
 	}
 
 	return
+}
+
+func (tbc *tbConnector) GetCurrentKeyID() string {
+	fmt.Printf("tbc.currentKeyID: %v\n", tbc.currentKeyID)
+	return tbc.currentKeyID
+}
+
+func (tbc *tbConnector) SetCurrentKeyID(keyID string) {
+	tbc.currentKeyID = keyID
 }
 
 func (tbc *tbConnector) ekPath(id string) string {

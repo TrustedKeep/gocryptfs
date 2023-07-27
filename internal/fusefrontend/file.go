@@ -14,13 +14,18 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/TrustedKeep/tkutils/v2/crypto"
+	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/pkg/xattr"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
+	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
 	"github.com/rfjakob/gocryptfs/v2/internal/inomap"
 	"github.com/rfjakob/gocryptfs/v2/internal/openfiletable"
 	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
+	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
@@ -203,8 +208,24 @@ func (f *File) doRead(dst []byte, off uint64, length uint64) ([]byte, syscall.Er
 	firstBlockNo := blocks[0].BlockNo
 	tlog.Debug.Printf("ReadAt offset=%d bytes (%d blocks), want=%d, got=%d", alignedOffset, firstBlockNo, alignedLength, n)
 
-	// Decrypt it
-	plaintext, err := f.contentEnc.DecryptBlocks(ciphertext, firstBlockNo, fileID)
+	//retreive these from the xattrs
+	var plaintext []byte
+	//envelope encrypted
+	if f.rootNode.args.Envelope {
+		var envelopeID string
+		var wrappedKey []byte
+		envelopeID, wrappedKey, err = getEnvelopeAttrs(f.fd)
+		if err != nil {
+			tlog.Warn.Printf("doRead %d: error getting xattrs for enveloping: %v", f.qIno.Ino, err)
+			return nil, syscall.EIO
+		}
+		// Decrypt it
+		plaintext, err = f.contentEnc.DecryptBlocks(ciphertext, firstBlockNo, fileID, string(envelopeID), wrappedKey)
+		//normal encrypted
+	} else {
+		// Decrypt it
+		plaintext, err = f.contentEnc.DecryptBlocks(ciphertext, firstBlockNo, fileID, "", []byte{})
+	}
 	f.rootNode.contentEnc.CReqPool.Put(ciphertext)
 	if err != nil {
 		corruptBlockNo := firstBlockNo + f.contentEnc.PlainOffToBlockNo(uint64(len(plaintext)))
@@ -266,11 +287,43 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 	// readers and writers. No need to take IDLock.
 	//
 	// If the file ID is not cached, read it from disk
+	var wrapper []byte
+	var envKeyID string
+	var err error
+	var key []byte
 	if f.fileTableEntry.ID == nil {
 		var err error
 		fileID, err := f.readFileID()
-		// Write a new file header if the file is empty
+		// Write a new file header if the file is empty // and also create a wrapped key
 		if err == io.EOF {
+			if f.rootNode.args.Envelope {
+				//create the wrapped key
+				envKeyID = tkc.Get().GetCurrentKeyID()
+
+				iKey := cryptocore.RetrieveKey(envKeyID, true)
+				envKey, ok := iKey.(kem.Kem)
+				if !ok {
+					tlog.Warn.Printf("doWrite %d: somehow got wrong type for envelope key", f.qIno.Ino)
+					return 0, syscall.EIO
+				}
+				key, wrapper, err = envKey.Wrap()
+				if err != nil {
+					tlog.Warn.Printf("doWrite %d: Could not create wrapped key for file, err: %v", f.qIno.Ino, err)
+					return 0, syscall.EIO
+				}
+				crypto.Zeroize(key)
+				//save the wrapped key
+				err = xattr.FSet(f.fd, tkc.EnvelopeIDAttrName, []byte(envKeyID))
+				if err != nil {
+					tlog.Warn.Printf("doWrite %d: error setting envelopeID: %v", f.qIno.Ino, err)
+					return 0, syscall.EIO
+				}
+				err = xattr.FSet(f.fd, tkc.WrappedKeyAttrName, wrapper)
+				if err != nil {
+					tlog.Warn.Printf("doWrite %d: error setting wrappedKey: %v", f.qIno.Ino, err)
+					return 0, syscall.EIO
+				}
+			}
 			fileID, err = f.createHeader()
 			fileWasEmpty = true
 		} else if err != nil {
@@ -283,6 +336,17 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 		}
 		f.fileTableEntry.ID = fileID
 	}
+
+	//TODO: It would be nice to also have these be in the cache with the file id
+	//get the key id and the wrapped key if we both are actually using enveloping and we didn't just create them
+	if !fileWasEmpty && f.rootNode.args.Envelope {
+		envKeyID, wrapper, err = getEnvelopeAttrs(f.fd)
+		if err != nil {
+			tlog.Warn.Printf("doWrite %d: error getting xattrs for enveloping: %v", f.qIno.Ino, err)
+			return 0, syscall.EIO
+		}
+	}
+
 	// Handle payload data
 	dataBuf := bytes.NewBuffer(data)
 	blocks := f.contentEnc.ExplodePlainRange(uint64(off), uint64(len(data)))
@@ -307,10 +371,9 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 		toEncrypt[i] = blockData
 	}
 	// Encrypt all blocks
-	ciphertext := f.contentEnc.EncryptBlocks(toEncrypt, blocks[0].BlockNo, f.fileTableEntry.ID)
+	ciphertext := f.contentEnc.EncryptBlocks(toEncrypt, blocks[0].BlockNo, f.fileTableEntry.ID, envKeyID, wrapper)
 	// Preallocate so we cannot run out of space in the middle of the write.
 	// This prevents partially written (=corrupt) blocks.
-	var err error
 	cOff := blocks[0].BlockCipherOff()
 	// f.fd.WriteAt & syscallcompat.EnospcPrealloc take int64 offsets!
 	if cOff > math.MaxInt64 {
@@ -442,4 +505,26 @@ func (f *File) Getattr(ctx context.Context, a *fuse.AttrOut) syscall.Errno {
 	}
 
 	return 0
+}
+
+//TODO: SEE if we want to return the errors for things not having length
+func getEnvelopeAttrs(f *os.File) (envelopeID string, wrappedKey []byte, err error) {
+	envelopeIDByte, err := xattr.FGet(f, tkc.EnvelopeIDAttrName)
+	if err != nil {
+		return
+	} else if len(envelopeIDByte) == 0 {
+		//err =
+		fmt.Println("unable to get envelopeID from xattrs")
+		//return
+	}
+	wrappedKey, err = xattr.FGet(f, tkc.WrappedKeyAttrName)
+	if err != nil {
+		return
+	} else if len(wrappedKey) == 0 {
+		//err =
+		fmt.Println("unable to get wrappedkey from xattrs")
+		//return
+	}
+	envelopeID = string(envelopeIDByte)
+	return
 }
