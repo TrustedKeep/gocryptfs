@@ -123,7 +123,6 @@ func (tbc *tbConnector) CreateEnvelopeKey(ktStr string, name string) (id string,
 }
 
 func (tbc *tbConnector) GetCurrentKeyID() string {
-	fmt.Printf("tbc.currentKeyID: %v\n", tbc.currentKeyID)
 	return tbc.currentKeyID
 }
 

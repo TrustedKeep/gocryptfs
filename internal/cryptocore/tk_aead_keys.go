@@ -26,17 +26,21 @@ const (
 )
 
 var (
-	keyMu sync.Mutex
-	keys  *lru.Cache
+	keyMu          sync.Mutex
+	keys           *lru.Cache
+	decryptedCache *lru.Cache
 )
 
 func init() {
-	keys = lru.NewLRUCacheWithExpire(keyCacheSize, keyExpiration, func(key string, value interface{}) {
+	zeroize := func(key string, value interface{}) {
 		_, ok := value.([]byte)
 		if ok {
 			cryptoutil.Zeroize(value.([]byte))
 		}
-	})
+	}
+
+	keys = lru.NewLRUCacheWithExpire(keyCacheSize, keyExpiration, zeroize)
+	decryptedCache = lru.NewLRUCacheWithExpire(keyCacheSize, keyExpiration, zeroize)
 }
 
 func getKey(ad []byte, keyPool int) []byte {
@@ -45,18 +49,31 @@ func getKey(ad []byte, keyPool int) []byte {
 
 	var key []byte
 	var ok bool
+	keyName := getKeyName(ad, keyPool)
+
 	//keypool -1 means using envelope encryption so we need to get the envelope key that our symmetric key was encrypted with
 	if keyPool == -1 {
-		id, wrapper, err := parseAD(ad)
+		envID, wrapper, err := parseAD(ad)
 		if err != nil {
 			tlog.Warn.Printf("Unable to parse id and wrapper out of AD: %v", err)
 			return []byte{}
 		}
 
-		tlog.Debug.Printf("Retrieving key %s", id)
+		tlog.Debug.Printf("Retrieving envKeyID: %s, decryptedKeyName: %s\n", envID, keyName)
+		//check for the key in the in the decrypted cache
+		if iDecKey, ok := decryptedCache.Get(keyName); ok {
+			key, ok = iDecKey.([]byte)
+			if !ok {
+				tlog.Warn.Printf("Unable to cast decrypted key to []byte:")
+				return []byte{}
+			}
+			return key
+		}
+
+		//do the retreival and unwrapping of the wrapped key since we don't have it already in the cache
 		var envKey kem.Kem
-		iKey := RetrieveKey(id, true)
-		envKey, ok = iKey.(kem.Kem)
+		iEnvKey := RetrieveKey(envID, true)
+		envKey, ok = iEnvKey.(kem.Kem)
 		if !ok {
 			tlog.Warn.Printf("Unable to cast envKey to kem.Kem")
 			return []byte{}
@@ -67,12 +84,12 @@ func getKey(ad []byte, keyPool int) []byte {
 			tlog.Warn.Printf("Unable to unwrap symmetric key: %v", err)
 			return []byte{}
 		}
+		decryptedCache.Add(keyName, key)
 		return key
 
 	} else {
-		id := getKeyName(ad, keyPool)
-		tlog.Debug.Printf("Retrieving key %s", id)
-		iKey := RetrieveKey(id, false)
+		tlog.Debug.Printf("Retrieving key %s", keyName)
+		iKey := RetrieveKey(keyName, false)
 		key, ok = iKey.([]byte)
 		if !ok {
 			tlog.Warn.Printf("Unable to cast key to []byte:")
@@ -83,11 +100,15 @@ func getKey(ad []byte, keyPool int) []byte {
 	}
 }
 
-// getKeyName returns the name of the key in the KMS for a given file/block.  This information
+// getKeyName returns
+// FOR keyPool>=0:
+// the name of the key in the KMS for a given file/block .  This information
 // is encoded in the additionalData parameter passed to the seal function.  Key name is in the form
 // fileID/block, where fileID is the file node and block is calculated based on the number of
 // bytes to encrypt with a single key...so, ~30Gb with 1 key means the first ~7 million blocks use the
 // same encryption key
+// FOR keyPool<0 (envelope mode):
+// the name under which the decrypted AES key will be stored in the decrypted key cache
 func getKeyName(additionalData []byte, keyPool int) string {
 	if keyPool <= 0 {
 		// from content.go/concatAD, the AD passed in contains the fileID and block# as:
@@ -95,6 +116,10 @@ func getKeyName(additionalData []byte, keyPool int) string {
 		// so, first 8 bytes are bigendian uint64 containing block ID
 		// next 16 bytes are the  first half of the file identifier
 		id := hex.EncodeToString(additionalData[lenUint64 : lenUint64+fileIDLen])
+		//for enveloping we really only care about the file id
+		if keyPool < 0 {
+			return id
+		}
 		blockNum := binary.BigEndian.Uint64(additionalData[:lenUint64])
 		blockKey := (int(blockNum) * blockSize) / bytesPerKey
 		return fmt.Sprintf("%s/%d", id, blockKey)
@@ -128,7 +153,7 @@ func parseAD(ad []byte) (envKeyID string, wrapper []byte, err error) {
 
 // retrieveKey attempts to get either the envelope key or the symmetric from the cache, or failing that, from the kms
 func RetrieveKey(id string, envelope bool) (iKey interface{}) {
-	fmt.Printf("retrieve key id: %s, envelope: %t\n", id, envelope)
+	//fmt.Printf("retrieve key id: %s, envelope: %t\n", id, envelope)
 	var ok bool
 	var err error
 
