@@ -14,15 +14,18 @@ import (
 )
 
 const (
-	// O_DIRECT means oncached I/O on Linux. No direct equivalent on MacOS and defined
+	// O_DIRECT means uncached I/O on Linux. No direct equivalent on MacOS and defined
 	// to zero there.
 	O_DIRECT = 0
 
 	// O_PATH is only defined on Linux
 	O_PATH = 0
 
-	// RENAME_NOREPLACE is only defined on Linux
-	RENAME_NOREPLACE = 0
+	// Only exists on Linux. Define here to fix build failure, even though
+	// we will never see the flags.
+	RENAME_NOREPLACE = 1
+	RENAME_EXCHANGE  = 2
+	RENAME_WHITEOUT  = 4
 
 	// KAUTH_UID_NONE and KAUTH_GID_NONE are special values to
 	// revert permissions to the process credentials.

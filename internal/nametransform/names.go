@@ -4,6 +4,7 @@ package nametransform
 import (
 	"crypto/aes"
 	"encoding/base64"
+	"math"
 	"path/filepath"
 	"syscall"
 
@@ -20,7 +21,9 @@ const (
 // NameTransform is used to transform filenames.
 type NameTransform struct {
 	emeCipher *eme.EMECipher
-	longNames bool
+	// Names longer than `longNameMax` are hashed. Set to MaxInt when
+	// longnames are disabled.
+	longNameMax int
 	// B64 = either base64.URLEncoding or base64.RawURLEncoding, depending
 	// on the Raw64 feature flag
 	B64 *base64.Encoding
@@ -30,17 +33,28 @@ type NameTransform struct {
 }
 
 // New returns a new NameTransform instance.
-func New(e *eme.EMECipher, longNames bool, raw64 bool, badname []string, deterministicNames bool) *NameTransform {
-	tlog.Debug.Printf("nametransform.New: longNames=%v, raw64=%v, badname=%q",
-		longNames, raw64, badname)
-
+//
+// If `longNames` is set, names longer than `longNameMax` are hashed to
+// `gocryptfs.longname.[sha256]`.
+// Pass `longNameMax = 0` to use the default value (255).
+func New(e *eme.EMECipher, longNames bool, longNameMax uint8, raw64 bool, badname []string, deterministicNames bool) *NameTransform {
+	tlog.Debug.Printf("nametransform.New: longNameMax=%v, raw64=%v, badname=%q",
+		longNameMax, raw64, badname)
 	b64 := base64.URLEncoding
 	if raw64 {
 		b64 = base64.RawURLEncoding
 	}
+	var effectiveLongNameMax int = math.MaxInt32
+	if longNames {
+		if longNameMax == 0 {
+			effectiveLongNameMax = NameMax
+		} else {
+			effectiveLongNameMax = int(longNameMax)
+		}
+	}
 	return &NameTransform{
 		emeCipher:          e,
-		longNames:          longNames,
+		longNameMax:        effectiveLongNameMax,
 		B64:                b64,
 		badnamePatterns:    badname,
 		deterministicNames: deterministicNames,
@@ -52,7 +66,14 @@ func New(e *eme.EMECipher, longNames bool, raw64 bool, badname []string, determi
 func (n *NameTransform) DecryptName(cipherName string, iv []byte) (string, error) {
 	res, err := n.decryptName(cipherName, iv)
 	if err != nil && n.HaveBadnamePatterns() {
-		return n.decryptBadname(cipherName, iv)
+		res, err = n.decryptBadname(cipherName, iv)
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := IsValidName(res); err != nil {
+		tlog.Warn.Printf("DecryptName %q: invalid name after decryption: %v", cipherName, err)
+		return "", syscall.EBADMSG
 	}
 	return res, err
 }
@@ -65,29 +86,28 @@ func (n *NameTransform) decryptName(cipherName string, iv []byte) (string, error
 		return "", err
 	}
 	if len(bin) == 0 {
-		tlog.Warn.Printf("DecryptName: empty input")
+		tlog.Warn.Printf("decryptName: empty input")
 		return "", syscall.EBADMSG
 	}
 	if len(bin)%aes.BlockSize != 0 {
-		tlog.Debug.Printf("DecryptName %q: decoded length %d is not a multiple of 16", cipherName, len(bin))
+		tlog.Debug.Printf("decryptName %q: decoded length %d is not a multiple of 16", cipherName, len(bin))
 		return "", syscall.EBADMSG
 	}
 	bin = n.emeCipher.Decrypt(iv, bin)
 	bin, err = unPad16(bin)
 	if err != nil {
-		tlog.Warn.Printf("DecryptName %q: unPad16 error: %v", cipherName, err)
+		tlog.Warn.Printf("decryptName %q: unPad16 error: %v", cipherName, err)
 		return "", syscall.EBADMSG
 	}
 	plain := string(bin)
-	if err := IsValidName(plain); err != nil {
-		tlog.Warn.Printf("DecryptName %q: invalid name after decryption: %v", cipherName, err)
-		return "", syscall.EBADMSG
-	}
 	return plain, err
 }
 
-// EncryptName encrypts "plainName", returns a base64-encoded "cipherName64",
+// EncryptName encrypts a file name "plainName" and returns a base64-encoded "cipherName64",
 // encrypted using EME (https://github.com/rfjakob/eme).
+//
+// plainName is checked for null bytes, slashes etc. and such names are rejected
+// with an error.
 //
 // This function is exported because in some cases, fusefrontend needs access
 // to the full (not hashed) name if longname is used.
@@ -96,11 +116,19 @@ func (n *NameTransform) EncryptName(plainName string, iv []byte) (cipherName64 s
 		tlog.Warn.Printf("EncryptName %q: invalid plainName: %v", plainName, err)
 		return "", syscall.EBADMSG
 	}
+	return n.encryptName(plainName, iv), nil
+}
+
+// encryptName encrypts "plainName" and returns a base64-encoded "cipherName64",
+// encrypted using EME (https://github.com/rfjakob/eme).
+//
+// No checks for null bytes etc are performed against plainName.
+func (n *NameTransform) encryptName(plainName string, iv []byte) (cipherName64 string) {
 	bin := []byte(plainName)
 	bin = pad16(bin)
 	bin = n.emeCipher.Encrypt(iv, bin)
 	cipherName64 = n.B64.EncodeToString(bin)
-	return cipherName64, nil
+	return cipherName64
 }
 
 // EncryptAndHashName encrypts "name" and hashes it to a longname if it is
@@ -115,7 +143,7 @@ func (be *NameTransform) EncryptAndHashName(name string, iv []byte) (string, err
 	if err != nil {
 		return "", err
 	}
-	if be.longNames && len(cName) > NameMax {
+	if len(cName) > be.longNameMax {
 		return be.HashLongName(cName), nil
 	}
 	return cName, nil
@@ -138,4 +166,10 @@ func Dir(path string) string {
 		return ""
 	}
 	return d
+}
+
+// GetLongNameMax will return curent `longNameMax`. File name longer than
+// this should be hashed.
+func (n *NameTransform) GetLongNameMax() int {
+	return n.longNameMax
 }

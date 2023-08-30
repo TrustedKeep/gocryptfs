@@ -26,6 +26,8 @@ type Args struct {
 	ConfigCustom bool
 	// NoPrealloc disables automatic preallocation before writing
 	NoPrealloc bool
+
+	//excludes dont seem to exist in tkfs
 	// Suid is true if the filesystem has been mounted with the "-suid" flag.
 	// If it is false, we can ignore the GETXATTR "security.capability" calls,
 	// which are a performance problem for writes. See

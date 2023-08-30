@@ -24,7 +24,6 @@ func TestConcurrentReadWrite(t *testing.T) {
 	} else {
 		f.Close()
 	}
-	buf := make([]byte, 100)
 	content := []byte("1234567890")
 	threads := 10
 	loops := 30
@@ -32,6 +31,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 		// Reader thread
 		wg.Add(1)
 		go func() {
+			buf := make([]byte, 100)
 			fRd, err := os.Open(fn)
 			if err != nil {
 				log.Fatal(err)
@@ -134,7 +134,7 @@ func TestConcurrentReadCreate(t *testing.T) {
 //
 // So far, it only has triggered warnings like this
 //
-//     go-fuse: warning: Inode.Path: inode i4201033 is orphaned, replacing segment with ".go-fuse.5577006791947779410/deleted"
+//	go-fuse: warning: Inode.Path: inode i4201033 is orphaned, replacing segment with ".go-fuse.5577006791947779410/deleted"
 //
 // but none of the "blocked waiting for FORGET".
 func TestInoReuse(t *testing.T) {
@@ -144,7 +144,7 @@ func TestInoReuse(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		for i := 0; i < 1000; i++ {
-			fd, err := syscall.Creat(fn, 0600)
+			fd, err := syscall.Open(fn, syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC, 0600)
 			if err == syscall.EISDIR {
 				continue
 			}

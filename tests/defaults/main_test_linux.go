@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
 
@@ -202,7 +204,9 @@ func TestWrite0200File(t *testing.T) {
 
 // TestMvWarnings:
 // When xattr support was introduced, mv threw warnings like these:
-//   mv: preserving permissions for ‘b/x’: Operation not permitted
+//
+//	mv: preserving permissions for ‘b/x’: Operation not permitted
+//
 // because we returned EPERM when it tried to set system.posix_acl_access.
 // Now we return EOPNOTSUPP and mv is happy.
 func TestMvWarnings(t *testing.T) {
@@ -267,15 +271,15 @@ func TestCpWarnings(t *testing.T) {
 	}
 }
 
-// TestSeekData tests that fs.FileLseeker is implemented
+// TestSeekData tests that SEEK_DATA works
 func TestSeekData(t *testing.T) {
 	fn := filepath.Join(test_helpers.DefaultPlainDir, t.Name())
 	f, err := os.Create(fn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var oneTiB int64 = 1024 * 1024 * 1024 * 1024
-	if _, err = f.Seek(oneTiB, 0); err != nil {
+	var dataOffset int64 = 1024 * 1024 * 1024 // 1 GiB
+	if _, err = f.Seek(dataOffset, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = f.Write([]byte("foo")); err != nil {
@@ -283,18 +287,16 @@ func TestSeekData(t *testing.T) {
 	}
 	f.Close()
 
-	const SEEK_DATA = 3
-
 	f, err = os.Open(fn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	off, err := f.Seek(1024*1024, SEEK_DATA)
+	off, err := f.Seek(1024*1024, unix.SEEK_DATA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if off < oneTiB-1024*1024 {
-		t.Errorf("off=%d, expected=%d\n", off, oneTiB)
+	if off < dataOffset-1024*1024 {
+		t.Errorf("off=%d, expected=%d\n", off, dataOffset)
 	}
 	f.Close()
 }
@@ -401,7 +403,7 @@ func TestMaxlen(t *testing.T) {
 
 func TestFsync(t *testing.T) {
 	fileName := test_helpers.DefaultPlainDir + "/" + t.Name() + ".file"
-	fileFD, err := syscall.Creat(fileName, 0600)
+	fileFD, err := syscall.Open(fileName, syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC, 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,5 +425,84 @@ func TestFsync(t *testing.T) {
 	err = syscall.Fsync(fileFD)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// force_owner was broken by the v2.0 rewrite:
+// The owner was only forced for GETATTR, but not for CREATE, LOOKUP, MKNOD.
+//
+// https://github.com/rfjakob/gocryptfs/issues/609
+// https://github.com/rfjakob/gocryptfs/pull/610
+// https://github.com/rfjakob/gocryptfs/issues/629
+func TestForceOwner(t *testing.T) {
+	cDir := test_helpers.InitFS(t)
+	os.Chmod(cDir, 0777) // Mount needs to be accessible for us
+	pDir := cDir + ".mnt"
+	test_helpers.MountOrFatal(t, cDir, pDir, "-force_owner=1234:1234", "-extpass=echo test")
+	defer test_helpers.UnmountPanic(pDir)
+
+	// We need an unrestricted umask
+	oldmask := syscall.Umask(0)
+	defer syscall.Umask(oldmask)
+
+	foo := pDir + "/foo"
+
+	// In the answer to a FUSE CREATE, gocryptfs sends file information including
+	// the owner. This is cached by the kernel and will be used for the next
+	// stat() call.
+	fd, err := syscall.Open(foo, syscall.O_CREAT|syscall.O_WRONLY|syscall.O_EXCL, 0666)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syscall.Close(fd)
+
+	var st syscall.Stat_t
+	if err := syscall.Stat(foo, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Uid != 1234 || st.Gid != 1234 {
+		t.Errorf("CREATE returned uid or gid != 1234: %#v", st)
+	}
+
+	// We can clear the kernel stat() cache by writing to the file
+	fd, err = syscall.Open(foo, syscall.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := syscall.Write(fd, []byte("hello world")); err != nil {
+		t.Fatal(err)
+	}
+	syscall.Close(fd)
+
+	// This stat() triggers a new GETATTR
+	if err := syscall.Stat(foo, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Uid != 1234 || st.Gid != 1234 {
+		t.Errorf("GETATTR returned uid or gid != 1234: %#v", st)
+	}
+
+	// Test MKNOD
+	sock := pDir + "/sock"
+	if err := syscall.Mknod(sock, syscall.S_IFSOCK|0600, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Stat(sock, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Uid != 1234 || st.Gid != 1234 {
+		t.Errorf("MKNOD returned uid or gid != 1234: %#v", st)
+	}
+
+	// Remount to clear cache
+	test_helpers.UnmountPanic(pDir)
+	test_helpers.MountOrFatal(t, cDir, pDir, "-force_owner=1234:1234", "-extpass=echo test")
+
+	// This stat() triggers a new LOOKUP
+	if err := syscall.Stat(foo, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Uid != 1234 || st.Gid != 1234 {
+		t.Errorf("LOOKUP returned uid or gid != 1234: %#v", st)
 	}
 }

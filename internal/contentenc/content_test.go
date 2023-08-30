@@ -25,7 +25,7 @@ func TestSplitRange(t *testing.T) {
 		testRange{6654, 8945})
 
 	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true)
-	f := New(cc, DefaultBS, false)
+	f := New(cc, DefaultBS)
 
 	for _, r := range ranges {
 		parts := f.ExplodePlainRange(r.offset, r.length)
@@ -53,7 +53,7 @@ func TestCiphertextRange(t *testing.T) {
 		testRange{6654, 8945})
 
 	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true)
-	f := New(cc, DefaultBS, false)
+	f := New(cc, DefaultBS)
 
 	for _, r := range ranges {
 
@@ -76,7 +76,7 @@ func TestCiphertextRange(t *testing.T) {
 func TestBlockNo(t *testing.T) {
 	tkc.Connect("", "", true, true)
 	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true)
-	f := New(cc, DefaultBS, false)
+	f := New(cc, DefaultBS)
 
 	b := f.CipherOffToBlockNo(788)
 	if b != 0 {

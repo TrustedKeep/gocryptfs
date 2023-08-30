@@ -68,6 +68,7 @@ func initDir(args *argContainer) {
 			MockKMS:            args.mockKMS,
 			BoundaryHost:       args.boundaryHost,
 			KeyPool:            args.keyPool,
+			LongNameMax:        args.longnamemax,
 		})
 		if err != nil {
 			tlog.Fatal.Println(err)

@@ -44,6 +44,8 @@ type ConfFile struct {
 	MockKMS bool `json:",omitempty"`
 	// KeyPool is the size of the pool of keys to use, zero means 1 / file.
 	KeyPool int `json:",omitempty"`
+	// LongNameMax corresponds to the -longnamemax flag
+	LongNameMax uint8 `json:",omitempty"`
 	// Filename is the name of the config file. Not exported to JSON.
 	filename string
 }
@@ -59,6 +61,7 @@ type CreateArgs struct {
 	MockAWS            bool
 	MockKMS            bool
 	KeyPool            int
+	LongNameMax        uint8
 }
 
 // Create - create a new config and write it to "Filename".
@@ -92,6 +95,12 @@ func Create(args *CreateArgs) error {
 	} else {
 		if !args.DeterministicNames {
 			cf.setFeatureFlag(FlagDirIV)
+		}
+		// 0 means to *use* the default (which means we don't have to save it), and
+		// 255 *is* the default, which means we don't have to save it either.
+		if args.LongNameMax != 0 && args.LongNameMax != 255 {
+			cf.LongNameMax = args.LongNameMax
+			cf.setFeatureFlag(FlagLongNameMax)
 		}
 		cf.setFeatureFlag(FlagEMENames)
 		cf.setFeatureFlag(FlagLongNames)

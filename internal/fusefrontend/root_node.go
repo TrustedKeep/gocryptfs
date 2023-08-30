@@ -62,15 +62,24 @@ type RootNode struct {
 }
 
 func NewRootNode(args Args, c *contentenc.ContentEnc, n *nametransform.NameTransform) *RootNode {
+	var rootDev uint64
+	var st syscall.Stat_t
+	if err := syscall.Stat(args.Cipherdir, &st); err != nil {
+		tlog.Warn.Printf("Could not stat backing directory %q: %v", args.Cipherdir, err)
+	} else {
+		rootDev = uint64(st.Dev)
+	}
+
 	ivLen := nametransform.DirIVLen
 	if args.PlaintextNames {
 		ivLen = 0
 	}
+
 	rn := &RootNode{
 		args:          args,
 		nameTransform: n,
 		contentEnc:    c,
-		inoMap:        inomap.New(),
+		inoMap:        inomap.New(rootDev),
 		dirCache:      dirCache{ivLen: ivLen},
 		quirks:        syscallcompat.DetectQuirks(args.Cipherdir),
 	}
@@ -255,7 +264,7 @@ func (rn *RootNode) decryptXattrValue(cData []byte) (data []byte, err error) {
 // encryptXattrName transforms "user.foo" to "user.gocryptfs.a5sAd4XAa47f5as6dAf"
 func (rn *RootNode) encryptXattrName(attr string) (string, error) {
 	// xattr names are encrypted like file names, but with a fixed IV.
-	cAttr, err := rn.nameTransform.EncryptName(attr, xattrNameIV)
+	cAttr, err := rn.nameTransform.EncryptXattrName(attr)
 	if err != nil {
 		return "", err
 	}
@@ -269,7 +278,7 @@ func (rn *RootNode) decryptXattrName(cAttr string) (attr string, err error) {
 	}
 	// Strip "user.gocryptfs." prefix
 	cAttr = cAttr[len(xattrStorePrefix):]
-	attr, err = rn.nameTransform.DecryptName(cAttr, xattrNameIV)
+	attr, err = rn.nameTransform.DecryptXattrName(cAttr)
 	if err != nil {
 		return "", err
 	}

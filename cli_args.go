@@ -41,6 +41,8 @@ type argContainer struct {
 	notifypid int
 	// Idle time before autounmount
 	idle time.Duration
+	// -longnamemax (hash encrypted names that are longer than this)
+	longnamemax uint8
 	// Helper variables that are NOT cli options all start with an underscore
 	// _configCustom is true when the user sets a custom config file name.
 	_configCustom bool
@@ -111,6 +113,10 @@ func prefixOArgs(osArgs []string) ([]string, error) {
 // into "--debug" (spf13/pflag style).
 // gocryptfs v2.1 switched from `flag` to `pflag`, but we obviously want to stay
 // cli-compatible, and this is the hack to do it.
+//
+// BUG: In `-extpass -X`, the `-X` gets transformed `--X`.
+// See "Dash duplication" in the man page and
+// https://github.com/rfjakob/gocryptfs/issues/621 .
 func convertToDoubleDash(osArgs []string) (out []string) {
 	out = append(out, osArgs...)
 	for i, v := range out {
@@ -157,7 +163,7 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.quiet, "quiet", false, "Quiet - silence informational messages")
 	flagSet.BoolVar(&args.nosyslog, "nosyslog", false, "Do not redirect output to syslog when running in the background")
 	flagSet.BoolVar(&args.wpanic, "wpanic", false, "When encountering a warning, panic and exit immediately")
-	flagSet.BoolVar(&args.longnames, "longnames", true, "Store names longer than 176 bytes in extra files")
+	flagSet.BoolVar(&args.longnames, "longnames", true, "Store names longer than 175 bytes in extra files")
 	flagSet.BoolVar(&args.allow_other, "allow_other", false, "Allow other users to access the filesystem. "+
 		"Only works if user_allow_other is set in /etc/fuse.conf.")
 	flagSet.BoolVar(&args.nonempty, "nonempty", false, "Allow mounting over non-empty directories")
@@ -206,6 +212,8 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.StringSliceVar(&args.badname, "badname", nil, "Glob pattern invalid file names that should be shown")
 	flagSet.StringSliceVar(&args.passfile, "passfile", nil, "Read password from file")
 
+	flagSet.Uint8Var(&args.longnamemax, "longnamemax", 255, "Hash encrypted names that are longer than this")
+
 	flagSet.IntVar(&args.notifypid, "notifypid", 0, "Send USR1 to the specified process after "+
 		"successful mount - used internally for daemonization")
 
@@ -220,7 +228,8 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	{
 		var tmp bool
 		flagSet.BoolVar(&tmp, "nofail", false, "Ignored for /etc/fstab compatibility")
-		flagSet.BoolVar(&tmp, "devrandom", false, "Deprecated (ignored for compatibility)")
+		flagSet.BoolVar(&tmp, "devrandom", false, "Obsolete, ignored for compatibility")
+		flagSet.BoolVar(&tmp, "forcedecode", false, "Obsolete, ignored for compatibility")
 	}
 
 	// Actual parsing
@@ -257,6 +266,10 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 			os.Exit(exitcodes.Usage)
 		}
 	}
+	if args.longnamemax > 0 && args.longnamemax < 62 {
+		tlog.Fatal.Printf("-longnamemax: value %d is outside allowed range 62 ... 255", args.longnamemax)
+		os.Exit(exitcodes.Usage)
+	}
 
 	return args
 }
@@ -284,7 +297,7 @@ func countOpFlags(args *argContainer) int {
 	return count
 }
 
-// isFlagPassed finds out if the flag was explictely passed on the command line.
+// isFlagPassed finds out if the flag was explicitly passed on the command line.
 // https://stackoverflow.com/a/54747682/1380267
 func isFlagPassed(flagSet *flag.FlagSet, name string) bool {
 	found := false

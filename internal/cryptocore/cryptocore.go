@@ -26,17 +26,25 @@ const (
 
 // AEADTypeEnum indicates the type of AEAD backend in use.
 type AEADTypeEnum struct {
-	Name      string
+	// Algo is the encryption algorithm. Example: "AES-GCM-256"
+	Algo string
+	// Lib is the library where Algo is implemented. Either "Go" or "OpenSSL".
+	Lib       string
 	NonceSize int
+}
+
+// String returns something like "AES-GCM-256-OpenSSL"
+func (a AEADTypeEnum) String() string {
+	return a.Algo + "-" + a.Lib
 }
 
 // BackendGoGCM specifies the Go based AES-256-GCM backend.
 // "AES-GCM-256-Go" in gocryptfs -speed.
-var BackendGoGCM AEADTypeEnum = AEADTypeEnum{"AES-GCM-256", 16}
+var BackendGoGCM = AEADTypeEnum{"AES-GCM-256", "Go", 16}
 
 // BackendXChaCha20Poly1305 specifies XChaCha20-Poly1305-Go.
 // "XChaCha20-Poly1305-Go" in gocryptfs -speed.
-var BackendXChaCha20Poly1305 AEADTypeEnum = AEADTypeEnum{"XChaCha20-Poly1305", chacha20poly1305.NonceSizeX}
+var BackendXChaCha20Poly1305 = AEADTypeEnum{"XChaCha20-Poly1305", "Go", chacha20poly1305.NonceSizeX}
 
 // CryptoCore is the low level crypto implementation.
 type CryptoCore struct {
@@ -100,7 +108,7 @@ func New(aeadType AEADTypeEnum, IVBitLen, keyPool int, useHKDF bool) *CryptoCore
 		}
 		aeadCipher = newTkCha(keyPool)
 	} else {
-		log.Panicf("unknown cipher backend %q", aeadType.Name)
+		log.Panicf("unknown cipher backend %q", aeadType)
 	}
 
 	if aeadCipher.NonceSize()*8 != IVBitLen {
@@ -127,6 +135,7 @@ type wiper interface {
 // This is not bulletproof due to possible GC copies, but
 // still raises to bar for extracting the key.
 func (c *CryptoCore) Wipe() {
+	//this is probs just gonna be current change
 	tlog.Debug.Printf("CryptoCore.Wipe: Only nil'ing stdlib refs")
 	// We have no access to the keys (or key-equivalents) stored inside the
 	// Go stdlib. Best we can is to nil the references and force a GC.

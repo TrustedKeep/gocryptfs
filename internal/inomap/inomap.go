@@ -3,13 +3,13 @@
 //
 // Format of the returned inode numbers:
 //
-//   [spill bit = 0][15 bit namespace id][48 bit passthru inode number]
-//   [spill bit = 1][63 bit spill inode number                        ]
+//	[spill bit = 0][15 bit namespace id][48 bit passthru inode number]
+//	[spill bit = 1][63 bit spill inode number                        ]
 //
 // Each (Dev, Tag) tuple gets a namespace id assigned. The original inode
 // number is then passed through in the lower 48 bits.
 //
-// If namespace ids are exhaused, or the original id is larger than 48 bits,
+// If namespace ids are exhausted, or the original id is larger than 48 bits,
 // the whole (Dev, Tag, Ino) tuple gets mapped in the spill map, and the
 // spill bit is set to 1.
 package inomap
@@ -49,13 +49,22 @@ type InoMap struct {
 }
 
 // New returns a new InoMap.
-func New() *InoMap {
-	return &InoMap{
+// Inode numbers on device `rootDev` will be passed through as-is.
+// If `rootDev` is zero, the first Translate() call decides the effective
+// rootDev.
+func New(rootDev uint64) *InoMap {
+	m := &InoMap{
 		namespaceMap:  make(map[namespaceData]uint16),
 		namespaceNext: 0,
 		spillMap:      make(map[QIno]uint64),
 		spillNext:     0,
 	}
+	if rootDev > 0 {
+		// Reserve namespace 0 for rootDev
+		m.namespaceMap[namespaceData{rootDev, 0}] = 0
+		m.namespaceNext = 1
+	}
+	return m
 }
 
 var spillWarn sync.Once
@@ -105,7 +114,7 @@ func (m *InoMap) Translate(in QIno) (out uint64) {
 
 // TranslateStat translates (device, ino) pair contained in "st" into a unique
 // inode number and overwrites the ino in "st" with it.
-// Convience wrapper around Translate().
+// Convenience wrapper around Translate().
 func (m *InoMap) TranslateStat(st *syscall.Stat_t) {
 	in := QInoFromStat(st)
 	st.Ino = m.Translate(in)
