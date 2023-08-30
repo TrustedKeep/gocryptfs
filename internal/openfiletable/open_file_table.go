@@ -48,6 +48,10 @@ type Entry struct {
 	// IDLock must be taken before reading or writing the ID field in this struct,
 	// unless you have an exclusive lock on ContentLock.
 	IDLock sync.Mutex
+	//The id for the envelope key of this file
+	EnvKeyID string
+	//The wrapped key for this file
+	Wrapper []byte
 }
 
 // Register creates an open file table entry for "qi" (or incrementes the

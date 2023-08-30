@@ -13,6 +13,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
+	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
@@ -96,7 +97,7 @@ func (be *ContentEnc) CipherBS() uint64 {
 }
 
 // DecryptBlocks decrypts a number of blocks
-func (be *ContentEnc) DecryptBlocks(ciphertext []byte, firstBlockNo uint64, fileID []byte) ([]byte, error) {
+func (be *ContentEnc) DecryptBlocks(ciphertext []byte, firstBlockNo uint64, fileID []byte, envelopeID string, wrappedKey []byte) ([]byte, error) {
 	cBuf := bytes.NewBuffer(ciphertext)
 	var err error
 	pBuf := bytes.NewBuffer(be.PReqPool.Get()[:0])
@@ -104,7 +105,7 @@ func (be *ContentEnc) DecryptBlocks(ciphertext []byte, firstBlockNo uint64, file
 	for cBuf.Len() > 0 {
 		cBlock := cBuf.Next(int(be.cipherBS))
 		var pBlock []byte
-		pBlock, err = be.DecryptBlock(cBlock, blockNo, fileID)
+		pBlock, err = be.DecryptBlock(cBlock, blockNo, fileID, envelopeID, wrappedKey)
 		if err != nil {
 			break
 		}
@@ -117,8 +118,8 @@ func (be *ContentEnc) DecryptBlocks(ciphertext []byte, firstBlockNo uint64, file
 
 // concatAD concatenates the block number and the file ID to a byte blob
 // that can be passed to AES-GCM as associated data (AD).
-// Result is: aData = [blockNo.bigEndian fileID].
-func concatAD(blockNo uint64, fileID []byte) (aData []byte) {
+// Result is: aData = [blockNo.bigEndian fileID envelopeID wrappedKey] if envelopeID is set, otherwise [blockNo.bigEndian fileID].
+func concatAD(blockNo uint64, fileID []byte, envelopeID string, wrappedKey []byte) (aData []byte) {
 	if fileID != nil && len(fileID) != headerIDLen {
 		// fileID is nil when decrypting the master key from the config file,
 		// and for symlinks and xattrs.
@@ -126,9 +127,19 @@ func concatAD(blockNo uint64, fileID []byte) (aData []byte) {
 	}
 	const lenUint64 = 8
 	// Preallocate space to save an allocation in append()
-	aData = make([]byte, lenUint64, lenUint64+headerIDLen)
+	if envelopeID != "" {
+		aData = make([]byte, lenUint64, lenUint64+headerIDLen+tkc.EnvelopeIDLength+len(wrappedKey))
+	} else {
+		aData = make([]byte, lenUint64, lenUint64+headerIDLen)
+	}
 	binary.BigEndian.PutUint64(aData, blockNo)
 	aData = append(aData, fileID...)
+
+	//if running legacy tkfs we don't have this
+	if envelopeID != "" {
+		aData = append(aData, []byte(envelopeID)...)
+		aData = append(aData, wrappedKey...)
+	}
 	return aData
 }
 
@@ -136,8 +147,7 @@ func concatAD(blockNo uint64, fileID []byte) (aData []byte) {
 //
 // Corner case: A full-sized block of all-zero ciphertext bytes is translated
 // to an all-zero plaintext block, i.e. file hole passthrough.
-func (be *ContentEnc) DecryptBlock(ciphertext []byte, blockNo uint64, fileID []byte) ([]byte, error) {
-
+func (be *ContentEnc) DecryptBlock(ciphertext []byte, blockNo uint64, fileID []byte, envelopeID string, wrappedKey []byte) ([]byte, error) {
 	// Empty block?
 	if len(ciphertext) == 0 {
 		return ciphertext, nil
@@ -168,7 +178,7 @@ func (be *ContentEnc) DecryptBlock(ciphertext []byte, blockNo uint64, fileID []b
 	// Decrypt
 	plaintext := be.pBlockPool.Get()
 	plaintext = plaintext[:0]
-	aData := concatAD(blockNo, fileID)
+	aData := concatAD(blockNo, fileID, envelopeID, wrappedKey)
 	plaintext, err := be.cryptoCore.AEADCipher.Open(plaintext, nonce, ciphertext, aData)
 
 	if err != nil {
@@ -187,7 +197,7 @@ const encryptMaxSplit = 2
 
 // encryptBlocksParallel splits the plaintext into parts and encrypts them
 // in parallel.
-func (be *ContentEnc) encryptBlocksParallel(plaintextBlocks [][]byte, ciphertextBlocks [][]byte, firstBlockNo uint64, fileID []byte) {
+func (be *ContentEnc) encryptBlocksParallel(plaintextBlocks [][]byte, ciphertextBlocks [][]byte, firstBlockNo uint64, fileID []byte, envelopeID string, wrappedKey []byte) {
 	ncpu := runtime.NumCPU()
 	if ncpu > encryptMaxSplit {
 		ncpu = encryptMaxSplit
@@ -207,7 +217,7 @@ func (be *ContentEnc) encryptBlocksParallel(plaintextBlocks [][]byte, ciphertext
 				// incurs a 1 % performance penalty.
 				high = len(plaintextBlocks)
 			}
-			be.doEncryptBlocks(plaintextBlocks[low:high], ciphertextBlocks[low:high], firstBlockNo+uint64(low), fileID)
+			be.doEncryptBlocks(plaintextBlocks[low:high], ciphertextBlocks[low:high], firstBlockNo+uint64(low), fileID, envelopeID, wrappedKey)
 			wg.Done()
 		}(i)
 	}
@@ -217,13 +227,13 @@ func (be *ContentEnc) encryptBlocksParallel(plaintextBlocks [][]byte, ciphertext
 // EncryptBlocks is like EncryptBlock but takes multiple plaintext blocks.
 // Returns a byte slice from CReqPool - so don't forget to return it
 // to the pool.
-func (be *ContentEnc) EncryptBlocks(plaintextBlocks [][]byte, firstBlockNo uint64, fileID []byte) []byte {
+func (be *ContentEnc) EncryptBlocks(plaintextBlocks [][]byte, firstBlockNo uint64, fileID []byte, envelopeID string, wrappedKey []byte) []byte {
 	ciphertextBlocks := make([][]byte, len(plaintextBlocks))
 	// For large writes, we parallelize encryption.
 	if len(plaintextBlocks) >= 32 && runtime.NumCPU() >= 2 {
-		be.encryptBlocksParallel(plaintextBlocks, ciphertextBlocks, firstBlockNo, fileID)
+		be.encryptBlocksParallel(plaintextBlocks, ciphertextBlocks, firstBlockNo, fileID, envelopeID, wrappedKey)
 	} else {
-		be.doEncryptBlocks(plaintextBlocks, ciphertextBlocks, firstBlockNo, fileID)
+		be.doEncryptBlocks(plaintextBlocks, ciphertextBlocks, firstBlockNo, fileID, envelopeID, wrappedKey)
 	}
 	// Concatenate ciphertext into a single byte array.
 	tmp := be.CReqPool.Get()
@@ -237,25 +247,27 @@ func (be *ContentEnc) EncryptBlocks(plaintextBlocks [][]byte, firstBlockNo uint6
 }
 
 // doEncryptBlocks is called by EncryptBlocks to do the actual encryption work
-func (be *ContentEnc) doEncryptBlocks(in [][]byte, out [][]byte, firstBlockNo uint64, fileID []byte) {
+func (be *ContentEnc) doEncryptBlocks(in [][]byte, out [][]byte, firstBlockNo uint64, fileID []byte, envelopeID string, wrappedKey []byte) {
 	for i, v := range in {
-		out[i] = be.EncryptBlock(v, firstBlockNo+uint64(i), fileID)
+		out[i] = be.EncryptBlock(v, firstBlockNo+uint64(i), fileID, envelopeID, wrappedKey)
 	}
 }
 
 // EncryptBlock - Encrypt plaintext using a random nonce.
 // blockNo and fileID are used as associated data.
+// envelopeID and wrapped key are only added to the AD if envelopeID is not ""
 // The output is nonce + ciphertext + tag.
-func (be *ContentEnc) EncryptBlock(plaintext []byte, blockNo uint64, fileID []byte) []byte {
+func (be *ContentEnc) EncryptBlock(plaintext []byte, blockNo uint64, fileID []byte, envelopeID string, wrappedKey []byte) []byte {
 	// Get a fresh random nonce
 	nonce := be.cryptoCore.IVGenerator.Get()
-	return be.doEncryptBlock(plaintext, blockNo, fileID, nonce)
+	return be.doEncryptBlock(plaintext, blockNo, fileID, nonce, envelopeID, wrappedKey)
 }
 
 // doEncryptBlock is the backend for EncryptBlock and EncryptBlockNonce.
 // blockNo and fileID are used as associated data.
+// envelopeID and wrapped key are only added to the AD if envelopeID is not ""
 // The output is nonce + ciphertext + tag.
-func (be *ContentEnc) doEncryptBlock(plaintext []byte, blockNo uint64, fileID []byte, nonce []byte) []byte {
+func (be *ContentEnc) doEncryptBlock(plaintext []byte, blockNo uint64, fileID []byte, nonce []byte, envelopeID string, wrappedKey []byte) []byte {
 	// Empty block?
 	if len(plaintext) == 0 {
 		return plaintext
@@ -264,7 +276,7 @@ func (be *ContentEnc) doEncryptBlock(plaintext []byte, blockNo uint64, fileID []
 		log.Panic("wrong nonce length")
 	}
 	// Block is authenticated with block number and file ID
-	aData := concatAD(blockNo, fileID)
+	aData := concatAD(blockNo, fileID, envelopeID, wrappedKey)
 	// Get a cipherBS-sized block of memory, copy the nonce into it and truncate to
 	// nonce length
 	cBlock := be.cBlockPool.Get()

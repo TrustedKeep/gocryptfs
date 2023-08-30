@@ -1,8 +1,10 @@
 package contentenc
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
 	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 )
@@ -13,7 +15,10 @@ type testRange struct {
 }
 
 func TestSplitRange(t *testing.T) {
-	tkc.Connect("", "", true, true)
+	id, wrapped, err := createTKKeys()
+	if err != nil {
+		t.Fatalf("Couldn't set up tk: %v", err)
+	}
 	var ranges []testRange
 
 	ranges = append(ranges, testRange{0, 70000},
@@ -24,7 +29,7 @@ func TestSplitRange(t *testing.T) {
 		testRange{0, 65536},
 		testRange{6654, 8945})
 
-	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true)
+	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true, id, wrapped)
 	f := New(cc, DefaultBS)
 
 	for _, r := range ranges {
@@ -43,7 +48,10 @@ func TestSplitRange(t *testing.T) {
 }
 
 func TestCiphertextRange(t *testing.T) {
-	tkc.Connect("", "", true, true)
+	id, wrapped, err := createTKKeys()
+	if err != nil {
+		t.Fatalf("Couldn't set up tk: %v", err)
+	}
 	var ranges []testRange
 
 	ranges = append(ranges, testRange{0, 70000},
@@ -52,7 +60,7 @@ func TestCiphertextRange(t *testing.T) {
 		testRange{65444, 54},
 		testRange{6654, 8945})
 
-	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true)
+	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true, id, wrapped)
 	f := New(cc, DefaultBS)
 
 	for _, r := range ranges {
@@ -74,8 +82,11 @@ func TestCiphertextRange(t *testing.T) {
 }
 
 func TestBlockNo(t *testing.T) {
-	tkc.Connect("", "", true, true)
-	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true)
+	id, wrapped, err := createTKKeys()
+	if err != nil {
+		t.Fatalf("Couldn't set up tk: %v", err)
+	}
+	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true, id, wrapped)
 	f := New(cc, DefaultBS)
 
 	b := f.CipherOffToBlockNo(788)
@@ -94,4 +105,18 @@ func TestBlockNo(t *testing.T) {
 	if b != 1 {
 		t.Errorf("actual: %d", b)
 	}
+}
+
+func createTKKeys() (id string, wrapped []byte, err error) {
+	tkc.Connect("", "", true, true)
+	id, kem, err := tkc.Get().CreateEnvelopeKey(kem.RSA2048.String(), "")
+	if err != nil {
+		err = fmt.Errorf("couldnt create env key err: %v\n", err)
+	}
+
+	_, wrapped, err = kem.Wrap()
+	if err != nil {
+		err = fmt.Errorf("wrapping key err: %v\n", err)
+	}
+	return
 }

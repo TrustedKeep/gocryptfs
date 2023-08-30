@@ -44,4 +44,6 @@ type Args struct {
 	OneFileSystem bool
 	// DeterministicNames disables gocryptfs.diriv files
 	DeterministicNames bool
+	// whether or not we will be envelope encrypting the encryption keys
+	Envelope bool
 }

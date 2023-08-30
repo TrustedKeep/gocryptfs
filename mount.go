@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"log/syslog"
@@ -21,6 +22,8 @@ import (
 
 	"golang.org/x/crypto/chacha20poly1305"
 
+	"github.com/TrustedKeep/tkutils/v2/crypto"
+	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/TrustedKeep/tkutils/v2/security"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -43,6 +46,7 @@ type AfterUnmounter interface {
 	AfterUnmount()
 }
 
+// const EnvSetUpFlag = "CEK" //created envelope key, if this file exists, it means the current envelope key has already been created
 // doMount mounts an encrypted directory.
 // Called from main.
 func doMount(args *argContainer) {
@@ -243,7 +247,10 @@ func setOpenFileLimit() {
 // Calls os.Exit on errors
 func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys func()) {
 	var err error
-	confFile, _ := loadConfig(args)
+	confFile, err := loadConfig(args)
+	if err != nil {
+		panic(err)
+	}
 
 	// Reconciliate CLI and config file arguments into a fusefrontend.Args struct
 	// that is passed to the filesystem implementation
@@ -296,15 +303,83 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 	if args.allow_other && os.Getuid() == 0 {
 		frontendArgs.PreserveOwner = true
 	}
+	var rootWrappedKey []byte
+	var rootID string
+	var rootKey []byte
+	flagFile := filepath.Dir(args.config) + "/" + configfile.EnvSetUpFlag
+	if keyPool == -1 {
+		frontendArgs.Envelope = true
+		//if not  set up yet
+		var envAlg string
+		if confFile == nil {
+			envAlg = DefaultEnvAlg
+		} else {
+			envAlg = confFile.EnvEncAlg
+		}
+		if _, err := os.Stat(flagFile); errors.Is(err, os.ErrNotExist) {
+
+			//create eme key
+			var envKey kem.Kem
+			if rootID, envKey, err = tkc.Get().CreateEnvelopeKey(envAlg, ""); err != nil {
+				tlog.Fatal.Printf("%v", err)
+				os.Exit(exitcodes.Other)
+			}
+			//create general env key
+			var genID string
+			if genID, _, err = tkc.Get().CreateEnvelopeKey(envAlg, confFile.EnvelopeID); err != nil {
+				tlog.Fatal.Printf("%v", err)
+				os.Exit(exitcodes.Other)
+			}
+			fmt.Printf("genID: %s\n", genID)
+			tkc.Get().SetCurrentKeyID(genID)
+			//use env key to generate the wrapped key
+			if rootKey, rootWrappedKey, err = envKey.Wrap(); err != nil {
+				tlog.Fatal.Printf("Error generating wrapped key %v", err)
+				os.Exit(exitcodes.Other)
+			}
+			crypto.Zeroize(rootKey) //make sure this key is cleared
+			combined := append([]byte(rootID), rootWrappedKey...)
+			//write the wrapped key
+			if err = os.WriteFile(flagFile, combined, 0600); err != nil { //TODO: try this out, might have to change the perms...in fact I dont think it needs write at all
+				tlog.Fatal.Printf("Error writing wrapped key %v", err)
+				os.Exit(exitcodes.Other)
+			}
+		} else {
+			// get wrapped key
+			combined, err := os.ReadFile(flagFile)
+			if err != nil {
+				tlog.Fatal.Printf("Could not get wrapped key and rootID from file: %v", err)
+				os.Exit(exitcodes.Other)
+			}
+			if len(combined) < tkc.EnvelopeIDLength {
+				tlog.Fatal.Printf("The bytes in the file could not possibly be long enough to have both the root key id and the wrapped key")
+				os.Exit(exitcodes.Other)
+			}
+
+			//TODO: Possible alternative here is pulling it from the conf file and changing the conf file during key rotations
+			var genID string
+			if genID, _, err = tkc.Get().CreateEnvelopeKey(envAlg, ""); err != nil {
+				tlog.Fatal.Printf("%v", err)
+				os.Exit(exitcodes.Other)
+			}
+
+			fmt.Printf("genID alt case: %s\n", genID)
+			tkc.Get().SetCurrentKeyID(genID)
+
+			rootID = string(combined[:tkc.EnvelopeIDLength])
+			rootWrappedKey = combined[tkc.EnvelopeIDLength:]
+		}
+
+	}
 
 	// Init crypto backend
-	cCore := cryptocore.New(cryptoBackend, IVBits, keyPool, args.hkdf)
+	cCore := cryptocore.New(cryptoBackend, IVBits, keyPool, args.hkdf, rootID, rootWrappedKey)
 	cEnc := contentenc.New(cCore, contentenc.DefaultBS)
 	nameTransform := nametransform.New(cCore.EMECipher, frontendArgs.LongNames, args.longnamemax,
 		args.raw64, []string(args.badname), frontendArgs.DeterministicNames)
 	// Spawn fusefrontend
 	tlog.Debug.Printf("frontendArgs: %s", tlog.JSONDump(frontendArgs))
-	rootNode = fusefrontend.NewRootNode(frontendArgs, cEnc, nameTransform)
+	rootNode = fusefrontend.NewRootNode(frontendArgs, cEnc, nameTransform, rootID, rootWrappedKey)
 
 	// We have opened the socket early so that we cannot fail here after
 	// asking the user for the password

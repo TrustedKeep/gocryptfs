@@ -2,8 +2,11 @@ package tkc
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 
+	"github.com/TrustedKeep/tkutils/v2/kem"
+	"github.com/google/uuid"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 	"go.etcd.io/bbolt"
 )
@@ -15,9 +18,11 @@ var (
 )
 
 type mockConnector struct {
-	nodeID string
-	db     *bbolt.DB
-	mu     sync.Mutex
+	nodeID       string
+	currentKeyID string
+
+	db *bbolt.DB
+	mu sync.Mutex
 }
 
 func newMockConnector(nodeID string) *mockConnector {
@@ -55,4 +60,66 @@ func (m *mockConnector) GetKey(path []byte) (key []byte, err error) {
 		}
 	}
 	return
+}
+
+func (m *mockConnector) GetEnvelopeKey(id string) (key kem.Kem, err error) {
+	//get the key
+	keyBytes, err := m.dbGet([]byte(m.ekPath(id)))
+	if err != nil {
+		return
+	}
+	//unmarshalKem
+	return kem.UnmarshalKem(keyBytes)
+}
+
+func (m *mockConnector) CreateEnvelopeKey(ktStr string, name string) (id string, key kem.Kem, err error) {
+	//Create the key
+	if key, err = kem.NewKem(kem.KemTypeFromString(ktStr)); err != nil {
+		return
+	}
+
+	var keyData []byte
+	if keyData, err = kem.MarshalKem(key); err != nil {
+		return
+	}
+	//throw it into the db
+	if name == "" {
+		id = uuid.NewString()
+	} else {
+		id = name
+	}
+	if err = m.dbPut([]byte(m.ekPath(id)), keyData); err != nil {
+		return
+	}
+	return
+}
+
+func (m *mockConnector) GetCurrentKeyID() string {
+	fmt.Printf("get m.currentKeyID: %v\n", m.currentKeyID)
+	return m.currentKeyID
+}
+
+func (m *mockConnector) SetCurrentKeyID(keyID string) {
+	m.currentKeyID = keyID
+	fmt.Printf("set m.currentKeyID: %v\n", m.currentKeyID)
+}
+
+func (m *mockConnector) dbGet(path []byte) (data []byte, err error) {
+	err = m.db.View(func(t *bbolt.Tx) error {
+		data = t.Bucket(bucketName).Get([]byte(path))
+		return nil
+	})
+	return
+}
+
+func (m *mockConnector) dbPut(path []byte, value []byte) (err error) {
+	err = m.db.Update(func(t *bbolt.Tx) error {
+		return t.Bucket(bucketName).Put(path, value)
+	})
+
+	return
+}
+
+func (m *mockConnector) ekPath(id string) string {
+	return fmt.Sprintf("%s/%s", m.nodeID, id)
 }

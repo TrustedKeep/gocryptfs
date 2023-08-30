@@ -22,6 +22,7 @@ const (
 	// The dot "." is not used in base64url (RFC4648), hence
 	// we can never clash with an encrypted file.
 	ConfDefaultName = "gocryptfs.conf"
+	EnvSetUpFlag    = "CEK" //created envelope key, if this file exists, it means the current envelope key has already been created
 )
 
 // ConfFile is the content of a config file.
@@ -42,8 +43,12 @@ type ConfFile struct {
 	MockAWS bool `json:",omitempty"`
 	// MockKMS uses a mock KMS for development
 	MockKMS bool `json:",omitempty"`
-	// KeyPool is the size of the pool of keys to use, zero means 1 / file.
+	// KeyPool is the size of the pool of keys to use, zero is no longer an option, Negative one means envelope encryption
 	KeyPool int `json:",omitempty"`
+	//EnvelopeID is the id in the kms of the envelope key that will be used to encrypt the individual file encryption keys ... TODO: this will probably need to be re-set during key rotations
+	EnvelopeID string `json:",omitempty"` //TODO: MAKE SURE THIS IS UPDATED DURING KEY ROTATION
+	//EnvEncAlg is the encryption algorithm that will be used to envelope encrypt the individual file keys
+	EnvEncAlg string `json:",omitempty"`
 	// LongNameMax corresponds to the -longnamemax flag
 	LongNameMax uint8 `json:",omitempty"`
 	// Filename is the name of the config file. Not exported to JSON.
@@ -61,6 +66,7 @@ type CreateArgs struct {
 	MockAWS            bool
 	MockKMS            bool
 	KeyPool            int
+	EnvEncAlg          string
 	LongNameMax        uint8
 }
 
@@ -74,11 +80,12 @@ func Create(args *CreateArgs) error {
 		MockAWS:      args.MockAWS,
 		MockKMS:      args.MockKMS,
 		KeyPool:      args.KeyPool,
+		EnvelopeID:   uuid.NewString(),
+		EnvEncAlg:    args.EnvEncAlg,
 	}
 
 	if cf.NodeID == "" {
-		uid, _ := uuid.NewRandom()
-		cf.NodeID = uid.String()
+		cf.NodeID = uuid.NewString()
 	}
 
 	// Feature flags

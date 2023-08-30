@@ -4,9 +4,11 @@ package fusefrontend
 // "xattr_integration_test.go" in the test/xattr package.
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/hanwen/go-fuse/v2/fs"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
@@ -18,10 +20,21 @@ import (
 func newTestFS(args Args) *RootNode {
 	// Init crypto backend
 	tkc.Connect("", "", true, true)
-	cCore := cryptocore.New(cryptocore.BackendGoGCM, contentenc.DefaultIVBits, 0, true)
+	id, kem, err := tkc.Get().CreateEnvelopeKey(kem.RSA2048.String(), "")
+	if err != nil {
+		fmt.Printf("couldnt create env key err: %v\n", err)
+		return nil
+	}
+
+	_, wrapped, err := kem.Wrap()
+	if err != nil {
+		fmt.Printf("wrapping key err: %v\n", err)
+		return nil
+	}
+	cCore := cryptocore.New(cryptocore.BackendGoGCM, contentenc.DefaultIVBits, 0, true, id, wrapped)
 	cEnc := contentenc.New(cCore, contentenc.DefaultBS)
 	n := nametransform.New(cCore.EMECipher, true, 0, true, nil, false)
-	rn := NewRootNode(args, cEnc, n)
+	rn := NewRootNode(args, cEnc, n, id, wrapped)
 	oneSec := time.Second
 	options := &fs.Options{
 		EntryTimeout: &oneSec,

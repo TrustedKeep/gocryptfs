@@ -198,8 +198,8 @@ func (n *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Filter and decrypt filenames
 	for i := range cipherEntries {
 		cName := cipherEntries[i].Name
-		if n.IsRoot() && cName == configfile.ConfDefaultName {
-			// silently ignore "gocryptfs.conf" in the top level dir
+		if n.IsRoot() && (cName == configfile.ConfDefaultName || cName == configfile.EnvSetUpFlag) {
+			// silently ignore "gocryptfs.conf" and "CEK" in the top level dir
 			continue
 		}
 		if rn.args.PlaintextNames {
@@ -210,6 +210,7 @@ func (n *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 			// silently ignore "gocryptfs.diriv" everywhere if dirIV is enabled
 			continue
 		}
+
 		// Handle long file name
 		isLong := nametransform.LongNameNone
 		if rn.args.LongNames {

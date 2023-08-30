@@ -7,11 +7,14 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"fmt"
 
 	client "github.com/TrustedKeep/boundary/client"
 	"github.com/TrustedKeep/boundary/common"
 	"github.com/TrustedKeep/boundary/tcmproto"
 	"github.com/TrustedKeep/tkutils/v2/certutil"
+	"github.com/TrustedKeep/tkutils/v2/kem"
+	"github.com/google/uuid"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
@@ -19,7 +22,9 @@ var _ KMSConnector = &tbConnector{}
 
 // tbConnector connects us to Boundary for key retrieval
 type tbConnector struct {
-	nodeID     string
+	nodeID       string
+	currentKeyID string
+
 	c          *client.Client
 	publicKey  []byte
 	privateKey *rsa.PrivateKey
@@ -47,6 +52,7 @@ func newtbConnector(tbHost, id string, mockAWS bool) KMSConnector {
 		for {
 			// ignore hearbeats
 			<-tbc.c.Heartbeat()
+			//TODO: This is where we'd check for a forced key rotation
 		}
 	}()
 	prvKey, err := certutil.GeneratePrivateKey(certutil.KeyTypeRSA)
@@ -72,4 +78,58 @@ func (tbc *tbConnector) GetKey(path []byte) (key []byte, err error) {
 	}
 	key, err = rsa.DecryptOAEP(sha256.New(), rand.Reader, tbc.privateKey, resp.Key, nil)
 	return
+}
+
+func (tbc *tbConnector) GetEnvelopeKey(id string) (key kem.Kem, err error) {
+	//get kem
+	tlog.Info.Printf("Retrieving envelope key from KMS: %s", string(id))
+	var resp *tcmproto.RetrieveEKResponse
+	if resp, err = tbc.c.Connection().RetrieveEK(context.Background(), &tcmproto.RetrieveEKRequest{
+		Path: tbc.ekPath(id),
+	}); err != nil {
+		return
+	}
+	//unmarshal it
+	return kem.UnmarshalKem(resp.EKBytes)
+}
+
+func (tbc *tbConnector) CreateEnvelopeKey(ktStr string, name string) (id string, key kem.Kem, err error) {
+	// create the new key
+
+	if name == "" {
+		id = uuid.NewString()
+	} else {
+		if len(name) != EnvelopeIDLength {
+			err = fmt.Errorf("Key Name must be %d bytes long, but was %d bytes long", EnvelopeIDLength, len(name))
+			return
+		}
+		id = name
+	}
+	var resp *tcmproto.CreateEKResponse
+	if resp, err = tbc.c.Connection().CreateEK(context.Background(), &tcmproto.CreateEKRequest{
+		Path: tbc.ekPath(id),
+		Type: ktStr,
+	}); err != nil {
+		return
+	}
+
+	//unmarshal it
+	key, err = kem.UnmarshalKem(resp.EKBytes)
+	if err != nil {
+		return
+	}
+
+	return
+}
+
+func (tbc *tbConnector) GetCurrentKeyID() string {
+	return tbc.currentKeyID
+}
+
+func (tbc *tbConnector) SetCurrentKeyID(keyID string) {
+	tbc.currentKeyID = keyID
+}
+
+func (tbc *tbConnector) ekPath(id string) string {
+	return fmt.Sprintf("%s/%s", tbc.nodeID, id)
 }

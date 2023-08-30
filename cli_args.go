@@ -23,6 +23,9 @@ import (
 )
 
 // argContainer stores the parsed CLI options and arguments
+
+const DefaultEnvAlg = "RSA-2048"
+
 type argContainer struct {
 	debug, init, zerokey, fusedebug, fg, version,
 	plaintextnames, quiet, nosyslog, wpanic,
@@ -52,9 +55,9 @@ type argContainer struct {
 	_forceOwner *fuse.Owner
 
 	// tk specific options
-	boundaryHost, nodeID string
-	mockAWS, mockKMS     bool
-	keyPool              int
+	boundaryHost, nodeID, envEncAlg string
+	mockAWS, mockKMS                bool
+	keyPool                         int // -1 means envelope encryption, anything above 0 means legacy mode
 }
 
 var flagSet *flag.FlagSet
@@ -182,9 +185,10 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	// TK specific options
 	flagSet.StringVar(&args.boundaryHost, "boundary-host", fmt.Sprintf("%s:%d", network.GetLocalIP(), 5050), "Host:port of TrustedBoundary")
 	flagSet.StringVar(&args.nodeID, "node-id", "", "Unique identifier for the mount")
+	flagSet.StringVar(&args.envEncAlg, "env-enc-alg", DefaultEnvAlg, "The encrytion algorithm that will be used to envelop encrypt the file encryption keys. Options are RSA-2048, RSA-3072, Kyber-512, KyberX25519-512, Kyber-768, KyberX25519-768, KyberX448-768, Kyber-1024, KyberX448-1024")
 	flagSet.BoolVarP(&args.mockAWS, "mock-aws", "", false, "Mock AWS connection for development")
 	flagSet.BoolVarP(&args.mockKMS, "mock-kms", "", false, "Use a mock KMS for development, no Boundary required")
-	flagSet.IntVarP(&args.keyPool, "key-pool", "", 0, "Size of pool of encryption keys, zero indicates 1 key / file")
+	flagSet.IntVarP(&args.keyPool, "key-pool", "", -1, "Size of pool of encryption keys, when not explicitly set, envelope encryption will be used for file keys instead of a keypool")
 
 	// Mount options with opposites
 	flagSet.BoolVar(&args.dev, "dev", false, "Allow device files")
@@ -271,6 +275,11 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 		os.Exit(exitcodes.Usage)
 	}
 
+	//keypool either needs to be the default of -1 or greater than 0
+	if args.keyPool != -1 && args.keyPool <= 0 {
+		tlog.Fatal.Printf("-keypool: value %d is not greater than zero", args.keyPool)
+		os.Exit(exitcodes.Usage)
+	}
 	return args
 }
 
