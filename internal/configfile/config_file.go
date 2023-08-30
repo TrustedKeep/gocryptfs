@@ -43,7 +43,7 @@ type ConfFile struct {
 	MockAWS bool `json:",omitempty"`
 	// MockKMS uses a mock KMS for development
 	MockKMS bool `json:",omitempty"`
-	// KeyPool is the size of the pool of keys to use,zero is no longer an option, Negative one means envelope encryption
+	// KeyPool is the size of the pool of keys to use, zero is no longer an option, Negative one means envelope encryption
 	KeyPool int `json:",omitempty"`
 	//EnvelopeID is the id in the kms of the envelope key that will be used to encrypt the individual file encryption keys ... TODO: this will probably need to be re-set during key rotations
 	EnvelopeID string `json:",omitempty"` //TODO: MAKE SURE THIS IS UPDATED DURING KEY ROTATION

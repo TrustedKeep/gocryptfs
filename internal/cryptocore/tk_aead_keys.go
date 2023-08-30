@@ -153,7 +153,6 @@ func parseAD(ad []byte) (envKeyID string, wrapper []byte, err error) {
 
 // retrieveKey attempts to get either the envelope key or the symmetric from the cache, or failing that, from the kms
 func RetrieveKey(id string, envelope bool) (iKey interface{}) {
-	//fmt.Printf("retrieve key id: %s, envelope: %t\n", id, envelope)
 	var ok bool
 	var err error
 

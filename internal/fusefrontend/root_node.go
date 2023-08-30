@@ -61,8 +61,6 @@ type RootNode struct {
 	quirks uint64
 
 	//The things necessary for envelope encryption
-	//might end up putting these somewhere else, but not sure where yet, possibly inside contentEnc or nametransform
-	//or maybe args?
 	rootEnvKeyID   string
 	rootWrappedKey []byte
 }

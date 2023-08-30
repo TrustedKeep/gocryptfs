@@ -37,8 +37,6 @@ func TestRemoveLongNameSuffix(t *testing.T) {
 }
 
 func newLognamesTestInstance(longNameMax uint8) *NameTransform {
-
-	//did this test func ever work?
 	tkc.Connect("", "", true, true)
 	id, kem, err := tkc.Get().CreateEnvelopeKey(kem.RSA2048.String(), "")
 	if err != nil {
