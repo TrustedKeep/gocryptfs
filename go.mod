@@ -5,7 +5,7 @@ go 1.21
 toolchain go1.21.0
 
 require (
-	github.com/TrustedKeep/boundary v1.1.5-0.20230830172408-50142d28a4a9
+	github.com/TrustedKeep/boundary v1.2.0
 	github.com/TrustedKeep/tkutils/v2 v2.10.4
 	github.com/google/uuid v1.3.1
 	github.com/hanwen/go-fuse/v2 v2.1.1-0.20221117175120-915cf5413cde
