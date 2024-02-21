@@ -19,7 +19,7 @@ import (
 
 func newTestFS(args Args) *RootNode {
 	// Init crypto backend
-	tkc.Connect("", "", true, true)
+	tkc.Connect("", "", true, true, false)
 	id, kem, err := tkc.Get().CreateEnvelopeKey(kem.RSA2048.String(), "")
 	if err != nil {
 		fmt.Printf("couldnt create env key err: %v\n", err)
@@ -35,10 +35,10 @@ func newTestFS(args Args) *RootNode {
 	cEnc := contentenc.New(cCore, contentenc.DefaultBS)
 	n := nametransform.New(cCore.EMECipher, true, 0, true, nil, false)
 	rn := NewRootNode(args, cEnc, n, id, wrapped)
-	oneSec := time.Second
+	oneSecond := time.Second
 	options := &fs.Options{
-		EntryTimeout: &oneSec,
-		AttrTimeout:  &oneSec,
+		EntryTimeout: &oneSecond,
+		AttrTimeout:  &oneSecond,
 	}
 	fs.NewNodeFS(rn, options)
 	return rn

@@ -55,6 +55,7 @@ Common Options (use -hh to show all):
   -key-pool          If set, Number indicates size of legacy encryption key pool, otherwise envelope encryption is used
   -mock-aws          Use a mock AWS connection for development and testing
   -mock-kms          Use a mock KMS for development and testing
+  -search            Use TrustedSearch as a key provider
   -version           Print version information
   --                 Stop option parsing
 `)

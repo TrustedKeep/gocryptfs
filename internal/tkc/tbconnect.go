@@ -100,7 +100,7 @@ func (tbc *tbConnector) CreateEnvelopeKey(ktStr string, name string) (id string,
 		id = uuid.NewString()
 	} else {
 		if len(name) != EnvelopeIDLength {
-			err = fmt.Errorf("Key Name must be %d bytes long, but was %d bytes long", EnvelopeIDLength, len(name))
+			err = fmt.Errorf("key Name must be %d bytes long, but was %d bytes long", EnvelopeIDLength, len(name))
 			return
 		}
 		id = name

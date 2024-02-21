@@ -125,6 +125,9 @@ func concatAD(blockNo uint64, fileID []byte, envelopeID string, wrappedKey []byt
 		// and for symlinks and xattrs.
 		log.Panicf("wrong fileID length: %d", len(fileID))
 	}
+	if len(fileID) == 0 {
+		fileID = make([]byte, headerIDLen)
+	}
 	const lenUint64 = 8
 	// Preallocate space to save an allocation in append()
 	if envelopeID != "" {

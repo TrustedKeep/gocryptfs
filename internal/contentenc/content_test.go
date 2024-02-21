@@ -108,7 +108,7 @@ func TestBlockNo(t *testing.T) {
 }
 
 func createTKKeys() (id string, wrapped []byte, err error) {
-	tkc.Connect("", "", true, true)
+	tkc.Connect("", "", true, true, false)
 	id, kem, err := tkc.Get().CreateEnvelopeKey(kem.RSA2048.String(), "")
 	if err != nil {
 		err = fmt.Errorf("couldnt create env key err: %v\n", err)

@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"go/build"
 	"io"
 	"log"
 	"math"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/pkg/xattr"
+	"golang.org/x/sys/unix"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
@@ -71,7 +74,6 @@ func NewFile(fd int, cName string, rn *RootNode) (f *File, st *syscall.Stat_t, e
 	}
 	qi := inomap.QInoFromStat(st)
 	e := openfiletable.Register(qi)
-
 	osFile := os.NewFile(uintptr(fd), cName)
 
 	f = &File{
@@ -182,7 +184,7 @@ func (f *File) doRead(dst []byte, off uint64, length uint64) ([]byte, syscall.Er
 		// Save into the file table
 		f.fileTableEntry.ID = fileID
 		if f.rootNode.args.Envelope {
-			envelopeID, wrappedKey, err = getEnvelopeAttrs(f.fd)
+			envelopeID, wrappedKey, err = getEnvelopeAttrs(f)
 			if err != nil {
 				f.fileTableEntry.IDLock.Unlock()
 				tlog.Warn.Printf("doRead %d: error getting xattrs for enveloping: %v", f.qIno.Ino, err)
@@ -330,13 +332,24 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 					return 0, syscall.EIO
 				}
 				crypto.Zeroize(key)
-				//save the wrapped key
-				err = xattr.FSet(f.fd, tkc.EnvelopeIDAttrName, []byte(envKeyID))
+
+				isDarwin := strings.EqualFold(build.Default.GOOS, "darwin")
+				// save the wrapped key
+				if isDarwin {
+					err = unix.Fsetxattr(int(f.fd.Fd()), tkc.EnvelopeIDAttrName, []byte(envKeyID), 0)
+				} else {
+					err = xattr.FSet(f.fd, tkc.EnvelopeIDAttrName, []byte(envKeyID))
+				}
 				if err != nil {
 					tlog.Warn.Printf("doWrite %d: error setting envelopeID: %v", f.qIno.Ino, err)
 					return 0, syscall.EIO
 				}
-				err = xattr.FSet(f.fd, tkc.WrappedKeyAttrName, wrapper)
+
+				if isDarwin {
+					err = unix.Fsetxattr(int(f.fd.Fd()), tkc.WrappedKeyAttrName, wrapper, 0)
+				} else {
+					err = xattr.FSet(f.fd, tkc.WrappedKeyAttrName, wrapper)
+				}
 				if err != nil {
 					tlog.Warn.Printf("doWrite %d: error setting wrappedKey: %v", f.qIno.Ino, err)
 					return 0, syscall.EIO
@@ -353,7 +366,7 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 			f.fileTableEntry.ID = fileID
 			//get the key id and the wrapped key if we both are actually using enveloping and we didn't just create them
 			if f.rootNode.args.Envelope {
-				f.fileTableEntry.EnvKeyID, f.fileTableEntry.Wrapper, err = getEnvelopeAttrs(f.fd)
+				f.fileTableEntry.EnvKeyID, f.fileTableEntry.Wrapper, err = getEnvelopeAttrs(f)
 				if err != nil {
 					tlog.Warn.Printf("doWrite %d: error getting xattrs for enveloping: %v", f.qIno.Ino, err)
 					return 0, syscall.EIO
@@ -527,22 +540,38 @@ func (f *File) Getattr(ctx context.Context, a *fuse.AttrOut) syscall.Errno {
 }
 
 // TODO: SEE if we want to return the errors for things not having length
-func getEnvelopeAttrs(f *os.File) (envelopeID string, wrappedKey []byte, err error) {
-	envelopeIDByte, err := xattr.FGet(f, tkc.EnvelopeIDAttrName)
+func getEnvelopeAttrs(f *File) (envelopeID string, wrappedKey []byte, err error) {
+	isDarwin := strings.EqualFold(build.Default.GOOS, "darwin")
+	// var path string
+	var envelopeIDByte []byte
+	if isDarwin {
+		idBytes := make([]byte, 100)
+		var sz int
+		if sz, err = unix.Fgetxattr(int(f.fd.Fd()), tkc.EnvelopeIDAttrName, idBytes); err == nil {
+			envelopeIDByte = idBytes[:sz]
+		}
+	} else {
+		envelopeIDByte, err = xattr.FGet(f.fd, tkc.EnvelopeIDAttrName)
+	}
 	if err != nil {
 		return
 	} else if len(envelopeIDByte) == 0 {
-		//err =
 		fmt.Println("unable to get envelopeID from xattrs")
-		//return
 	}
-	wrappedKey, err = xattr.FGet(f, tkc.WrappedKeyAttrName)
+
+	if isDarwin {
+		wrappedKey = make([]byte, 255)
+		var sz int
+		if sz, err = unix.Fgetxattr(int(f.fd.Fd()), tkc.WrappedKeyAttrName, wrappedKey); err == nil {
+			wrappedKey = wrappedKey[:sz]
+		}
+	} else {
+		wrappedKey, err = xattr.FGet(f.fd, tkc.WrappedKeyAttrName)
+	}
 	if err != nil {
 		return
 	} else if len(wrappedKey) == 0 {
-		//err =
 		fmt.Println("unable to get wrappedkey from xattrs")
-		//return
 	}
 	envelopeID = string(envelopeIDByte)
 	return

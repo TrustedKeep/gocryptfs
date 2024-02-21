@@ -66,6 +66,7 @@ func initDir(args *argContainer) {
 			NodeID:             args.nodeID,
 			MockAWS:            args.mockAWS,
 			MockKMS:            args.mockKMS,
+			IsSearch:           args.isSearch,
 			BoundaryHost:       args.boundaryHost,
 			KeyPool:            args.keyPool,
 			LongNameMax:        args.longnamemax,

@@ -32,8 +32,13 @@ type KMSConnector interface {
 }
 
 // Connect starts up our connection to the KMS.  Should be the first thing we do.
-func Connect(tbHost, id string, mockAWS, mockKMS bool) {
+func Connect(tbHost, id string, mockAWS, mockKMS, isSearch bool) {
 	initOnce.Do(func() {
+		if isSearch {
+			tlog.Info.Printf("Opening TrustedSearch key provider")
+			c = newSearchConnector()
+			return
+		}
 		if mockKMS {
 			tlog.Info.Printf("Opening mock KMS local store")
 			c = newMockConnector(id)

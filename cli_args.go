@@ -56,7 +56,7 @@ type argContainer struct {
 
 	// tk specific options
 	boundaryHost, nodeID, envEncAlg string
-	mockAWS, mockKMS                bool
+	mockAWS, mockKMS, isSearch      bool
 	keyPool                         int // -1 means envelope encryption, anything above 0 means legacy mode
 }
 
@@ -188,6 +188,7 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.StringVar(&args.envEncAlg, "env-enc-alg", DefaultEnvAlg, "The encrytion algorithm that will be used to envelop encrypt the file encryption keys. Options are RSA-2048, RSA-3072, Kyber-512, KyberX25519-512, Kyber-768, KyberX25519-768, KyberX448-768, Kyber-1024, KyberX448-1024")
 	flagSet.BoolVarP(&args.mockAWS, "mock-aws", "", false, "Mock AWS connection for development")
 	flagSet.BoolVarP(&args.mockKMS, "mock-kms", "", false, "Use a mock KMS for development, no Boundary required")
+	flagSet.BoolVarP(&args.isSearch, "search", "", false, "Use TrustedSearch as key provider")
 	flagSet.IntVarP(&args.keyPool, "key-pool", "", -1, "Size of pool of encryption keys, when not explicitly set, envelope encryption will be used for file keys instead of a keypool")
 
 	// Mount options with opposites

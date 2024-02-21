@@ -5,7 +5,6 @@ package configfile
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"syscall"
 
 	"os"
@@ -42,7 +41,8 @@ type ConfFile struct {
 	// MockAWS uses a mock AWS connection for development
 	MockAWS bool `json:",omitempty"`
 	// MockKMS uses a mock KMS for development
-	MockKMS bool `json:",omitempty"`
+	MockKMS  bool `json:",omitempty"`
+	IsSearch bool `json:",omitempty"`
 	// KeyPool is the size of the pool of keys to use, zero is no longer an option, Negative one means envelope encryption
 	KeyPool int `json:",omitempty"`
 	//EnvelopeID is the id in the kms of the envelope key that will be used to encrypt the individual file encryption keys ... TODO: this will probably need to be re-set during key rotations
@@ -65,6 +65,7 @@ type CreateArgs struct {
 	BoundaryHost       string
 	MockAWS            bool
 	MockKMS            bool
+	IsSearch           bool
 	KeyPool            int
 	EnvEncAlg          string
 	LongNameMax        uint8
@@ -79,6 +80,7 @@ func Create(args *CreateArgs) error {
 		BoundaryHost: args.BoundaryHost,
 		MockAWS:      args.MockAWS,
 		MockKMS:      args.MockKMS,
+		IsSearch:     args.IsSearch,
 		KeyPool:      args.KeyPool,
 		EnvelopeID:   uuid.NewString(),
 		EnvEncAlg:    args.EnvEncAlg,
@@ -123,12 +125,12 @@ func Load(filename string) (*ConfFile, error) {
 	cf.filename = filename
 
 	// Read from disk
-	js, err := ioutil.ReadFile(filename)
+	js, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, err
 	}
 	if len(js) == 0 {
-		return nil, fmt.Errorf("Config file is empty")
+		return nil, fmt.Errorf("config file is empty")
 	}
 
 	// Unmarshal
