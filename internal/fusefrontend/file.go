@@ -545,8 +545,11 @@ func getEnvelopeAttrs(f *File) (envelopeID string, wrappedKey []byte, err error)
 	// var path string
 	var envelopeIDByte []byte
 	if isDarwin {
-		idBytes := make([]byte, 100)
 		var sz int
+		if sz, err = unix.Fgetxattr(int(f.fd.Fd()), tkc.EnvelopeIDAttrName, nil); err != nil {
+			return
+		}
+		idBytes := make([]byte, sz)
 		if sz, err = unix.Fgetxattr(int(f.fd.Fd()), tkc.EnvelopeIDAttrName, idBytes); err == nil {
 			envelopeIDByte = idBytes[:sz]
 		}
@@ -560,8 +563,11 @@ func getEnvelopeAttrs(f *File) (envelopeID string, wrappedKey []byte, err error)
 	}
 
 	if isDarwin {
-		wrappedKey = make([]byte, 255)
 		var sz int
+		if sz, err = unix.Fgetxattr(int(f.fd.Fd()), tkc.WrappedKeyAttrName, nil); err != nil {
+			return
+		}
+		wrappedKey = make([]byte, sz)
 		if sz, err = unix.Fgetxattr(int(f.fd.Fd()), tkc.WrappedKeyAttrName, wrappedKey); err == nil {
 			wrappedKey = wrappedKey[:sz]
 		}
@@ -576,21 +582,3 @@ func getEnvelopeAttrs(f *File) (envelopeID string, wrappedKey []byte, err error)
 	envelopeID = string(envelopeIDByte)
 	return
 }
-
-// TODO:
-// fix me:
-/*
-unted and ready.
-17:37:22.855095 Fetching envelope key "9ac8c33c-44b7-4672-b7c3-6be1d372d0cf" from search
-^CdoWrite 58243260: error getting xattrs for enveloping: result too large
-doWrite 58243258: error getting xattrs for enveloping: result too large
-doWrite 58243257: error getting xattrs for enveloping: result too large
-doWrite 58243256: error getting xattrs for enveloping: result too large
-doWrite 58243255: error getting xattrs for enveloping: result too large
-doWrite 58243253: error getting xattrs for enveloping: result too large
-doWrite 58243252: error getting xattrs for enveloping: result too large
-doWrite 58243251: error getting xattrs for enveloping: result too large
-Unable to parse id and wrapper out of AD: ad is too short, envelopeID and wrapper are not present
-panic: crypto/aes: invalid key size 0
-
-*/
