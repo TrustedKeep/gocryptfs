@@ -39,7 +39,7 @@ func newSearchConnector(caPath string) KMSConnector {
 	tlsConfig.RootCAs = pool
 	return &searchConnector{
 		client: &http.Client{
-			Timeout: time.Second * 2,
+			Timeout: time.Second * 10,
 			Transport: &http.Transport{
 				MaxIdleConns:    1,
 				MaxConnsPerHost: 2,
