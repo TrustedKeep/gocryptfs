@@ -14,7 +14,7 @@ const tUsage = "" +
 func helpShort() {
 	printVersion()
 	fmt.Printf("\n")
-	fmt.Printf(tUsage)
+	fmt.Print(tUsage)
 	// 	fmt.Printf(`
 	// Common Options (use -hh to show all):
 	//   -allow_other       Allow other users to access the mount
@@ -65,7 +65,7 @@ Common Options (use -hh to show all):
 func helpLong() {
 	printVersion()
 	fmt.Printf("\n")
-	fmt.Printf(tUsage)
+	fmt.Print(tUsage)
 	fmt.Printf(`
 Notes: All options can equivalently use "-" (single dash) or "--" (double dash).
        A standalone "--" stops option parsing.
