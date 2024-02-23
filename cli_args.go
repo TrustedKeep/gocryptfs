@@ -57,6 +57,7 @@ type argContainer struct {
 	// tk specific options
 	boundaryHost, nodeID, envEncAlg string
 	mockAWS, mockKMS, isSearch      bool
+	caChainPath                     string
 	keyPool                         int // -1 means envelope encryption, anything above 0 means legacy mode
 }
 
@@ -189,6 +190,7 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVarP(&args.mockAWS, "mock-aws", "", false, "Mock AWS connection for development")
 	flagSet.BoolVarP(&args.mockKMS, "mock-kms", "", false, "Use a mock KMS for development, no Boundary required")
 	flagSet.BoolVarP(&args.isSearch, "search", "", false, "Use TrustedSearch as key provider")
+	flagSet.StringVarP(&args.caChainPath, "ca-path", "", "", "Internal use")
 	flagSet.IntVarP(&args.keyPool, "key-pool", "", -1, "Size of pool of encryption keys, when not explicitly set, envelope encryption will be used for file keys instead of a keypool")
 
 	// Mount options with opposites

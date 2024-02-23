@@ -71,6 +71,7 @@ func initDir(args *argContainer) {
 			KeyPool:            args.keyPool,
 			LongNameMax:        args.longnamemax,
 			EnvEncAlg:          args.envEncAlg,
+			CAPath:             args.caChainPath,
 		})
 		if err != nil {
 			tlog.Fatal.Println(err)

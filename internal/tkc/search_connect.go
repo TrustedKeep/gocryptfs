@@ -1,15 +1,21 @@
 package tkc
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/TrustedKeep/tkutils/v2/kem"
+	"github.com/TrustedKeep/tkutils/v2/logger"
+	"github.com/TrustedKeep/tkutils/v2/tlsutils"
+	"go.uber.org/zap"
 )
 
 var errNotImplemented = errors.New("not implemented in search connector")
@@ -21,7 +27,16 @@ type searchConnector struct {
 	client    *http.Client
 }
 
-func newSearchConnector() KMSConnector {
+func newSearchConnector(caPath string) KMSConnector {
+	caChain, err := os.ReadFile(caPath)
+	if err != nil {
+		logger.Get().Error("Error reading CAChain file", zap.Error(err))
+	}
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(caChain)
+	tlsConfig := tlsutils.NewTLSConfig()
+	tlsConfig.ClientAuth = tls.NoClientCert
+	tlsConfig.RootCAs = pool
 	return &searchConnector{
 		client: &http.Client{
 			Timeout: time.Second * 2,
@@ -29,6 +44,7 @@ func newSearchConnector() KMSConnector {
 				MaxIdleConns:    1,
 				MaxConnsPerHost: 2,
 				IdleConnTimeout: time.Minute,
+				TLSClientConfig: tlsConfig,
 			},
 		},
 	}
