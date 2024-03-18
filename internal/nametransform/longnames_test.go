@@ -37,7 +37,7 @@ func TestRemoveLongNameSuffix(t *testing.T) {
 }
 
 func newLognamesTestInstance(longNameMax uint8) *NameTransform {
-	tkc.Connect("", "", true, true, false, "")
+	tkc.Connect("", "", true, true, false)
 	id, kem, err := tkc.Get().CreateEnvelopeKey(kem.RSA2048.String(), "")
 	if err != nil {
 		fmt.Printf("couldnt create env key err: %v\n", err)

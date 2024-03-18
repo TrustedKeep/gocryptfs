@@ -2,20 +2,21 @@ package tkc
 
 import (
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/build"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/TrustedKeep/tkutils/v2/diskutil"
 	"github.com/TrustedKeep/tkutils/v2/kem"
-	"github.com/TrustedKeep/tkutils/v2/logger"
+	"github.com/TrustedKeep/tkutils/v2/kmsclient"
 	"github.com/TrustedKeep/tkutils/v2/tlsutils"
-	"go.uber.org/zap"
 )
 
 var errNotImplemented = errors.New("not implemented in search connector")
@@ -23,29 +24,94 @@ var errNotImplemented = errors.New("not implemented in search connector")
 var _ KMSConnector = (*searchConnector)(nil)
 
 type searchConnector struct {
-	currKeyID string
-	client    *http.Client
+	currKeyID   string
+	ramdiskPath string
+	lastUpdate  time.Time
+	client      *http.Client
+	token       string
+	kmsHosts    []string
 }
 
-func newSearchConnector(caPath string) KMSConnector {
-	caChain, err := os.ReadFile(caPath)
-	if err != nil {
-		logger.Get().Error("Error reading CAChain file", zap.Error(err))
+func newSearchConnector() KMSConnector {
+	s := &searchConnector{
+		ramdiskPath: "/usr/local/trustedsearch/ramdisk",
 	}
-	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(caChain)
-	tlsConfig := tlsutils.NewTLSConfig()
-	tlsConfig.ClientAuth = tls.NoClientCert
-	tlsConfig.RootCAs = pool
-	return &searchConnector{
-		client: &http.Client{
-			Timeout: time.Second * 10,
-			Transport: &http.Transport{
-				MaxIdleConns:    1,
-				MaxConnsPerHost: 2,
-				IdleConnTimeout: time.Minute,
-				TLSClientConfig: tlsConfig,
-			},
+	if _, err := os.Stat(s.ramdiskPath); err != nil {
+		if goPath := build.Default.GOPATH; len(goPath) > 0 {
+			s.ramdiskPath = fmt.Sprintf("%s/src/github.com/TrustedKeep/lizard/local/ramdisk", goPath)
+			diskutil.EnsureDir(s.ramdiskPath)
+		}
+	}
+	s.newClient()
+	go func() {
+		for {
+			<-time.After(time.Minute)
+			s.newClient()
+		}
+	}()
+	return s
+}
+
+func (sc *searchConnector) newClient() {
+	certPath := fmt.Sprintf("%s/gw.cert.pem", sc.ramdiskPath)
+	fi, err := os.Stat(certPath)
+	if err != nil {
+		log.Printf("error in stat on ramdisk cert : %v\n", err)
+		return
+	}
+	if !fi.ModTime().After(sc.lastUpdate) {
+		return
+	}
+
+	var hostsData []byte
+	if hostsData, err = os.ReadFile(fmt.Sprintf("%s/gw.hosts.json", sc.ramdiskPath)); err != nil {
+		log.Printf("error reading hosts data file: %v\n", err)
+		return
+	}
+	var hosts []string
+	if err = json.Unmarshal(hostsData, &hosts); err != nil {
+		log.Printf("error unmarshaling hosts data: %v\n", err)
+		return
+	}
+	if len(hosts) == 0 {
+		log.Printf("empty hosts configuration\n")
+		return
+	}
+
+	log.Printf("updating key retrieval certificate, last mod %s\n", fi.ModTime().String())
+	var keyPEM, certPEM, caPEM []byte
+	if certPEM, err = os.ReadFile(certPath); err != nil {
+		log.Printf("error reading cert from ramdisk: %v\n", err)
+		return
+	}
+	if keyPEM, err = os.ReadFile(fmt.Sprintf("%s/gw.key.pem", sc.ramdiskPath)); err != nil {
+		log.Printf("error reading key from ramdisk: %v\n", err)
+		return
+	}
+	if caPEM, err = os.ReadFile(fmt.Sprintf("%s/gw.ca.pem", sc.ramdiskPath)); err != nil {
+		log.Printf("error reading ca from ramdisk:  %v\n", err)
+		return
+	}
+	var tokenBytes []byte
+	if tokenBytes, err = os.ReadFile(fmt.Sprintf("%s/gw.token", sc.ramdiskPath)); err != nil {
+		log.Printf("error reading token from ramdisk: %v\n", err)
+		return
+	}
+	var tlsConfig *tls.Config
+	if tlsConfig, err = tlsutils.NewTLSConfigWithCert(keyPEM, certPEM, caPEM); err != nil {
+		log.Printf("error building TLS configuration: %v\n", err)
+		return
+	}
+	sc.lastUpdate = fi.ModTime()
+	sc.token = string(tokenBytes)
+	sc.kmsHosts = hosts
+	sc.client = &http.Client{
+		Timeout: time.Second * 10,
+		Transport: &http.Transport{
+			MaxIdleConns:    1,
+			MaxConnsPerHost: 2,
+			IdleConnTimeout: time.Minute,
+			TLSClientConfig: tlsConfig,
 		},
 	}
 }
@@ -71,32 +137,54 @@ func (sc *searchConnector) SetCurrentKeyID(id string) {
 	sc.currKeyID = id
 }
 
-func (sc *searchConnector) fetchKey(id string) (kID string, key kem.Kem, err error) {
-	log.Printf("Fetching envelope key \"%s\" from search\n", id)
-	var req *http.Request
-	if req, err = http.NewRequest(http.MethodGet, fmt.Sprintf("https://localhost:8890/%s", id), nil); err != nil {
+func (sc *searchConnector) fetchKey(keyID string) (newID string, key kem.Kem, lastErr error) {
+	if len(keyID) == 0 {
+		keyID = sc.currKeyID
+	}
+
+	doFetch := func(host string) (err error) {
+		log.Printf("Fetching envelope key \"%s\" from KMS %s\n", keyID, host)
+		var u string
+		if len(keyID) > 0 {
+			u = fmt.Sprintf("https://%s:7070/keepsvc/tenantek/retrieve/%s", host, keyID)
+		} else {
+			u = fmt.Sprintf("https://%s:7070/keepsvc/tenantek/current/%d", host, kem.RSA3072)
+		}
+
+		req, err := http.NewRequest(http.MethodGet, u, nil)
+		if err != nil {
+			return
+		}
+		req.Header.Set(kmsclient.HeaderTenantToken, sc.token)
+
+		resp, err := sc.client.Do(req)
+		if err != nil {
+			return
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			err = fmt.Errorf("error retrieving envelope key, server returned %d (%s)", resp.StatusCode, body)
+			return
+		}
+
+		if key, err = kem.UnmarshalKem(body); err != nil {
+			return
+		}
+
+		if newID = resp.Header.Get("x-tk-kem-id"); len(newID) == 0 {
+			newID = keyID
+		}
+
+		log.Printf("Fetched key \"%s\" from KMS", newID)
 		return
 	}
-	var response *http.Response
-	if response, err = sc.client.Do(req); err != nil {
-		return
-	}
-	bodyBytes, _ := io.ReadAll(response.Body)
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		err = fmt.Errorf("server returned %d %s", response.StatusCode, bodyBytes)
-		return
-	}
-	type resultType struct {
-		KemBytes []byte
-		ID       string
-	}
-	var result resultType
-	if err = json.Unmarshal(bodyBytes, &result); err != nil {
-		return
-	}
-	if key, err = kem.UnmarshalKem(result.KemBytes); err == nil {
-		kID = result.ID
+
+	for _, x := range rand.Perm(len(sc.kmsHosts)) {
+		if lastErr = doFetch(sc.kmsHosts[x]); lastErr == nil {
+			return
+		}
 	}
 	return
 }

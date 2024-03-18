@@ -41,9 +41,8 @@ type ConfFile struct {
 	// MockAWS uses a mock AWS connection for development
 	MockAWS bool `json:",omitempty"`
 	// MockKMS uses a mock KMS for development
-	MockKMS  bool   `json:",omitempty"`
-	IsSearch bool   `json:",omitempty"`
-	CAPath   string `json:",omitempty"`
+	MockKMS  bool `json:",omitempty"`
+	IsSearch bool `json:",omitempty"`
 	// KeyPool is the size of the pool of keys to use, zero is no longer an option, Negative one means envelope encryption
 	KeyPool int `json:",omitempty"`
 	//EnvelopeID is the id in the kms of the envelope key that will be used to encrypt the individual file encryption keys ... TODO: this will probably need to be re-set during key rotations
@@ -67,7 +66,6 @@ type CreateArgs struct {
 	MockAWS            bool
 	MockKMS            bool
 	IsSearch           bool
-	CAPath             string
 	KeyPool            int
 	EnvEncAlg          string
 	LongNameMax        uint8
@@ -83,7 +81,6 @@ func Create(args *CreateArgs) error {
 		MockAWS:      args.MockAWS,
 		MockKMS:      args.MockKMS,
 		IsSearch:     args.IsSearch,
-		CAPath:       args.CAPath,
 		KeyPool:      args.KeyPool,
 		EnvelopeID:   uuid.NewString(),
 		EnvEncAlg:    args.EnvEncAlg,

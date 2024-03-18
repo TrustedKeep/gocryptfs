@@ -57,7 +57,6 @@ type argContainer struct {
 	// tk specific options
 	boundaryHost, nodeID, envEncAlg string
 	mockAWS, mockKMS, isSearch      bool
-	caChainPath                     string
 	keyPool                         int // -1 means envelope encryption, anything above 0 means legacy mode
 }
 
@@ -84,7 +83,7 @@ func prefixOArgs(osArgs []string) ([]string, error) {
 		if osArgs[i] == "-o" {
 			// Last argument?
 			if i+1 >= len(osArgs) {
-				return nil, fmt.Errorf("The \"-o\" option requires an argument")
+				return nil, fmt.Errorf("the \"-o\" option requires an argument")
 			}
 			oOpts = strings.Split(osArgs[i+1], ",")
 			// Skip over the arguments to "-o"
@@ -190,7 +189,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVarP(&args.mockAWS, "mock-aws", "", false, "Mock AWS connection for development")
 	flagSet.BoolVarP(&args.mockKMS, "mock-kms", "", false, "Use a mock KMS for development, no Boundary required")
 	flagSet.BoolVarP(&args.isSearch, "search", "", false, "Use TrustedSearch as key provider")
-	flagSet.StringVarP(&args.caChainPath, "ca-path", "", "", "Internal use")
 	flagSet.IntVarP(&args.keyPool, "key-pool", "", -1, "Size of pool of encryption keys, when not explicitly set, envelope encryption will be used for file keys instead of a keypool")
 
 	// Mount options with opposites
@@ -311,12 +309,12 @@ func countOpFlags(args *argContainer) int {
 
 // isFlagPassed finds out if the flag was explicitly passed on the command line.
 // https://stackoverflow.com/a/54747682/1380267
-func isFlagPassed(flagSet *flag.FlagSet, name string) bool {
-	found := false
-	flagSet.Visit(func(f *flag.Flag) {
-		if f.Name == name {
-			found = true
-		}
-	})
-	return found
-}
+// func isFlagPassed(flagSet *flag.FlagSet, name string) bool {
+// 	found := false
+// 	flagSet.Visit(func(f *flag.Flag) {
+// 		if f.Name == name {
+// 			found = true
+// 		}
+// 	})
+// 	return found
+// }
