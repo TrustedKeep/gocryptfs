@@ -206,6 +206,7 @@ func (f *File) truncateGrowFile(oldPlainSz uint64, newPlainSz uint64) syscall.Er
 			if f.rootNode.args.Envelope {
 				err = f.initializeEnvelopeKey()
 				if err != nil {
+					tlog.Warn.Printf("Truncate initializeEnvelopeKey returned error: %v", err)
 					return syscall.EIO
 				}
 			}

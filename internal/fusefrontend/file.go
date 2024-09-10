@@ -316,6 +316,7 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 			if f.rootNode.args.Envelope {
 				err = f.initializeEnvelopeKey()
 				if err != nil {
+					tlog.Warn.Printf("doWrite initializeEnvelopeKey returned error: %v", err)
 					return 0, syscall.EIO
 				}
 			}
@@ -411,13 +412,11 @@ func (f *File) initializeEnvelopeKey() (err error) {
 	iKey := cryptocore.RetrieveKey(envKeyID, true)
 	envKey, ok := iKey.(kem.Kem)
 	if !ok {
-		tlog.Warn.Printf("doWrite %d: somehow got wrong type for envelope key", f.qIno.Ino)
-		return fmt.Errorf("doWrite %d: somehow got wrong type for envelope key", f.qIno.Ino)
+		return fmt.Errorf("initializeEnvelopeKey %d: somehow got wrong type for envelope key", f.qIno.Ino)
 	}
 	//TODO: Add a way to add this to the decrypted cache so we dont have to encrypt and immediately decrypt this
 	key, wrapper, err = envKey.Wrap()
 	if err != nil {
-		tlog.Warn.Printf("doWrite %d: Could not create wrapped key for file, err: %v", f.qIno.Ino, err)
 		return
 	}
 	crypto.Zeroize(key)
@@ -430,8 +429,7 @@ func (f *File) initializeEnvelopeKey() (err error) {
 		err = xattr.FSet(f.fd, tkc.EnvelopeIDAttrName, []byte(envKeyID))
 	}
 	if err != nil {
-		tlog.Warn.Printf("doWrite %d: error setting envelopeID: %v", f.qIno.Ino, err)
-		return fmt.Errorf("doWrite %d: error setting envelopeID: %v", f.qIno.Ino, err)
+		return fmt.Errorf("initializeEnvelopeKey %d: error setting envelopeID: %v", f.qIno.Ino, err)
 	}
 
 	if isDarwin {
@@ -440,8 +438,7 @@ func (f *File) initializeEnvelopeKey() (err error) {
 		err = xattr.FSet(f.fd, tkc.WrappedKeyAttrName, wrapper)
 	}
 	if err != nil {
-		tlog.Warn.Printf("doWrite %d: error setting wrappedKey: %v", f.qIno.Ino, err)
-		return fmt.Errorf("doWrite %d: error setting wrappedKey: %v", f.qIno.Ino, err)
+		return fmt.Errorf("initializeEnvelopeKey %d: error setting wrappedKey: %v", f.qIno.Ino, err)
 	}
 	f.fileTableEntry.EnvKeyID = envKeyID
 	f.fileTableEntry.Wrapper = wrapper
