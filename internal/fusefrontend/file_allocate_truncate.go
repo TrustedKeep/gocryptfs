@@ -202,6 +202,14 @@ func (f *File) truncateGrowFile(oldPlainSz uint64, newPlainSz uint64) syscall.Er
 				return fs.ToErrno(err)
 			}
 			f.fileTableEntry.ID = id
+			//set up the envelope key if needed
+			if f.rootNode.args.Envelope {
+				err = f.initializeEnvelopeKey()
+				if err != nil {
+					tlog.Warn.Printf("Truncate initializeEnvelopeKey returned error: %v", err)
+					return syscall.EIO
+				}
+			}
 		}
 		cSz := int64(f.contentEnc.PlainSizeToCipherSize(newPlainSz))
 		err := syscall.Ftruncate(f.intFd(), cSz)

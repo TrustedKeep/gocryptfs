@@ -300,7 +300,6 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 	//
 	// If the file ID is not cached, read it from disk
 	var err error
-	var key []byte
 	if f.fileTableEntry.ID == nil {
 		var err error
 		fileID, err := f.readFileID()
@@ -315,47 +314,11 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 
 			//set up the envelope key if needed
 			if f.rootNode.args.Envelope {
-				var envKeyID string
-				var wrapper []byte
-				//create the wrapped key
-				envKeyID = tkc.Get().GetCurrentKeyID()
-				iKey := cryptocore.RetrieveKey(envKeyID, true)
-				envKey, ok := iKey.(kem.Kem)
-				if !ok {
-					tlog.Warn.Printf("doWrite %d: somehow got wrong type for envelope key", f.qIno.Ino)
-					return 0, syscall.EIO
-				}
-				//TODO: Add a way to add this to the decrypted cache so we dont have to encrypt and immediately decrypt this
-				key, wrapper, err = envKey.Wrap()
+				err = f.initializeEnvelopeKey()
 				if err != nil {
-					tlog.Warn.Printf("doWrite %d: Could not create wrapped key for file, err: %v", f.qIno.Ino, err)
+					tlog.Warn.Printf("doWrite initializeEnvelopeKey returned error: %v", err)
 					return 0, syscall.EIO
 				}
-				crypto.Zeroize(key)
-
-				isDarwin := strings.EqualFold(build.Default.GOOS, "darwin")
-				// save the wrapped key
-				if isDarwin {
-					err = unix.Fsetxattr(int(f.fd.Fd()), tkc.EnvelopeIDAttrName, []byte(envKeyID), 0)
-				} else {
-					err = xattr.FSet(f.fd, tkc.EnvelopeIDAttrName, []byte(envKeyID))
-				}
-				if err != nil {
-					tlog.Warn.Printf("doWrite %d: error setting envelopeID: %v", f.qIno.Ino, err)
-					return 0, syscall.EIO
-				}
-
-				if isDarwin {
-					err = unix.Fsetxattr(int(f.fd.Fd()), tkc.WrappedKeyAttrName, wrapper, 0)
-				} else {
-					err = xattr.FSet(f.fd, tkc.WrappedKeyAttrName, wrapper)
-				}
-				if err != nil {
-					tlog.Warn.Printf("doWrite %d: error setting wrappedKey: %v", f.qIno.Ino, err)
-					return 0, syscall.EIO
-				}
-				f.fileTableEntry.EnvKeyID = envKeyID
-				f.fileTableEntry.Wrapper = wrapper
 			}
 
 		} else if err != nil {
@@ -438,6 +401,48 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 		return 0, fs.ToErrno(err)
 	}
 	return uint32(len(data)), 0
+}
+
+func (f *File) initializeEnvelopeKey() (err error) {
+	var envKeyID string
+	var wrapper []byte
+	var key []byte
+	//create the wrapped key
+	envKeyID = tkc.Get().GetCurrentKeyID()
+	iKey := cryptocore.RetrieveKey(envKeyID, true)
+	envKey, ok := iKey.(kem.Kem)
+	if !ok {
+		return fmt.Errorf("initializeEnvelopeKey %d: somehow got wrong type for envelope key", f.qIno.Ino)
+	}
+	//TODO: Add a way to add this to the decrypted cache so we dont have to encrypt and immediately decrypt this
+	key, wrapper, err = envKey.Wrap()
+	if err != nil {
+		return
+	}
+	crypto.Zeroize(key)
+
+	isDarwin := strings.EqualFold(build.Default.GOOS, "darwin")
+	// save the wrapped key
+	if isDarwin {
+		err = unix.Fsetxattr(int(f.fd.Fd()), tkc.EnvelopeIDAttrName, []byte(envKeyID), 0)
+	} else {
+		err = xattr.FSet(f.fd, tkc.EnvelopeIDAttrName, []byte(envKeyID))
+	}
+	if err != nil {
+		return fmt.Errorf("initializeEnvelopeKey %d: error setting envelopeID: %v", f.qIno.Ino, err)
+	}
+
+	if isDarwin {
+		err = unix.Fsetxattr(int(f.fd.Fd()), tkc.WrappedKeyAttrName, wrapper, 0)
+	} else {
+		err = xattr.FSet(f.fd, tkc.WrappedKeyAttrName, wrapper)
+	}
+	if err != nil {
+		return fmt.Errorf("initializeEnvelopeKey %d: error setting wrappedKey: %v", f.qIno.Ino, err)
+	}
+	f.fileTableEntry.EnvKeyID = envKeyID
+	f.fileTableEntry.Wrapper = wrapper
+	return
 }
 
 // isConsecutiveWrite returns true if the current write
