@@ -8,6 +8,7 @@ import (
 	"log/syslog"
 	"math"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -175,7 +176,22 @@ func doMount(args *argContainer) {
 		go idleMonitor(args.idle, fwdFs, srv, args.mountpoint)
 	}
 	// Wait for unmount.
+	go runHealthCheck(args.healthCheckPort)
 	srv.Wait()
+}
+
+func runHealthCheck(port int) {
+	pingSvr := &http.Server{
+		Addr: fmt.Sprintf(":%d", port),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	}
+
+	if err := pingSvr.ListenAndServe(); err != nil {
+		fmt.Printf("Could not set up health check port: %v\n", err)
+		return
+	}
 }
 
 // Based on the EncFS idle monitor:

@@ -54,6 +54,7 @@ type argContainer struct {
 	// _forceOwner is, if non-nil, a parsed, validated Owner (as opposed to the string above)
 	_forceOwner *fuse.Owner
 
+	healthCheckPort int
 	// tk specific options
 	boundaryHost, nodeID, envEncAlg string
 	mockAWS, mockKMS, isSearch      bool
@@ -181,6 +182,8 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.one_file_system, "one-file-system", false, "Don't cross filesystem boundaries")
 	flagSet.BoolVar(&args.deterministic_names, "deterministic-names", false, "Disable diriv file name randomisation")
 	flagSet.BoolVar(&args.xchacha, "xchacha", false, "Use XChaCha20-Poly1305 file content encryption")
+
+	flagSet.IntVar(&args.healthCheckPort, "health-check-port", 8000, "Port that can be pinged to ensure TKFS is fully up and running")
 
 	// TK specific options
 	flagSet.StringVar(&args.boundaryHost, "boundary-host", fmt.Sprintf("%s:%d", network.GetLocalIP(), 5050), "Host:port of TrustedBoundary")
