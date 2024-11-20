@@ -26,6 +26,7 @@ import (
 	"github.com/TrustedKeep/tkutils/v2/crypto"
 	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/TrustedKeep/tkutils/v2/security"
+	"github.com/coreos/go-systemd/daemon"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
@@ -177,6 +178,8 @@ func doMount(args *argContainer) {
 	}
 	// Wait for unmount.
 	go runHealthCheck(args.healthCheckPort)
+	tlog.Info.Printf("Notifying systemd that TKFS is ready.")
+	daemon.SdNotify(false, daemon.SdNotifyReady)
 	srv.Wait()
 }
 
@@ -188,6 +191,7 @@ func runHealthCheck(port int) {
 		}),
 	}
 
+	tlog.Info.Printf("Starting health check server on port:  %d\n", port)
 	if err := pingSvr.ListenAndServe(); err != nil {
 		fmt.Printf("Could not set up health check port: %v\n", err)
 		return

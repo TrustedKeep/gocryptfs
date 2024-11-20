@@ -7,6 +7,7 @@ toolchain go1.21.0
 require (
 	github.com/TrustedKeep/boundary v1.2.0
 	github.com/TrustedKeep/tkutils/v2 v2.11.12
+	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/google/uuid v1.6.0
 	github.com/hanwen/go-fuse/v2 v2.5.0
 	github.com/pkg/xattr v0.4.9
