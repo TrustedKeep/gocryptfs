@@ -1,5 +1,5 @@
-github.com/TrustedKeep/boundary v1.2.7-0.20250204210652-2408c6127049 h1:7XuDqzVIE+dpBQuhDdpazJp9dcLakRnlLYn0z0LriB4=
-github.com/TrustedKeep/boundary v1.2.7-0.20250204210652-2408c6127049/go.mod h1:duX88F+Qqj51kHiqacwWqJhG53nZ+8Atahenj52LaGY=
+github.com/TrustedKeep/boundary v1.2.7-0.20250206210751-000ca3ce4457 h1:gEnTJOFekoECR4btPMb0cxM0oRow8BOF0LUR78sAQJE=
+github.com/TrustedKeep/boundary v1.2.7-0.20250206210751-000ca3ce4457/go.mod h1:duX88F+Qqj51kHiqacwWqJhG53nZ+8Atahenj52LaGY=
 github.com/TrustedKeep/tkutils/v2 v2.12.10 h1:EkjVAvL0iWW91HDOOk7gG6sgMcGNTMxbNXPtGE+UWyo=
 github.com/TrustedKeep/tkutils/v2 v2.12.10/go.mod h1:SLc7qlykUQUTiWdk8McHPTijEsOqRMhLt5lJ54NGGz8=
 github.com/aws/aws-sdk-go v1.55.6 h1:cSg4pvZ3m8dgYcgqB97MrcdjUmZ1BeMYKUxMMB89IPk=
