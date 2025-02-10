@@ -5,7 +5,7 @@ go 1.22.9
 toolchain go1.22.12
 
 require (
-	github.com/TrustedKeep/boundary v1.2.7-0.20250206210751-000ca3ce4457
+	github.com/TrustedKeep/boundary v1.2.7
 	github.com/TrustedKeep/tkutils/v2 v2.12.10
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/google/uuid v1.6.0
