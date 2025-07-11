@@ -67,6 +67,14 @@ gocryptfs is also available as a package in most distributions. Examples:
 
 See the [Quickstart](https://nuetzlich.net/gocryptfs/quickstart/) page for more info.
 
+Windows WSL:
+wsl.conf
+[automount]
+enabled = true
+root = /mnt/
+options = "metadata,uid=1000,gid=1000" 
+mountFsTab = false
+
 Testing
 -------
 
