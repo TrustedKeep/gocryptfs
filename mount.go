@@ -25,7 +25,6 @@ import (
 
 	"github.com/TrustedKeep/tkutils/v2/crypto"
 	"github.com/TrustedKeep/tkutils/v2/kem"
-	"github.com/TrustedKeep/tkutils/v2/security"
 	"github.com/coreos/go-systemd/daemon"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -118,7 +117,7 @@ func doMount(args *argContainer) {
 	}
 
 	// connect to KMS
-	security.Memlock()
+	//security.Memlock()
 	tkc.Connect(cf.BoundaryHost, cf.NodeID, cf.MockAWS, cf.MockKMS, cf.IsSearch)
 
 	// Initialize gocryptfs (read config file, ask for password, ...)
