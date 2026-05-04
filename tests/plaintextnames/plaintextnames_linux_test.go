@@ -4,7 +4,6 @@ package plaintextnames
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"syscall"
 	"testing"
@@ -60,7 +59,7 @@ func TestDirIV(t *testing.T) {
 // else should work.
 func TestFiltered(t *testing.T) {
 	filteredFile := pDir + "/gocryptfs.conf"
-	err := ioutil.WriteFile(filteredFile, []byte("foo"), 0777)
+	err := os.WriteFile(filteredFile, []byte("foo"), 0777)
 	if err == nil {
 		t.Errorf("should have failed but didn't")
 	}
@@ -68,11 +67,11 @@ func TestFiltered(t *testing.T) {
 	if err == nil {
 		t.Errorf("should have failed but didn't")
 	}
-	err = ioutil.WriteFile(pDir+"/gocryptfs.diriv", []byte("foo"), 0777)
+	err = os.WriteFile(pDir+"/gocryptfs.diriv", []byte("foo"), 0777)
 	if err != nil {
 		t.Error(err)
 	}
-	subDir, err := ioutil.TempDir(pDir, "")
+	subDir, err := os.MkdirTemp(pDir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,5 +119,15 @@ func TestInoReuseEvil(t *testing.T) {
 		defer syscall.Close(fd)
 		syscall.Fstat(fd, &st)
 		t.Logf("file ino = %d", st.Ino)
+	}
+}
+
+// TestRootIno checks that inode number of the root dir is set
+// https://github.com/hanwen/go-fuse/issues/399
+func TestRootIno(t *testing.T) {
+	var st syscall.Stat_t
+	syscall.Stat(cDir, &st)
+	if st.Ino == 0 {
+		t.Errorf("inode number of root dir is zero")
 	}
 }

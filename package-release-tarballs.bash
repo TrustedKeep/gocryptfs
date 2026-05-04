@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -eu
 
@@ -93,5 +93,7 @@ if git describe --dirty | grep dirty ; then
 fi
 
 package_source
+package_static_binary
+export GOARCH=arm64
 package_static_binary
 signing_hint

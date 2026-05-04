@@ -1,16 +1,8 @@
-// Tests run for (almost all) combinations of openssl, plaintextnames.
 package matrix
-
-// File reading, writing, modification, truncate, ...
-//
-// Runs all tests N times, for the combinations of different flags specified
-// in the `matrix` variable.
 
 import (
 	"bytes"
-	"flag"
 	"fmt"
-	"io/ioutil"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -20,96 +12,14 @@ import (
 	"sync"
 	"syscall"
 	"testing"
-	"time"
 
 	"golang.org/x/sys/unix"
 
+	"github.com/rfjakob/gocryptfs/v2/ctlsock"
+	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
 
-// Several tests need to be aware if plaintextnames is active or not, so make this
-// a global variable
-var testcase testcaseMatrix
-
-type testcaseMatrix struct {
-	plaintextnames bool
-	raw64          bool
-	extraArgs      []string
-}
-
-// isSet finds out if `extraArg` is set in `tc.extraArgs`
-func (tc *testcaseMatrix) isSet(extraArg string) bool {
-	for _, v := range tc.extraArgs {
-		if v == extraArg {
-			return true
-		}
-	}
-	return false
-}
-
-var matrix = []testcaseMatrix{
-	// Normal
-	{false, false, nil},
-	// Plaintextnames
-	{true, false, nil},
-	// AES-SIV (does not use openssl, no need to test permutations)
-	{false, false, nil},
-	{true, false, nil},
-	// Raw64
-	{false, true, nil},
-	// -serialize_reads
-	{false, false, []string{"-serialize_reads"}},
-	{false, false, []string{"-sharedstorage"}},
-	{false, false, []string{"-deterministic-names"}},
-	// Test xchacha
-	{false, true, []string{"-xchacha"}},
-}
-
-// This is the entry point for the tests
-func TestMain(m *testing.M) {
-	// Make "testing.Verbose()" return the correct value
-	flag.Parse()
-	var i int
-	for i, testcase = range matrix {
-		if testing.Verbose() {
-			fmt.Printf("matrix: testcase = %#v\n", testcase)
-		}
-		createDirIV := true
-		if testcase.plaintextnames {
-			createDirIV = false
-		} else if testcase.isSet("-deterministic-names") {
-			createDirIV = false
-		}
-		test_helpers.ResetTmpDir(createDirIV)
-		opts := []string{"-zerokey"}
-		//opts = append(opts, "-fusedebug")
-		opts = append(opts, fmt.Sprintf("-plaintextnames=%v", testcase.plaintextnames))
-		opts = append(opts, fmt.Sprintf("-raw64=%v", testcase.raw64))
-		opts = append(opts, testcase.extraArgs...)
-		test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir, opts...)
-		before := test_helpers.ListFds(0, test_helpers.TmpDir)
-		t0 := time.Now()
-		r := m.Run()
-		if testing.Verbose() {
-			fmt.Printf("matrix: run took %v\n", time.Since(t0))
-		}
-		// Catch fd leaks in the tests. NOTE: this does NOT catch leaks in
-		// the gocryptfs FUSE process, but only in the tests that access it!
-		// All fds that point outside TmpDir are not interesting (the Go test
-		// infrastucture creates temporary log files we don't care about).
-		after := test_helpers.ListFds(0, test_helpers.TmpDir)
-		if len(before) != len(after) {
-			fmt.Printf("fd leak in test process? before, after:\n%v\n%v\n", before, after)
-			os.Exit(1)
-		}
-		test_helpers.UnmountPanic(test_helpers.DefaultPlainDir)
-		if r != 0 {
-			fmt.Printf("TestMain: matrix[%d] = %#v failed\n", i, testcase)
-			os.Exit(r)
-		}
-	}
-	os.Exit(0)
-}
 
 // Write `n` random bytes to filename `fn`, read again, compare hash
 func testWriteN(t *testing.T, fn string, n int) string {
@@ -315,7 +225,7 @@ func TestFileHoles(t *testing.T) {
 	foo := []byte("foo")
 	file.Write(foo)
 	file.WriteAt(foo, 4096)
-	_, err = ioutil.ReadFile(fn)
+	_, err = os.ReadFile(fn)
 	if err != nil {
 		t.Error(err)
 	}
@@ -379,7 +289,7 @@ func TestRmwRace(t *testing.T) {
 		// but it must not be
 		// [oooooossss]
 
-		buf, _ := ioutil.ReadFile(fn)
+		buf, _ := os.ReadFile(fn)
 		m := test_helpers.Md5hex(buf)
 		goodMd5[m] = goodMd5[m] + 1
 
@@ -483,7 +393,7 @@ func TestNameLengths(t *testing.T) {
 }
 
 func TestLongNames(t *testing.T) {
-	fi, err := ioutil.ReadDir(test_helpers.DefaultCipherDir)
+	fi, err := os.ReadDir(test_helpers.DefaultCipherDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,7 +505,7 @@ func TestLongNames(t *testing.T) {
 		t.Error(err)
 	}
 	// Check for orphaned files
-	fi, err = ioutil.ReadDir(test_helpers.DefaultCipherDir)
+	fi, err = os.ReadDir(test_helpers.DefaultCipherDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,7 +638,7 @@ func doTestUtimesNano(t *testing.T, path string) {
 // Set nanoseconds by path, normal file
 func TestUtimesNano(t *testing.T) {
 	path := test_helpers.DefaultPlainDir + "/utimesnano"
-	err := ioutil.WriteFile(path, []byte("foobar"), 0600)
+	err := os.WriteFile(path, []byte("foobar"), 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -776,7 +686,7 @@ func TestMagicNames(t *testing.T) {
 		t.Logf("Testing n=%q", n)
 		p := test_helpers.DefaultPlainDir + "/" + n
 		// Create file
-		err := ioutil.WriteFile(p, []byte("xxxxxxx"), 0200)
+		err := os.WriteFile(p, []byte("xxxxxxx"), 0200)
 		if err != nil {
 			t.Fatalf("creating file %q failed: %v", n, err)
 		}
@@ -813,7 +723,7 @@ func TestMagicNames(t *testing.T) {
 		syscall.Unlink(p)
 		// Link
 		target := test_helpers.DefaultPlainDir + "/linktarget"
-		err = ioutil.WriteFile(target, []byte("yyyyy"), 0600)
+		err = os.WriteFile(target, []byte("yyyyy"), 0600)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -958,5 +868,129 @@ func TestPwd(t *testing.T) {
 		}
 		dir = dir + "/" + t.Name()
 		os.Mkdir(dir, 0700)
+	}
+}
+
+// TestRootIno checks that inode number of the root dir is set
+// https://github.com/hanwen/go-fuse/issues/399
+func TestRootIno(t *testing.T) {
+	var st syscall.Stat_t
+	syscall.Stat(test_helpers.DefaultPlainDir, &st)
+	if st.Ino == 0 {
+		t.Errorf("inode number of root dir is zero")
+	}
+}
+
+// TestDirSize checks that we report the correct size for directories.
+//
+// https://github.com/rfjakob/gocryptfs/issues/951:
+// "cipherSize 30: incomplete last block" after upgrade to 2.6.0
+func TestDirSize(t *testing.T) {
+	pDir := test_helpers.DefaultPlainDir + "/" + t.Name()
+	err := os.Mkdir(pDir, 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := ctlsock.RequestStruct{
+		EncryptPath: t.Name(),
+	}
+	resp := test_helpers.QueryCtlSock(t, ctlsockPath, req)
+	if resp.Result == "" {
+		t.Fatal(resp)
+	}
+	cDir := test_helpers.DefaultCipherDir + "/" + resp.Result
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fstat := func(path string) (st syscall.Stat_t) {
+		fd, err := syscall.Open(path, syscall.O_RDONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer syscall.Close(fd)
+
+		err = syscall.Fstat(fd, &st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+
+	// Check that plaintext size is equal to ciphertext size and
+	// that stat and fstat gives the same result
+	compareSize := func() {
+		var pStat, cStat syscall.Stat_t
+		err = syscall.Stat(pDir, &pStat)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pFstat := fstat(pDir)
+
+		err = syscall.Stat(cDir, &cStat)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cFstat := fstat(cDir)
+
+		if pStat.Size != cStat.Size {
+			t.Errorf("stat size is different: pSt=%d cSt=%d", pStat.Size, cStat.Size)
+		}
+		if pStat.Size != pFstat.Size {
+			t.Errorf("stat size is different from fstat size: pStat=%d pFstat=%d", pStat.Size, pFstat.Size)
+		}
+		if pFstat.Size != cFstat.Size {
+			t.Errorf("fstat size is different: pSt=%d cSt=%d", pFstat.Size, cFstat.Size)
+		}
+	}
+
+	for i := 0; i < 100; i++ {
+		// Grow the directory by creating new files with long names inside it
+		path := fmt.Sprintf("%s/%0100d", pDir, i)
+		err = os.WriteFile(path, nil, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		compareSize()
+	}
+}
+
+// TestRenameExchangeOnGocryptfs tests the core RENAME_EXCHANGE functionality
+// on a mounted gocryptfs filesystem
+func TestRenameExchangeOnGocryptfs(t *testing.T) {
+	// Create two files with different content
+	file1 := filepath.Join(test_helpers.DefaultPlainDir, "file1.txt")
+	file2 := filepath.Join(test_helpers.DefaultPlainDir, "file2.txt")
+	content1 := []byte("Content of file 1")
+	content2 := []byte("Content of file 2")
+
+	if err := os.WriteFile(file1, content1, 0644); err != nil {
+		t.Fatalf("Failed to create file1: %v", err)
+	}
+	if err := os.WriteFile(file2, content2, 0644); err != nil {
+		t.Fatalf("Failed to create file2: %v", err)
+	}
+
+	// Use RENAME_EXCHANGE to atomically swap the files
+	err := syscallcompat.Renameat2(unix.AT_FDCWD, file1, unix.AT_FDCWD, file2, syscallcompat.RENAME_EXCHANGE)
+	if err != nil {
+		t.Fatalf("RENAME_EXCHANGE failed on gocryptfs: %v", err)
+	}
+
+	// Verify the files were swapped
+	newContent1, err := os.ReadFile(file1)
+	if err != nil {
+		t.Fatalf("Failed to read file1 after exchange: %v", err)
+	}
+	newContent2, err := os.ReadFile(file2)
+	if err != nil {
+		t.Fatalf("Failed to read file2 after exchange: %v", err)
+	}
+
+	if string(newContent1) != string(content2) {
+		t.Errorf("file1 content wrong after exchange. Expected: %s, Got: %s", content2, newContent1)
+	}
+	if string(newContent2) != string(content1) {
+		t.Errorf("file2 content wrong after exchange. Expected: %s, Got: %s", content1, newContent2)
 	}
 }

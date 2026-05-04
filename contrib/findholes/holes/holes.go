@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"os"
 	"syscall"
-	"time"
 )
 
 const (
@@ -130,7 +129,7 @@ func Find(fd int) (segments []Segment, err error) {
 		cursor = off
 
 		if oldCursor == cursor {
-			return nil, fmt.Errorf("%s\nerror: seek loop!", PrettyPrint(segments))
+			return nil, fmt.Errorf("%s\nerror: seek loop", PrettyPrint(segments))
 		}
 	}
 	return segments, nil
@@ -176,7 +175,6 @@ func Create(path string) {
 	}
 	defer f.Close()
 
-	rand.Seed(time.Now().UnixNano())
 	offsets := make([]int64, 10)
 	for i := range offsets {
 		offsets[i] = int64(rand.Int31n(60000))

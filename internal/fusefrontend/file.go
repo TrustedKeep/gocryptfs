@@ -45,8 +45,6 @@ type File struct {
 	// Every FUSE entrypoint should RLock(). The only user of Lock() is
 	// Release(), which closes the fd and sets "released" to true.
 	fdLock sync.RWMutex
-	// Content encryption helper
-	contentEnc *contentenc.ContentEnc
 	// Device and inode number uniquely identify the backing file
 	qIno inomap.QIno
 	// Entry in the open file table
@@ -58,6 +56,8 @@ type File struct {
 	lastOpCount uint64
 	// Parent filesystem
 	rootNode *RootNode
+	// If this open file is a directory, dirHandle will be set, otherwise it's nil.
+	dirHandle *DirHandle
 }
 
 // NewFile returns a new go-fuse File instance based on an already-open file
@@ -78,7 +78,6 @@ func NewFile(fd int, cName string, rn *RootNode) (f *File, st *syscall.Stat_t, e
 
 	f = &File{
 		fd:             osFile,
-		contentEnc:     rn.contentEnc,
 		qIno:           qi,
 		fileTableEntry: e,
 		rootNode:       rn,
@@ -123,7 +122,7 @@ func (f *File) createHeader() (fileID []byte, err error) {
 	h := contentenc.RandomHeader()
 	buf := h.Pack()
 	// Prevent partially written (=corrupt) header by preallocating the space beforehand
-	if !f.rootNode.args.NoPrealloc && f.rootNode.quirks&syscallcompat.QuirkBrokenFalloc == 0 {
+	if !f.rootNode.args.NoPrealloc && f.rootNode.quirks&syscallcompat.QuirkBtrfsBrokenFalloc == 0 {
 		err = syscallcompat.EnospcPrealloc(f.intFd(), 0, contentenc.HeaderLen)
 		if err != nil {
 			if !syscallcompat.IsENOSPC(err) {
@@ -199,7 +198,7 @@ func (f *File) doRead(dst []byte, off uint64, length uint64) ([]byte, syscall.Er
 		log.Panicf("fileID=%v", fileID)
 	}
 	// Read the backing ciphertext in one go
-	blocks := f.contentEnc.ExplodePlainRange(off, length)
+	blocks := f.rootNode.contentEnc.ExplodePlainRange(off, length)
 	alignedOffset, alignedLength := blocks[0].JointCiphertextRange(blocks)
 	// f.fd.ReadAt takes an int64!
 	if alignedOffset > math.MaxInt64 {
@@ -232,15 +231,15 @@ func (f *File) doRead(dst []byte, off uint64, length uint64) ([]byte, syscall.Er
 	//envelope encrypted
 	if f.rootNode.args.Envelope {
 		// Decrypt it
-		plaintext, err = f.contentEnc.DecryptBlocks(ciphertext, firstBlockNo, fileID, envelopeID, wrappedKey)
+		plaintext, err = f.rootNode.contentEnc.DecryptBlocks(ciphertext, firstBlockNo, fileID, envelopeID, wrappedKey)
 		//normal encrypted
 	} else {
 		// Decrypt it
-		plaintext, err = f.contentEnc.DecryptBlocks(ciphertext, firstBlockNo, fileID, "", []byte{})
+		plaintext, err = f.rootNode.contentEnc.DecryptBlocks(ciphertext, firstBlockNo, fileID, "", []byte{})
 	}
 	f.rootNode.contentEnc.CReqPool.Put(ciphertext)
 	if err != nil {
-		corruptBlockNo := firstBlockNo + f.contentEnc.PlainOffToBlockNo(uint64(len(plaintext)))
+		corruptBlockNo := firstBlockNo + f.rootNode.contentEnc.PlainOffToBlockNo(uint64(len(plaintext)))
 		tlog.Warn.Printf("doRead %d: corrupt block #%d: %v", f.qIno.Ino, corruptBlockNo, err)
 		return nil, syscall.EIO
 	}
@@ -339,20 +338,20 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 	}
 	// Handle payload data
 	dataBuf := bytes.NewBuffer(data)
-	blocks := f.contentEnc.ExplodePlainRange(uint64(off), uint64(len(data)))
+	blocks := f.rootNode.contentEnc.ExplodePlainRange(uint64(off), uint64(len(data)))
 	toEncrypt := make([][]byte, len(blocks))
 	for i, b := range blocks {
 		blockData := dataBuf.Next(int(b.Length))
 		// Incomplete block -> Read-Modify-Write
 		if b.IsPartial() {
 			// Read
-			oldData, errno := f.doRead(nil, b.BlockPlainOff(), f.contentEnc.PlainBS())
+			oldData, errno := f.doRead(nil, b.BlockPlainOff(), f.rootNode.contentEnc.PlainBS())
 			if errno != 0 {
 				tlog.Warn.Printf("ino%d fh%d: RMW read failed: errno=%d", f.qIno.Ino, f.intFd(), errno)
 				return 0, errno
 			}
 			// Modify
-			blockData = f.contentEnc.MergeBlocks(oldData, blockData, int(b.Skip))
+			blockData = f.rootNode.contentEnc.MergeBlocks(oldData, blockData, int(b.Skip))
 			tlog.Debug.Printf("len(oldData)=%d len(blockData)=%d", len(oldData), len(blockData))
 		}
 		tlog.Debug.Printf("ino%d: Writing %d bytes to block #%d",
@@ -361,7 +360,7 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 		toEncrypt[i] = blockData
 	}
 	// Encrypt all blocks
-	ciphertext := f.contentEnc.EncryptBlocks(toEncrypt, blocks[0].BlockNo, f.fileTableEntry.ID, f.fileTableEntry.EnvKeyID, f.fileTableEntry.Wrapper)
+	ciphertext := f.rootNode.contentEnc.EncryptBlocks(toEncrypt, blocks[0].BlockNo, f.fileTableEntry.ID, f.fileTableEntry.EnvKeyID, f.fileTableEntry.Wrapper)
 	// Preallocate so we cannot run out of space in the middle of the write.
 	// This prevents partially written (=corrupt) blocks.
 	cOff := blocks[0].BlockCipherOff()
@@ -369,7 +368,7 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 	if cOff > math.MaxInt64 {
 		return 0, syscall.EFBIG
 	}
-	if !f.rootNode.args.NoPrealloc {
+	if !f.rootNode.args.NoPrealloc && f.rootNode.quirks&syscallcompat.QuirkBtrfsBrokenFalloc == 0 {
 		err = syscallcompat.EnospcPrealloc(f.intFd(), int64(cOff), int64(len(ciphertext)))
 		if err != nil {
 			if !syscallcompat.IsENOSPC(err) {
@@ -536,7 +535,10 @@ func (f *File) Getattr(ctx context.Context, a *fuse.AttrOut) syscall.Errno {
 	}
 	f.rootNode.inoMap.TranslateStat(&st)
 	a.FromStat(&st)
-	a.Size = f.contentEnc.CipherSizeToPlainSize(a.Size)
+	if a.IsRegular() {
+		a.Size = f.rootNode.contentEnc.CipherSizeToPlainSize(a.Size)
+	}
+	// TODO: Handle symlink size similar to node.translateSize()
 	if f.rootNode.args.ForceOwner != nil {
 		a.Owner = *f.rootNode.args.ForceOwner
 	}

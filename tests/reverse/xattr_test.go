@@ -2,12 +2,14 @@ package reverse_test
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/pkg/xattr"
+	"golang.org/x/sys/unix"
 )
 
 func xattrSupported(path string) bool {
@@ -16,26 +18,21 @@ func xattrSupported(path string) bool {
 		return true
 	}
 	err2 := err.(*xattr.Error)
-	if err2.Err == syscall.EOPNOTSUPP {
-		return false
-	}
-	return true
+	return err2.Err != syscall.EOPNOTSUPP
 }
 
 func TestXattrList(t *testing.T) {
-	t.Skip("TODO: not implemented yet in reverse mode")
-
 	if !xattrSupported(dirA) {
 		t.Skip()
 	}
 	fnA := filepath.Join(dirA, t.Name())
-	err := ioutil.WriteFile(fnA, nil, 0700)
+	err := os.WriteFile(fnA, nil, 0700)
 	if err != nil {
 		t.Fatalf("creating empty file failed: %v", err)
 	}
 	val := []byte("xxxxxxxxyyyyyyyyyyyyyyyzzzzzzzzzzzzz")
 	num := 20
-	var namesA map[string]string
+	namesA := map[string]string{}
 	for i := 1; i <= num; i++ {
 		attr := fmt.Sprintf("user.TestXattrList.%02d", i)
 		err = xattr.LSet(fnA, attr, val)
@@ -49,9 +46,14 @@ func TestXattrList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var namesC map[string]string
+	namesC := map[string]string{}
 	for _, n := range tmp {
-		namesC[n] = string(val)
+		if strings.HasPrefix(n, "security.") {
+			t.Logf("Ignoring xattr %q", n)
+			continue
+		}
+		v, _ := xattr.LGet(fnC, n)
+		namesC[n] = string(v)
 	}
 	if len(namesA) != len(namesC) {
 		t.Errorf("wrong number of names, want=%d have=%d", len(namesA), len(namesC))
@@ -63,4 +65,19 @@ func TestXattrList(t *testing.T) {
 			t.Errorf("mismatch on attr %q: valA = %q, valC = %q", i, valA, valC)
 		}
 	}
+}
+
+// Shouldn't get EINVAL when querying the mountpoint.
+func TestXattrGetMountpoint(t *testing.T) {
+	_, err := xattr.LGet(dirB, "user.foo453465324")
+	if err == nil {
+		return
+	}
+	e2 := err.(*xattr.Error)
+	if e2.Unwrap() == unix.EINVAL {
+		t.Errorf("LGet: %v", err)
+	}
+	// Let's see what LList says
+	_, err = xattr.LList(dirB)
+	t.Logf("LList: err=%v", err)
 }

@@ -3,7 +3,7 @@
 package exitcodes
 
 import (
-	"fmt"
+	"errors"
 	"os"
 )
 
@@ -79,7 +79,7 @@ type Err struct {
 // NewErr returns an error containing "msg" and the exit code "code".
 func NewErr(msg string, code int) Err {
 	return Err{
-		error: fmt.Errorf(msg),
+		error: errors.New(msg),
 		code:  code,
 	}
 }

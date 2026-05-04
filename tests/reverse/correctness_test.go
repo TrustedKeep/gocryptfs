@@ -3,9 +3,9 @@ package reverse_test
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -71,7 +71,7 @@ func TestSymlinkDentrySize(t *testing.T) {
 	}
 	symlink := "a_symlink"
 
-	mnt, err := ioutil.TempDir(test_helpers.TmpDir, "reverse_mnt_")
+	mnt, err := os.MkdirTemp(test_helpers.TmpDir, "reverse_mnt_")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestConfigMapping(t *testing.T) {
 	if !test_helpers.VerifyExistence(t, c) {
 		t.Errorf("%s missing", c)
 	}
-	data, err := ioutil.ReadFile(c)
+	data, err := os.ReadFile(c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func Test0100Dir(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := dir + "/hello"
-	err = ioutil.WriteFile(file, []byte("hello"), 0600)
+	err = os.WriteFile(file, []byte("hello"), 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,4 +292,131 @@ func TestSeekData(t *testing.T) {
 		t.Errorf("off=%d, expected=%d\n", off, dataOffset)
 	}
 	f.Close()
+}
+
+// newWorkdir creates a new empty dir in dirA and returns the full path to it along
+// with the corresponding encrypted path in dirB
+func newWorkdir(t *testing.T) (workdirA, workdirB string) {
+	workdirA = dirA + "/" + t.Name()
+	if err := os.Mkdir(workdirA, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Find workdir in dirB (=encrypted view)
+	var st syscall.Stat_t
+	if err := syscall.Stat(workdirA, &st); err != nil {
+		t.Fatal(err)
+	}
+	workdirB = dirB + "/" + findIno(dirB, st.Ino)
+	t.Logf("newWorkdir: workdirA=%q workdirB=%q", workdirA, workdirB)
+	return
+}
+
+// gocryptfs.longname.*.name of hardlinked files should not appear hardlinked (as the
+// contents are different).
+//
+// This means that
+// 1) They have a different NodeID, hence the kernel knows it's different files
+// 2) They have a different inode number, hence userspace knows they are not hard-linked.
+//
+// https://github.com/rfjakob/gocryptfs/issues/802
+func TestHardlinkedLongname(t *testing.T) {
+	if plaintextnames {
+		t.Skip()
+	}
+
+	workdirA, workdirB := newWorkdir(t)
+
+	long1 := workdirA + "/" + strings.Repeat("x", 200)
+	if err := os.WriteFile(long1, []byte("hello"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var long1_stat syscall.Stat_t
+	if err := syscall.Stat(long1, &long1_stat); err != nil {
+		t.Fatal(err)
+	}
+	long2 := workdirA + "/" + strings.Repeat("y", 220)
+	if err := syscall.Link(long1, long2); err != nil {
+		t.Fatal(err)
+	}
+
+	matches, err := filepath.Glob(workdirB + "/gocryptfs.longname.*.name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("BUG: only %d matches, want 2", len(matches))
+	}
+	if test_helpers.Md5fn(matches[0]) == test_helpers.Md5fn(matches[1]) {
+		t.Errorf("Files %q are identical - that's wrong!", matches)
+	}
+
+	var st0 syscall.Stat_t
+	if err := syscall.Stat(matches[0], &st0); err != nil {
+		t.Fatal(err)
+	}
+	var st1 syscall.Stat_t
+	if err := syscall.Stat(matches[1], &st1); err != nil {
+		t.Fatal(err)
+	}
+	if st0.Ino == st1.Ino {
+		t.Errorf("Files %q have the same inode number - that's wrong!", matches)
+	}
+}
+
+// With inode number reuse and hard links, we could have returned
+// wrong data for gocryptfs.diriv and gocryptfs.xyz.longname files, respectively
+// (https://github.com/rfjakob/gocryptfs/issues/802).
+//
+// Now that this is fixed, ensure that rsync and similar tools pick up the new
+// correct files by advancing mtime and ctime by 10 seconds, which should be more
+// than any filesytems' timestamp granularity (FAT32 has 2 seconds).
+func TestMtimePlus10(t *testing.T) {
+	if plaintextnames {
+		t.Skip("plaintextnames mode does not have virtual files")
+	}
+
+	workdirA, workdirB := newWorkdir(t)
+
+	long := workdirA + "/" + strings.Repeat("x", 200)
+	if err := os.WriteFile(long, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	long_stat, err := os.Stat(long)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workdirA_stat, err := os.Stat(workdirA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Find and check gocryptfs.longname.*.name
+	matches, err := filepath.Glob(workdirB + "/gocryptfs.longname.*.name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatal(matches)
+	}
+	name_stat, err := os.Stat(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name_stat.ModTime().Unix() != long_stat.ModTime().Unix()+10 {
+		t.Errorf(".name file should show mtime+10")
+	}
+
+	// Check gocryptfs.diriv
+	if deterministic_names {
+		// No gocryptfs.diriv
+		return
+	}
+	diriv_stat, err := os.Stat(workdirB + "/gocryptfs.diriv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diriv_stat.ModTime().Unix() != workdirA_stat.ModTime().Unix()+10 {
+		t.Errorf("diriv file should show mtime+10")
+	}
 }

@@ -32,11 +32,11 @@ type argContainer struct {
 	longnames, allow_other, nonempty, raw64,
 	noprealloc, speed, hkdf, hh, info,
 	sharedstorage, fsck, one_file_system, deterministic_names,
-	xchacha bool
+	xchacha, noxattr bool
 	// Mount options with opposites
 	dev, nodev, suid, nosuid, exec, noexec, rw, ro, kernel_cache, acl bool
 	masterkey, mountpoint, cipherdir, cpuprofile,
-	memprofile, ko, ctlsock, fsname, force_owner, trace string
+	memprofile, ko, ctlsock, fsname, force_owner, trace, context string
 	// -extpass, -badname, -passfile can be passed multiple times
 	extpass, badname, passfile []string
 	// Configuration file name override
@@ -182,6 +182,7 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.one_file_system, "one-file-system", false, "Don't cross filesystem boundaries")
 	flagSet.BoolVar(&args.deterministic_names, "deterministic-names", false, "Disable diriv file name randomisation")
 	flagSet.BoolVar(&args.xchacha, "xchacha", false, "Use XChaCha20-Poly1305 file content encryption")
+	flagSet.BoolVar(&args.noxattr, "noxattr", false, "Disable extended attribute operations")
 
 	flagSet.IntVar(&args.healthCheckPort, "health-check-port", 8000, "Port that can be pinged to ensure TKFS is fully up and running")
 
@@ -215,11 +216,12 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.StringVar(&args.fsname, "fsname", "", "Override the filesystem name")
 	flagSet.StringVar(&args.force_owner, "force_owner", "", "uid:gid pair to coerce ownership")
 	flagSet.StringVar(&args.trace, "trace", "", "Write execution trace to file")
+	flagSet.StringVar(&args.context, "context", "", "Set SELinux context (see mount(8) for details)")
 
 	// multipleStrings options ([]string)
-	flagSet.StringSliceVar(&args.extpass, "extpass", nil, "Use external program for the password prompt")
-	flagSet.StringSliceVar(&args.badname, "badname", nil, "Glob pattern invalid file names that should be shown")
-	flagSet.StringSliceVar(&args.passfile, "passfile", nil, "Read password from file")
+	flagSet.StringArrayVar(&args.extpass, "extpass", nil, "Use external program for the password prompt")
+	flagSet.StringArrayVar(&args.badname, "badname", nil, "Glob pattern invalid file names that should be shown")
+	flagSet.StringArrayVar(&args.passfile, "passfile", nil, "Read password from file")
 
 	flagSet.Uint8Var(&args.longnamemax, "longnamemax", 255, "Hash encrypted names that are longer than this")
 
@@ -259,7 +261,7 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 		tlog.Fatal.Printf("The options -passfile and -masterkey cannot be used at the same time")
 		os.Exit(exitcodes.Usage)
 	}
-	if len(args.extpass) > 0 && args.masterkey != "" {
+	if len(args.extpass) > 0 && args.masterkey != "" && !args.init {
 		tlog.Fatal.Printf("The options -extpass and -masterkey cannot be used at the same time")
 		os.Exit(exitcodes.Usage)
 	}

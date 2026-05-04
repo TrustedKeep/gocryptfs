@@ -9,18 +9,18 @@ import (
 // Validate that the combination of settings makes sense and is supported
 func (cf *ConfFile) Validate() error {
 	if cf.Version != contentenc.CurrentVersion {
-		return fmt.Errorf("Unsupported on-disk format %d", cf.Version)
+		return fmt.Errorf("unsupported on-disk format %d", cf.Version)
 	}
 	// All feature flags that are in the config file are known?
 	for _, flag := range cf.FeatureFlags {
 		if !isFeatureFlagKnown(flag) {
-			return fmt.Errorf("Unknown feature flag %q", flag)
+			return fmt.Errorf("unknown feature flag %q", flag)
 		}
 	}
 	// File content encryption
 	{
 		if cf.IsFeatureFlagSet(FlagXChaCha20Poly1305) && cf.IsFeatureFlagSet(FlagAESSIV) {
-			return fmt.Errorf("Can't have both XChaCha20Poly1305 and AESSIV feature flags")
+			return fmt.Errorf("can't have both XChaCha20Poly1305 and AESSIV feature flags")
 		}
 		if cf.IsFeatureFlagSet(FlagAESSIV) && !cf.IsFeatureFlagSet(FlagGCMIV128) {
 

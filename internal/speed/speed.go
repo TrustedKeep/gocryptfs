@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
+	"github.com/rfjakob/gocryptfs/v2/internal/stupidgcm"
 )
 
 // 128-bit file ID + 64 bit block number = 192 bits = 24 bytes
@@ -29,7 +30,10 @@ func Run() {
 	if cpu == "" {
 		cpu = "unknown"
 	}
-	aes := "; no AES acceleration"
+	aes := "; no AES-GCM acceleration"
+	if stupidgcm.HasAESGCMHardwareSupport() {
+		aes = "; with AES-GCM acceleration"
+	}
 	fmt.Printf("cpu: %s%s\n", cpu, aes)
 
 	bTable := []struct {
@@ -40,6 +44,7 @@ func Run() {
 		{name: cryptocore.BackendGoGCM.Algo, f: bGoGCM, preferred: true},
 		{name: cryptocore.BackendXChaCha20Poly1305.Algo, f: bXchacha20poly1305, preferred: false},
 	}
+	testing.Init()
 	for _, b := range bTable {
 		fmt.Printf("%-26s\t", b.name)
 		mbs := mbPerSec(testing.Benchmark(b.f))

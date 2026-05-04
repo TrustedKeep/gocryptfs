@@ -46,4 +46,6 @@ type Args struct {
 	DeterministicNames bool
 	// whether or not we will be envelope encrypting the encryption keys
 	Envelope bool
+	// NoXattr disables extended attribute operations
+	NoXattr bool
 }

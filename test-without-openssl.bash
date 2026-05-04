@@ -1,5 +1,7 @@
-#!/bin/bash -eu
+#!/usr/bin/env bash
+
+set -eu
 
 cd "$(dirname "$0")"
 
-./test.bash -tags without_openssl "$@"
+CGO_ENABLED=0 ./test.bash "$@"

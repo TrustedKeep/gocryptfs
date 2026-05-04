@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -260,7 +259,7 @@ func fsck(args *argContainer) (exitcode int) {
 	args.allow_other = false
 	args.ro = true
 	var err error
-	args.mountpoint, err = ioutil.TempDir("", "gocryptfs.fsck.")
+	args.mountpoint, err = os.MkdirTemp("", "gocryptfs.fsck.")
 	if err != nil {
 		tlog.Fatal.Printf("fsck: TmpDir: %v", err)
 		os.Exit(exitcodes.MountPoint)
@@ -301,6 +300,7 @@ func fsck(args *argContainer) (exitcode int) {
 		}
 	}()
 	// Recursively check the root dir
+	tlog.Info.Println(tlog.ColorGreen + "Checking filesystem..." + tlog.ColorReset)
 	ck.dir("")
 	// Report results
 	wipeKeys()

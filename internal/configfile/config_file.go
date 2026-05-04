@@ -69,6 +69,7 @@ type CreateArgs struct {
 	KeyPool            int
 	EnvEncAlg          string
 	LongNameMax        uint8
+	Masterkey          []byte
 }
 
 // Create - create a new config and write it to "Filename".

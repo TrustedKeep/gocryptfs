@@ -1,14 +1,12 @@
 package defaults
 
 import (
-	"io/ioutil"
 	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"syscall"
 	"testing"
-	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -22,8 +20,6 @@ func TestCpA(t *testing.T) {
 	fn1 := filepath.Join(test_helpers.TmpDir, t.Name())
 	fn2 := filepath.Join(test_helpers.DefaultPlainDir, t.Name())
 
-	rand.Seed(int64(time.Now().Nanosecond()))
-
 	{
 		// Need unrestricted umask
 		old := syscall.Umask(000)
@@ -35,7 +31,7 @@ func TestCpA(t *testing.T) {
 		var modeWant os.FileMode = os.FileMode(rand.Int31n(0777+1) | 0400)
 
 		// Create file outside mount
-		err := ioutil.WriteFile(fn1, nil, modeWant)
+		err := os.WriteFile(fn1, nil, modeWant)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -45,7 +41,7 @@ func TestCpA(t *testing.T) {
 			t.Fatal(err)
 		}
 		if fi.Mode() != modeWant {
-			t.Errorf("ioutil.WriteFile created wrong permissions: want %o have %o", modeWant, fi.Mode())
+			t.Errorf("os.WriteFile created wrong permissions: want %o have %o", modeWant, fi.Mode())
 		}
 
 		// "cp -a" from outside to inside mount
@@ -93,7 +89,7 @@ func TestAcl543(t *testing.T) {
 	}
 
 	// Set acl on file outside gocryptfs mount
-	err := ioutil.WriteFile(fn1, nil, modeWant)
+	err := os.WriteFile(fn1, nil, modeWant)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +113,7 @@ func TestAcl543(t *testing.T) {
 	}
 
 	// Set acl on file inside gocryptfs mount
-	err = ioutil.WriteFile(fn2, nil, modeWant)
+	err = os.WriteFile(fn2, nil, modeWant)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +160,7 @@ func TestAcl543(t *testing.T) {
 // Check that we handle zero-sized and undersized buffers correctly
 func TestXattrOverflow(t *testing.T) {
 	fn := filepath.Join(test_helpers.DefaultPlainDir, t.Name())
-	ioutil.WriteFile(fn, nil, 0600)
+	os.WriteFile(fn, nil, 0600)
 
 	attr := "user.foo123"
 	val := []byte("12341234")

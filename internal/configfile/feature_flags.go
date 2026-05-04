@@ -1,5 +1,9 @@
 package configfile
 
+import (
+	"slices"
+)
+
 type flagIota int
 
 const (
@@ -58,10 +62,5 @@ func isFeatureFlagKnown(flag string) bool {
 // IsFeatureFlagSet returns true if the feature flag "flagWant" is enabled.
 func (cf *ConfFile) IsFeatureFlagSet(flagWant flagIota) bool {
 	flagString := knownFlags[flagWant]
-	for _, flag := range cf.FeatureFlags {
-		if flag == flagString {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(cf.FeatureFlags, flagString)
 }

@@ -35,7 +35,11 @@ type mountInfo struct {
 // Contrary to InitFS(), you MUST passt "-extpass=echo test" (or another way for
 // getting the master key) explicitly.
 func Mount(c string, p string, showOutput bool, extraArgs ...string) error {
-	args := []string{"-q", "-wpanic", "-nosyslog", "-fg", fmt.Sprintf("-notifypid=%d", os.Getpid())}
+	args := []string{"-q", "-nosyslog", "-fg", fmt.Sprintf("-notifypid=%d", os.Getpid())}
+	// We are warning-free on Linux, but not (yet) on other OS's
+	if runtime.GOOS == "linux" {
+		args = append(args, "-wpanic")
+	}
 	args = append(args, extraArgs...)
 	if _, isset := os.LookupEnv("FUSEDEBUG"); isset {
 		fmt.Println("FUSEDEBUG is set, enabling -fusedebug")
@@ -187,7 +191,7 @@ func UnmountErr(dir string) (err error) {
 		err = cmd.Run()
 		if err == nil {
 			if len(fdsNow) > len(fds)+maxCacheFds {
-				return fmt.Errorf("fd leak in gocryptfs process? pid=%d dir=%q, fds:\nold=%v \nnew=%v\n", pid, dir, fds, fdsNow)
+				return fmt.Errorf("fd leak in gocryptfs process? pid=%d dir=%q, fds:\nold=%v \nnew=%v", pid, dir, fds, fdsNow)
 			}
 			return nil
 		}
@@ -242,11 +246,12 @@ func ListFds(pid int, prefix string) []string {
 			// fd was closed in the meantime
 			continue
 		}
-		if strings.HasPrefix(target, "pipe:") || strings.HasPrefix(target, "anon_inode:[eventpoll]") {
+		if strings.HasPrefix(target, "pipe:") || strings.HasPrefix(target, "anon_inode:[eventpoll]") ||
+			strings.HasPrefix(target, "anon_inode:[pidfd]") {
 			// The Go runtime creates pipes on demand for splice(), which
 			// creates spurious test failures. Ignore all pipes.
-			// Also get rid of the "eventpoll" fd that is always there and not
-			// interesting.
+			// Also get rid of the "eventpoll" and "pidfd" fds that are always there
+			// and not interesting.
 			filtered = append(filtered, target)
 			continue
 		}

@@ -25,3 +25,6 @@ gocryptfs.1
 .vscode
 gocryptfs-xray
 __debug_bin*
+
+# Ignore macos specific files
+.DS_Store
