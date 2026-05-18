@@ -5,7 +5,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 )
 
 // OpenDirNofollow opens the dir at "relPath" in a way that is secure against

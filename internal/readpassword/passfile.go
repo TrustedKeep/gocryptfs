@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 )
 
 // readPassFileConcatenate reads the first line from each file name and

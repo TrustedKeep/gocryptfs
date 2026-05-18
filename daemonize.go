@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
-	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/exitcodes"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/syscallcompat"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 )
 
 // The child sends us USR1 if the mount was successful. Exit with error code

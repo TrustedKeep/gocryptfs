@@ -1,7 +1,7 @@
 [![gocryptfs](Documentation/gocryptfs-logo.png)](https://nuetzlich.net/gocryptfs/)
 [![CI](https://github.com/rfjakob/gocryptfs/actions/workflows/ci.yml/badge.svg)](https://github.com/rfjakob/gocryptfs/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/rfjakob/gocryptfs/v2)](https://goreportcard.com/report/github.com/rfjakob/gocryptfs/v2)
+[![Go Report Card](https://goreportcard.com/badge/github.com/TrustedKeep/gocryptfs/v2)](https://goreportcard.com/report/github.com/TrustedKeep/gocryptfs/v2)
 [![Latest release](https://img.shields.io/github/release/rfjakob/gocryptfs.svg)](https://github.com/rfjakob/gocryptfs/releases)
 [![Homebrew version](https://img.shields.io/homebrew/v/gocryptfs.svg)](https://formulae.brew.sh/formula/gocryptfs#default)
 
@@ -321,7 +321,7 @@ Changelog
   ([#452](https://github.com/rfjakob/gocryptfs/issues/452)).
    * New feature flag! You need gocryptfs v2.2 or higher to mount a filesystem that uses this flag.
    * Test with `gocryptfs -speed` what is fastest for your CPU, or read [here](https://github.com/rfjakob/gocryptfs/issues/452#issuecomment-908559414)
-* Rewrite [OpenSSL backend](https://pkg.go.dev/github.com/rfjakob/gocryptfs/v2/internal/stupidgcm)
+* Rewrite [OpenSSL backend](https://pkg.go.dev/github.com/TrustedKeep/gocryptfs/v2/internal/stupidgcm)
   for better performance on AES-GCM-256-OpenSSL and XChaCha20-Poly1305-OpenSSL
 * `-serialize_reads`: get rid of delay logic by taking advantage of the kernel flag
   `FUSE_CAP_ASYNC_READ`

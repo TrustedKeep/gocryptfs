@@ -5,7 +5,7 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
+	"github.com/TrustedKeep/gocryptfs/v2/tests/test_helpers"
 )
 
 // TestZerokey verifies that `gocryptfs -zerokey` uses the same options as

@@ -4,9 +4,9 @@ import (
 	"os"
 	"sync"
 
+	"github.com/TrustedKeep/gocryptfs/v2/internal/exitcodes"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 	"github.com/TrustedKeep/tkutils/v2/kem"
-	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
 var (

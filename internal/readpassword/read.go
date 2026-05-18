@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 )
 
 const (

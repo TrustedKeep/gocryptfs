@@ -14,8 +14,8 @@ import (
 
 	"golang.org/x/crypto/chacha20poly1305"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
-	"github.com/rfjakob/gocryptfs/v2/internal/stupidgcm"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/cryptocore"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/stupidgcm"
 )
 
 // 128-bit file ID + 64 bit block number = 192 bits = 24 bytes

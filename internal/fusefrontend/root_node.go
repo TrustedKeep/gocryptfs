@@ -7,12 +7,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
-	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
-	"github.com/rfjakob/gocryptfs/v2/internal/inomap"
-	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
-	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/configfile"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/contentenc"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/inomap"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/nametransform"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/syscallcompat"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 )
 
 // RootNode is the root of the filesystem tree of Nodes.

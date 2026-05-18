@@ -9,11 +9,11 @@ import (
 
 	"os"
 
+	"github.com/TrustedKeep/gocryptfs/v2/internal/contentenc"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/cryptocore"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/exitcodes"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 	"github.com/google/uuid"
-	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
-	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
-	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
 const (

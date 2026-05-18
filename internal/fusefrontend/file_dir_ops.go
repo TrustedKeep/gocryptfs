@@ -4,12 +4,12 @@ import (
 	"context"
 	"syscall"
 
+	"github.com/TrustedKeep/gocryptfs/v2/internal/configfile"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/nametransform"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/syscallcompat"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
-	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
-	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
-	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
 func (n *Node) OpendirHandle(ctx context.Context, flags uint32) (fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {

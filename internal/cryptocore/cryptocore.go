@@ -13,8 +13,8 @@ import (
 	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/rfjakob/eme"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tkc"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 )
 
 const (
@@ -66,7 +66,7 @@ type CryptoCore struct {
 // Even though the "GCMIV128" feature flag is now mandatory, we must still
 // support 96-bit IVs here because they were used for encrypting the master
 // key in gocryptfs.conf up to gocryptfs v1.2. v1.3 switched to 128 bits.
-//wrapped key is only used if we are set up to use enveloping (keypool is-1), otherwise it can be nil or empty
+// wrapped key is only used if we are set up to use enveloping (keypool is-1), otherwise it can be nil or empty
 func New(aeadType AEADTypeEnum, IVBitLen, keyPool int, useHKDF bool, rootID string, wrappedKey []byte) *CryptoCore {
 	tlog.Debug.Printf("cryptocore.New: aeadType=%v, IVBitLen=%d, useHKDF=%v, keyPool=%d",
 		aeadType, IVBitLen, useHKDF, keyPool)

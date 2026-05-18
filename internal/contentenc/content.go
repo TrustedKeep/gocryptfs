@@ -12,9 +12,9 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
-	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/cryptocore"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tkc"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 )
 
 const (

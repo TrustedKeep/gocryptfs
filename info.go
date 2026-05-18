@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
-	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/configfile"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/exitcodes"
 )
 
 // info pretty-prints the contents of the config file at "filename" for human

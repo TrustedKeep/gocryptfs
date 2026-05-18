@@ -3,7 +3,7 @@ package configfile
 import (
 	"fmt"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/contentenc"
 )
 
 // Validate that the combination of settings makes sense and is supported

@@ -3,11 +3,11 @@ package fusefrontend
 import (
 	"syscall"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/syscallcompat"
 )
 
 // prepareAtSyscall returns a (dirfd, cName) pair that can be used

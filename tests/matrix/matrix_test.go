@@ -15,11 +15,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/rfjakob/gocryptfs/v2/ctlsock"
-	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
-	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
+	"github.com/TrustedKeep/gocryptfs/v2/ctlsock"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/syscallcompat"
+	"github.com/TrustedKeep/gocryptfs/v2/tests/test_helpers"
 )
-
 
 // Write `n` random bytes to filename `fn`, read again, compare hash
 func testWriteN(t *testing.T, fn string, n int) string {

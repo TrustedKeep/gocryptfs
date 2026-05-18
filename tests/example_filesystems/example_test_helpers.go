@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
+	"github.com/TrustedKeep/gocryptfs/v2/tests/test_helpers"
 )
 
 const statusTxtContent = "It works!\n"

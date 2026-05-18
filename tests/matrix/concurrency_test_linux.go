@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
+	"github.com/TrustedKeep/gocryptfs/v2/tests/test_helpers"
 )
 
 // https://github.com/rfjakob/gocryptfs/issues/363

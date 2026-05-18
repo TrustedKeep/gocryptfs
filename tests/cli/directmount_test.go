@@ -8,7 +8,7 @@ import (
 
 	"github.com/moby/sys/mountinfo"
 
-	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
+	"github.com/TrustedKeep/gocryptfs/v2/tests/test_helpers"
 )
 
 // TestDirectMount checks that the effective mount options are what we expect.

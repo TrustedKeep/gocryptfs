@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tkc"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 	cryptoutil "github.com/TrustedKeep/tkutils/v2/crypto"
 	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/TrustedKeep/tkutils/v2/lru"
-	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
 const (

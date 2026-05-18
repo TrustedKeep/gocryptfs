@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/configfile"
 
-	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
+	"github.com/TrustedKeep/gocryptfs/v2/tests/test_helpers"
 )
 
 var testPw = []byte("test")

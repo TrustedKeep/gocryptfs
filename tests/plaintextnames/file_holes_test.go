@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
+	"github.com/TrustedKeep/gocryptfs/v2/tests/test_helpers"
 
-	"github.com/rfjakob/gocryptfs/v2/contrib/findholes/holes"
+	"github.com/TrustedKeep/gocryptfs/v2/contrib/findholes/holes"
 )
 
 var cDir string

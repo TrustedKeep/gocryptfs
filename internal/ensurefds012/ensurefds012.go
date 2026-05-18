@@ -5,7 +5,7 @@
 //
 // Use like this:
 //
-//	import _ "github.com/rfjakob/gocryptfs/v2/internal/ensurefds012"
+//	import _ "github.com/TrustedKeep/gocryptfs/v2/internal/ensurefds012"
 //
 // The import line MUST be in the alphabitcally first source code file of
 // package main!
@@ -32,7 +32,7 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/exitcodes"
 )
 
 func init() {

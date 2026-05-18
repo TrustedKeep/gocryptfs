@@ -4,8 +4,8 @@ import (
 	// Should be initialized before anything else.
 	// This import line MUST be in the alphabetically first source code file of
 	// package main!
+	_ "github.com/TrustedKeep/gocryptfs/v2/internal/ensurefds012"
 	"github.com/TrustedKeep/tkutils/v2/network"
-	_ "github.com/rfjakob/gocryptfs/v2/internal/ensurefds012"
 
 	"fmt"
 	"net"
@@ -18,8 +18,8 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/exitcodes"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 )
 
 // argContainer stores the parsed CLI options and arguments

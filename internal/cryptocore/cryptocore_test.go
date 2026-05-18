@@ -3,8 +3,8 @@ package cryptocore
 import (
 	"testing"
 
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tkc"
 	"github.com/TrustedKeep/tkutils/v2/kem"
-	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 )
 
 // "New" should accept at least these param combinations

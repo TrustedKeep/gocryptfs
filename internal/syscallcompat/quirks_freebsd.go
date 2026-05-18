@@ -3,7 +3,7 @@ package syscallcompat
 import (
 	"golang.org/x/sys/unix"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 )
 
 // DetectQuirks decides if there are known quirks on the backing filesystem

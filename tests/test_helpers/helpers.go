@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/rfjakob/gocryptfs/v2/ctlsock"
-	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
-	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
+	"github.com/TrustedKeep/gocryptfs/v2/ctlsock"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/nametransform"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/syscallcompat"
 )
 
 // TmpDir will be created inside this directory, set in init() to
@@ -137,7 +137,7 @@ func isExt4(path string) bool {
 
 // InitFS creates a new empty cipherdir and calls
 //
-//     gocryptfs -q -init -extpass "echo test" $extraArgs $cipherdir
+//	gocryptfs -q -init -extpass "echo test" $extraArgs $cipherdir
 //
 // It returns cipherdir without a trailing slash.
 //

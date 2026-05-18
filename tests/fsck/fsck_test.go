@@ -12,8 +12,8 @@ import (
 
 	"github.com/pkg/xattr"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
-	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/exitcodes"
+	"github.com/TrustedKeep/gocryptfs/v2/tests/test_helpers"
 )
 
 func dec64(in string) (out []byte) {
@@ -51,7 +51,7 @@ func TestBrokenFsV14(t *testing.T) {
 
 func TestMalleableBase64(t *testing.T) {
 	// Evil filenames. Cannot have them in git, because if we do,
-	//  go install github.com/rfjakob/gocryptfs/v2@latest
+	//  go install github.com/TrustedKeep/gocryptfs/v2@latest
 	// fails with
 	//  g: malformed file path "tests/fsck/malleable_base64/27AG8t-XZH7G9ou2OSD_z\rg": invalid char '\r'
 	//  g: malformed file path "tests/fsck/malleable_base64/27AG8t-XZH7G9ou2OSD_z\rg": invalid char '\r'

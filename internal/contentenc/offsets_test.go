@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/cryptocore"
 )
 
 // TestSizeToSize tests CipherSizeToPlainSize and PlainSizeToCipherSize

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/google/uuid"
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 	"go.etcd.io/bbolt"
 )
 

@@ -11,10 +11,10 @@ import (
 	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/hanwen/go-fuse/v2/fs"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
-	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
-	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
-	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/contentenc"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/cryptocore"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/nametransform"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tkc"
 )
 
 func newTestFS(args Args) *RootNode {

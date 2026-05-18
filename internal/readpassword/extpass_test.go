@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 )
 
 func TestMain(m *testing.M) {

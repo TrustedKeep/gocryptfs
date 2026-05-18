@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/TrustedKeep/gocryptfs/v2/internal/cryptocore"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tkc"
 	"github.com/TrustedKeep/tkutils/v2/kem"
-	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
-	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 )
 
 type testRange struct {

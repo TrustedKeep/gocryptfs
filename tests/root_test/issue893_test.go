@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
+	"github.com/TrustedKeep/gocryptfs/v2/tests/test_helpers"
 )
 
 // gocryptfs v2.5.0 upgraded x/sys/unix and we found out that, since

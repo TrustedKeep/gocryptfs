@@ -17,7 +17,7 @@ $ go test -bench .
 BenchmarkStupidGCM-2   	  100000	     22552 ns/op	 181.62 MB/s
 BenchmarkGoGCM-2       	   20000	     81871 ns/op	  50.03 MB/s
 PASS
-ok  	github.com/rfjakob/gocryptfs/v2/internal/speed	6.022s
+ok  	github.com/TrustedKeep/gocryptfs/v2/internal/speed	6.022s
 */
 
 func BenchmarkGoGCM(b *testing.B) {

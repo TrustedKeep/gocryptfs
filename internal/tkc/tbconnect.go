@@ -12,10 +12,10 @@ import (
 	client "github.com/TrustedKeep/boundary/client"
 	"github.com/TrustedKeep/boundary/common"
 	"github.com/TrustedKeep/boundary/tcmproto"
+	"github.com/TrustedKeep/gocryptfs/v2/internal/tlog"
 	"github.com/TrustedKeep/tkutils/v2/certutil"
 	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/google/uuid"
-	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
 var _ KMSConnector = &tbConnector{}
