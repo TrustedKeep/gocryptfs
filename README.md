@@ -1,7 +1,7 @@
 [![gocryptfs](Documentation/gocryptfs-logo.png)](https://nuetzlich.net/gocryptfs/)
 [![CI](https://github.com/rfjakob/gocryptfs/actions/workflows/ci.yml/badge.svg)](https://github.com/rfjakob/gocryptfs/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/rfjakob/gocryptfs)](https://goreportcard.com/report/github.com/rfjakob/gocryptfs)
+[![Go Report Card](https://goreportcard.com/badge/github.com/rfjakob/gocryptfs/v2)](https://goreportcard.com/report/github.com/rfjakob/gocryptfs/v2)
 [![Latest release](https://img.shields.io/github/release/rfjakob/gocryptfs.svg)](https://github.com/rfjakob/gocryptfs/releases)
 [![Homebrew version](https://img.shields.io/homebrew/v/gocryptfs.svg)](https://formulae.brew.sh/formula/gocryptfs#default)
 
@@ -30,7 +30,7 @@ hours and hours of stress (fsstress, extractloop.bash) and correctness
 testing (xfstests). It is now considered ready for general consumption.
 
 The old principle still applies: Important data should have a backup.
-Also, keep a copy of your master key (printed on mount) in a safe place.
+Also, keep a copy of your master key (printed at init) in a safe place.
 This allows you to access the data even if the gocryptfs.conf config
 file is damaged or you lose the password.
 
@@ -50,8 +50,14 @@ of macOS support but please create a new ticket if you hit a problem.
 For Windows, an independent C++ reimplementation can be found here:
 [cppcryptfs](https://github.com/bailey27/cppcryptfs)
 
-A standalone Python tool that can decrypt files & file names is here:
+Standalone tools:
+
 [gocryptfs-inspect](https://github.com/slackner/gocryptfs-inspect)
+is Python tool that can decrypt files & file names without
+using FUSE.
+
+[gocryptfs-create-folder](https://codeberg.org/LGLQ/gocryptfs-create-folder)
+is a Python tool can encrypt a directory without using FUSE.
 
 Installation
 ------------
@@ -202,6 +208,67 @@ RM:    2,367
 
 Changelog
 ---------
+
+#### v2.6.1, 2025-08-10
+* Fix warnings `cipherSize X: incomplete last block (Y bytes), padding to Z bytes`
+  (harmless but annoying, [#951](https://github.com/rfjakob/gocryptfs/issues/951))
+* MacOS: Fix GUI apps reporting failure to save files [#914](https://github.com/rfjakob/gocryptfs/issues/914)
+* MacOS: Fix `test-without-openssl.bash` trying to build tests with openssl enabled
+  ([2ebd0d754b8ee4](https://github.com/rfjakob/gocryptfs/commit/2ebd0d754b8ee46e6c65e90e1d1e13491b03b7b5))
+
+#### v2.6.0, 2025-07-14
+* Upgrade to go-fuse v2.8.0
+* Switch to the new go-fuse directory API( https://github.com/rfjakob/gocryptfs/commit/ae3c859c1179498a4882b4bd69c2243aa6912332 )
+* Fix `-force_owner` not allowing file/dir create ( https://github.com/rfjakob/gocryptfs/issues/783 )
+* Skip `TestBtrfsQuirks` if mkfs.btrfs is not installed ( https://github.com/rfjakob/gocryptfs/issues/930 )
+
+#### v2.5.4, 2025-04-13
+* Drop `GOAMD64=v2` from `build.bash`, there's user(s) still running `GOAMD64=v1` CPUs
+  ([#908](https://github.com/rfjakob/gocryptfs/issues/908),
+  [commit](https://github.com/rfjakob/gocryptfs/commit/4851c322d5ce06c559eed9e9f3cb0a5c2c72fd5e))
+
+#### v2.5.3, 2025-04-05
+* Fix `go install` failing with `g: malformed file path "tests/fsck/malleable_base64/27AG8t-XZH7G9ou2OSD_z\ng": invalid char '\n'`
+  ([c80558](https://github.com/rfjakob/gocryptfs/commit/c8055829c311ecaf532fd171f3a5d104f873272d))
+* Fix panic when go-fuse is newer than specified in go.mod ([#897](https://github.com/rfjakob/gocryptfs/issues/897))
+
+#### v2.5.2, 2025-03-19
+* Use our own `syscallcompat.Setreuid` (and friends) wrappers
+  ([6b1ba584](https://github.com/rfjakob/gocryptfs/commit/6b1ba5846b17eec710a70cb6c6bf23e3f2024289))
+* Upgrade `golang.org/x/sys` again
+* Provide arm64 binaries in releases in addition to amd64
+
+#### v2.5.1, 2025-01-23
+* **Downgrade `golang.org/x/sys` to unbreak `unix.Setreuid` and `-allow_other`
+  ([6d342f3](https://github.com/rfjakob/gocryptfs/commit/6d342f3f4f1e9468da00b141b2abaf1e55f28665),
+  [#893](https://github.com/rfjakob/gocryptfs/issues/893), [#892](https://github.com/rfjakob/gocryptfs/issues/892))**
+
+#### v2.5.0, 2025-01-18
+* **Important fixes for `-reverse` mode affecting the virtual `gocryptfs.diriv` and
+  `gocryptfs.longname.*.name` files.** The bug can cause file *names* to become
+  undecryptable. To make sure that sync tools like rsync copy new, good copies,
+  gocryptfs v2.5.0 and later advance ctime and mtime for these files by 10 seconds.
+  * Fix `-reverse` mode sometimes (triggered by inode number reuse) returning stale
+    data for `gocryptfs.diriv` (#802)
+  * Fix `-reverse` mode hardlinking `gocryptfs.longname.*.name` files of hardlinked
+    files together (#802)
+* Fix `-reverse` mode ignoring `-force-owner` (#809)
+* Add workaround for excessive file fragementation on btrfs (#811)
+* `-ctlsock`: automatically delete orphaned colliding socket file (#776)
+* MacOS: Fix XTIMES panic on startup (#823)
+  * Fixed by updating the go-fuse library to v2.5.0
+* MacOS: merge kernel options before passing them on (#854, #557)
+* Add `-fido2-assert-option` (#807)
+* `-init` now accepts `-masterkey`
+* `-passwd` now ignores `-extpass` and `-passfile` for the *new* password (#287, #882)
+
+#### v2.4.0, 2023-06-10
+* Try the `mount(2)` syscall before falling back to `fusermount(1)`. This means we
+  don't need `fusermount(1)` at all if running as root or in a root-like namespace
+  ([#697](https://github.com/rfjakob/gocryptfs/issues/697))
+* Fix `-extpass` mis-parsing commas ([#730](https://github.com/rfjakob/gocryptfs/issues/730))
+* Fix `rm -R` mis-reporting `write-protected directory` on gocryptfs on sshfs
+  ([commit](https://github.com/rfjakob/gocryptfs/commit/09954c4bdecf0ca6da65776f176dc934ffced2b0))
 
 #### v2.3.2, 2023-04-29
 * Fix incorrect file size reported after hard link creation

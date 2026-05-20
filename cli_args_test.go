@@ -127,31 +127,30 @@ func TestParseCliOpts(t *testing.T) {
 		o argContainer
 	}
 
-	var testcases []testcaseContainer
-
-	testcases = append(testcases, testcaseContainer{
-		i: []string{"gocryptfs"},
-		o: defaultArgs,
-	})
+	testcases := []testcaseContainer{
+		{
+			i: []string{"gocryptfs"},
+			o: defaultArgs,
+		},
+	}
 
 	o := defaultArgs
 	o.quiet = true
-	testcases = append(testcases, testcaseContainer{
-		i: []string{"gocryptfs", "-q"},
-		o: o,
-	})
-	testcases = append(testcases, testcaseContainer{
-		i: []string{"gocryptfs", "--q"},
-		o: o,
-	})
-	testcases = append(testcases, testcaseContainer{
-		i: []string{"gocryptfs", "-quiet"},
-		o: o,
-	})
-	testcases = append(testcases, testcaseContainer{
-		i: []string{"gocryptfs", "--quiet"},
-		o: o,
-	})
+	testcases = append(testcases, []testcaseContainer{
+		{
+			i: []string{"gocryptfs", "-q"},
+			o: o,
+		}, {
+			i: []string{"gocryptfs", "--q"},
+			o: o,
+		}, {
+			i: []string{"gocryptfs", "-quiet"},
+			o: o,
+		}, {
+			i: []string{"gocryptfs", "--quiet"},
+			o: o,
+		},
+	}...)
 
 	for _, tc := range testcases {
 		o := parseCliOpts(tc.i)

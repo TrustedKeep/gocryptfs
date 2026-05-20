@@ -1,7 +1,6 @@
 package reverse_test
 
 import (
-	"io/ioutil"
 	"net/url"
 	"os"
 	"runtime"
@@ -17,7 +16,7 @@ func TestOneFileSystem(t *testing.T) {
 	}
 	// Let's not explode with "TempDir: pattern contains path separator"
 	myEscapedName := url.PathEscape(t.Name())
-	mnt, err := ioutil.TempDir(test_helpers.TmpDir, myEscapedName)
+	mnt, err := os.MkdirTemp(test_helpers.TmpDir, myEscapedName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +32,7 @@ func TestOneFileSystem(t *testing.T) {
 	// Copied from inomap
 	const maxPassthruIno = 1<<48 - 1
 
-	entries, err := ioutil.ReadDir(mnt)
+	entries, err := os.ReadDir(mnt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +42,11 @@ func TestOneFileSystem(t *testing.T) {
 			// We are only interested in directories
 			continue
 		}
-		st := e.Sys().(*syscall.Stat_t)
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		st := info.Sys().(*syscall.Stat_t)
 		// The inode numbers of files with a different device number are remapped
 		// to something above maxPassthruIno
 		if st.Ino > maxPassthruIno {

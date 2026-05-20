@@ -7,7 +7,6 @@ import (
 	"log"
 	"log/syslog"
 	"math"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,7 +16,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -101,16 +99,15 @@ func doMount(args *argContainer) {
 		// We must use an absolute path because we cd to / when daemonizing.
 		// This messes up the delete-on-close logic in the unix socket object.
 		args.ctlsock, _ = filepath.Abs(args.ctlsock)
-		var sock net.Listener
-		sock, err = net.Listen("unix", args.ctlsock)
+
+		args._ctlsockFd, err = ctlsocksrv.Listen(args.ctlsock)
 		if err != nil {
 			tlog.Fatal.Printf("ctlsock: %v", err)
 			os.Exit(exitcodes.CtlSock)
 		}
-		args._ctlsockFd = sock
 		// Close also deletes the socket file
 		defer func() {
-			err = sock.Close()
+			err = args._ctlsockFd.Close()
 			if err != nil {
 				tlog.Warn.Printf("ctlsock close: %v", err)
 			}
@@ -216,7 +213,7 @@ func idleMonitor(idleTimeout time.Duration, fs *fusefrontend.RootNode, srv *fuse
 	}
 	for {
 		// Atomically check whether the flag is 0 and reset it to 1 if so.
-		isIdle := !atomic.CompareAndSwapUint32(&fs.IsIdle, 0, 1)
+		isIdle := !fs.IsIdle.CompareAndSwap(false, true)
 		// Any form of current or recent access resets the idle counter.
 		openFileCount := openfiletable.CountOpenFiles()
 		if !isIdle || openFileCount > 0 {
@@ -318,9 +315,13 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 		IVBits = cryptoBackend.NonceSize * 8
 		keyPool = confFile.KeyPool
 	}
-	// If allow_other is set and we run as root, try to give newly created files to
-	// the right user.
-	if args.allow_other && os.Getuid() == 0 {
+	// If allow_other is set and we run as root, create files as the accessing
+	// user.
+	// Except when -force_owner is set, because in this case the user may
+	// not have write permissions. And the point of -force_owner is to map uids,
+	// so we want the files on the backing dir to get the uid the gocryptfs process
+	// is running as.
+	if args.allow_other && os.Getuid() == 0 && args._forceOwner == nil {
 		frontendArgs.PreserveOwner = true
 	}
 	var rootWrappedKey []byte
@@ -409,6 +410,10 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 	return rootNode, func() { cCore.Wipe() }
 }
 
+type RootInoer interface {
+	RootIno() uint64
+}
+
 // initGoFuse calls into go-fuse to mount `rootNode` on `args.mountpoint`.
 // The mountpoint is ready to use when the functions returns.
 // On error, it calls os.Exit and does not return.
@@ -433,6 +438,9 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 		}
 	}
 	fuseOpts.NullPermissions = true
+	// The inode number for the root node must be manually set on mount
+	// https://github.com/hanwen/go-fuse/issues/399
+	fuseOpts.RootStableAttr = &fs.StableAttr{Ino: rootNode.(RootInoer).RootIno()}
 	// Enable go-fuse warnings
 	fuseOpts.Logger = log.New(os.Stderr, "go-fuse: ", log.Lmicroseconds)
 	fuseOpts.MountOptions = fuse.MountOptions{
@@ -443,23 +451,26 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 		// have it >128kiB. We cannot handle more than 128kiB, so we tell
 		// the kernel to limit the size explicitly.
 		MaxWrite:  fuse.MAX_KERNEL_WRITE,
-		Options:   []string{fmt.Sprintf("max_read=%d", fuse.MAX_KERNEL_WRITE)},
 		Debug:     args.fusedebug,
 		EnableAcl: args.acl,
+		// Attempt to directly call mount(2) before trying fusermount. This means we
+		// can do without fusermount if running as root.
+		DirectMount: true,
 	}
 
 	mOpts := &fuseOpts.MountOptions
+	opts := make(map[string]string)
 	if args.allow_other {
 		tlog.Info.Printf(tlog.ColorYellow + "The option \"-allow_other\" is set. Make sure the file " +
 			"permissions protect your data from unwanted access." + tlog.ColorReset)
 		mOpts.AllowOther = true
 		// Make the kernel check the file permissions for us
-		mOpts.Options = append(mOpts.Options, "default_permissions")
+		opts["default_permissions"] = ""
 	}
 	// fusermount from libfuse 3.x removed the "nonempty" option and exits
 	// with an error if it sees it. Only add it to the options on libfuse 2.x.
 	if args.nonempty && haveFusermount2() {
-		mOpts.Options = append(mOpts.Options, "nonempty")
+		opts["nonempty"] = ""
 	}
 	// Set values shown in "df -T" and friends
 	// First column, "Filesystem"
@@ -472,45 +483,62 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 		tlog.Warn.Printf("Warning: %q will be displayed as %q in \"df -T\"", fsname, fsname2)
 		fsname = fsname2
 	}
-	mOpts.Options = append(mOpts.Options, "fsname="+fsname)
+	mOpts.FsName = fsname
 	// Second column, "Type", will be shown as "fuse." + Name
 	mOpts.Name = "gocryptfs"
 	// Add a volume name if running osxfuse. Otherwise the Finder will show it as
 	// something like "osxfuse Volume 0 (gocryptfs)".
 	if runtime.GOOS == "darwin" {
-		volname := strings.Replace(path.Base(args.mountpoint), ",", "_", -1)
-		mOpts.Options = append(mOpts.Options, "volname="+volname)
+		opts["volname"] = strings.Replace(path.Base(args.mountpoint), ",", "_", -1)
 	}
 	// The kernel enforces read-only operation, we just have to pass "ro".
 	if args.ro {
-		mOpts.Options = append(mOpts.Options, "ro")
+		opts["ro"] = ""
 	} else if args.rw {
-		mOpts.Options = append(mOpts.Options, "rw")
+		opts["rw"] = ""
 	}
 	// If both "nosuid" & "suid", "nodev" & "dev", etc were passed, the safer
 	// option wins.
 	if args.nosuid {
-		mOpts.Options = append(mOpts.Options, "nosuid")
+		opts["nosuid"] = ""
 	} else if args.suid {
-		mOpts.Options = append(mOpts.Options, "suid")
+		opts["suid"] = ""
 	}
 	if args.nodev {
-		mOpts.Options = append(mOpts.Options, "nodev")
+		opts["nodev"] = ""
 	} else if args.dev {
-		mOpts.Options = append(mOpts.Options, "dev")
+		opts["dev"] = ""
 	}
 	if args.noexec {
-		mOpts.Options = append(mOpts.Options, "noexec")
+		opts["noexec"] = ""
 	} else if args.exec {
-		mOpts.Options = append(mOpts.Options, "exec")
+		opts["exec"] = ""
+	}
+	if args.context != "" {
+		opts["context"] = args.context
 	}
 	// Add additional mount options (if any) after the stock ones, so the user has
 	// a chance to override them.
 	if args.ko != "" {
 		parts := strings.Split(args.ko, ",")
 		tlog.Debug.Printf("Adding -ko mount options: %v", parts)
-		mOpts.Options = append(mOpts.Options, parts...)
+		for _, part := range parts {
+			kv := strings.SplitN(part, "=", 2)
+			if len(kv) == 2 {
+				opts[kv[0]] = kv[1]
+			} else {
+				opts[kv[0]] = ""
+			}
+		}
 	}
+	for k, v := range opts {
+		if v == "" {
+			mOpts.Options = append(mOpts.Options, k)
+		} else {
+			mOpts.Options = append(mOpts.Options, k+"="+v)
+		}
+	}
+
 	srv, err := fs.Mount(args.mountpoint, rootNode, fuseOpts)
 	if err != nil {
 		tlog.Fatal.Printf("fs.Mount failed: %s", strings.TrimSpace(err.Error()))

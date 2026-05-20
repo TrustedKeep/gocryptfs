@@ -3,10 +3,6 @@ package syscallcompat
 
 import (
 	"fmt"
-	"io/ioutil"
-	"runtime"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -67,102 +63,9 @@ func Fallocate(fd int, mode uint32, off int64, len int64) (err error) {
 	return syscall.Fallocate(fd, mode, off, len)
 }
 
-func getSupplementaryGroups(pid uint32) (gids []int) {
-	procPath := fmt.Sprintf("/proc/%d/task/%d/status", pid, pid)
-	blob, err := ioutil.ReadFile(procPath)
-	if err != nil {
-		return nil
-	}
-
-	lines := strings.Split(string(blob), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "Groups:") {
-			f := strings.Fields(line[7:])
-			gids = make([]int, len(f))
-			for i := range gids {
-				val, err := strconv.ParseInt(f[i], 10, 32)
-				if err != nil {
-					return nil
-				}
-				gids[i] = int(val)
-			}
-			return gids
-		}
-	}
-
-	return nil
-}
-
-// asUser runs `f()` under the effective uid, gid, groups specified
-// in `context`.
-//
-// If `context` is nil, `f()` is executed directly without switching user id.
-func asUser(f func() (int, error), context *fuse.Context) (int, error) {
-	if context == nil {
-		return f()
-	}
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	// Since go1.16beta1 (commit d1b1145cace8b968307f9311ff611e4bb810710c ,
-	// https://go-review.googlesource.com/c/go/+/210639 )
-	// syscall.{Setgroups,Setregid,Setreuid} affects all threads, which
-	// is exactly what we not want.
-	//
-	// We now use unix.{Setgroups,Setregid,Setreuid} instead.
-
-	err := unix.Setgroups(getSupplementaryGroups(context.Pid))
-	if err != nil {
-		return -1, err
-	}
-	defer unix.Setgroups(nil)
-
-	err = unix.Setregid(-1, int(context.Owner.Gid))
-	if err != nil {
-		return -1, err
-	}
-	defer unix.Setregid(-1, 0)
-
-	err = unix.Setreuid(-1, int(context.Owner.Uid))
-	if err != nil {
-		return -1, err
-	}
-	defer unix.Setreuid(-1, 0)
-
-	return f()
-}
-
-// OpenatUser runs the Openat syscall in the context of a different user.
-//
-// It switches the current thread to the new user, performs the syscall,
-// and switches back.
-//
-// If `context` is nil, this function behaves like ordinary Openat (no
-// user switching).
-func OpenatUser(dirfd int, path string, flags int, mode uint32, context *fuse.Context) (fd int, err error) {
-	f := func() (int, error) {
-		return Openat(dirfd, path, flags, mode)
-	}
-	return asUser(f, context)
-}
-
 // Mknodat wraps the Mknodat syscall.
 func Mknodat(dirfd int, path string, mode uint32, dev int) (err error) {
 	return syscall.Mknodat(dirfd, path, mode, dev)
-}
-
-// MknodatUser runs the Mknodat syscall in the context of a different user.
-// If `context` is nil, this function behaves like ordinary Mknodat.
-//
-// See OpenatUser() for how this works.
-func MknodatUser(dirfd int, path string, mode uint32, dev int, context *fuse.Context) (err error) {
-	f := func() (int, error) {
-		err := Mknodat(dirfd, path, mode, dev)
-		return -1, err
-	}
-	_, err = asUser(f, context)
-	return err
 }
 
 // Dup3 wraps the Dup3 syscall. We want to use Dup3 rather than Dup2 because Dup2
@@ -205,32 +108,6 @@ func FchmodatNofollow(dirfd int, path string, mode uint32) (err error) {
 	return syscall.Chmod(procPath, mode)
 }
 
-// SymlinkatUser runs the Symlinkat syscall in the context of a different user.
-// If `context` is nil, this function behaves like ordinary Symlinkat.
-//
-// See OpenatUser() for how this works.
-func SymlinkatUser(oldpath string, newdirfd int, newpath string, context *fuse.Context) (err error) {
-	f := func() (int, error) {
-		err := unix.Symlinkat(oldpath, newdirfd, newpath)
-		return -1, err
-	}
-	_, err = asUser(f, context)
-	return err
-}
-
-// MkdiratUser runs the Mkdirat syscall in the context of a different user.
-// If `context` is nil, this function behaves like ordinary Mkdirat.
-//
-// See OpenatUser() for how this works.
-func MkdiratUser(dirfd int, path string, mode uint32, context *fuse.Context) (err error) {
-	f := func() (int, error) {
-		err := unix.Mkdirat(dirfd, path, mode)
-		return -1, err
-	}
-	_, err = asUser(f, context)
-	return err
-}
-
 // LsetxattrUser runs the Lsetxattr syscall in the context of a different user.
 // This is useful when setting ACLs, as the result depends on the user running
 // the operation (see fuse-xfstests generic/375).
@@ -247,8 +124,16 @@ func LsetxattrUser(path string, attr string, data []byte, flags int, context *fu
 
 func timesToTimespec(a *time.Time, m *time.Time) []unix.Timespec {
 	ts := make([]unix.Timespec, 2)
-	ts[0] = unix.Timespec(fuse.UtimeToTimespec(a))
-	ts[1] = unix.Timespec(fuse.UtimeToTimespec(m))
+	if a == nil {
+		ts[0] = unix.Timespec{Nsec: unix.UTIME_OMIT}
+	} else {
+		ts[0], _ = unix.TimeToTimespec(*a)
+	}
+	if m == nil {
+		ts[1] = unix.Timespec{Nsec: unix.UTIME_OMIT}
+	} else {
+		ts[1], _ = unix.TimeToTimespec(*m)
+	}
 	return ts
 }
 

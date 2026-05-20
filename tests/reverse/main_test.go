@@ -2,7 +2,9 @@ package reverse_test
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
+	"log"
 	"os"
 	"testing"
 
@@ -31,6 +33,8 @@ var dirC string
 func TestMain(m *testing.M) {
 	var r int
 
+	flag.Parse()
+
 	testcases := []struct {
 		plaintextnames      bool
 		deterministic_names bool
@@ -40,23 +44,17 @@ func TestMain(m *testing.M) {
 		{false, true},
 	}
 	for i, tc := range testcases {
-		argsA := []string{"-reverse"}
+		// Fill the global vars
 		plaintextnames, deterministic_names = tc.plaintextnames, tc.deterministic_names
-		if tc.plaintextnames {
-			argsA = append(argsA, "-plaintextnames")
-		} else if tc.deterministic_names {
-			argsA = append(argsA, "-deterministic-names")
+		if testing.Verbose() {
+			log.Printf("TestMain: plaintextnames=%v deterministic_names=%v", plaintextnames, deterministic_names)
 		}
-		dirA = test_helpers.InitFS(nil, argsA...)
-		dirB = test_helpers.TmpDir + "/b"
+
+		dirA, dirB, _ = newReverseFS(nil)
 		dirC = test_helpers.TmpDir + "/c"
-		if err := os.Mkdir(dirB, 0700); err != nil {
-			panic(err)
-		}
 		if err := os.Mkdir(dirC, 0700); err != nil {
 			panic(err)
 		}
-		test_helpers.MountOrExit(dirA, dirB, "-reverse", "-extpass", "echo test")
 		test_helpers.MountOrExit(dirB, dirC, "-extpass", "echo test")
 		r = m.Run()
 		test_helpers.UnmountPanic(dirC)
@@ -72,4 +70,25 @@ func TestMain(m *testing.M) {
 		}
 	}
 	os.Exit(r)
+}
+
+// newReverseFS creates and mounts a new, empty reverse filesystem.
+func newReverseFS(extraMountArgs []string) (backingDir, mntDir, ctlsockPath string) {
+	args := []string{"-reverse"}
+	if plaintextnames {
+		args = append(args, "-plaintextnames")
+	} else if deterministic_names {
+		args = append(args, "-deterministic-names")
+	}
+	backingDir = test_helpers.InitFS(nil, args...)
+	mntDir = backingDir + ".mnt"
+	ctlsockPath = mntDir + ".sock"
+	mountArgs := []string{"-reverse", "-extpass", "echo test", "-ctlsock", ctlsockPath}
+	mountArgs = append(mountArgs, extraMountArgs...)
+	test_helpers.MountOrExit(backingDir, mntDir, mountArgs...)
+
+	if testing.Verbose() {
+		log.Printf("newReverseFS: mounted %q on %q", backingDir, mntDir)
+	}
+	return
 }

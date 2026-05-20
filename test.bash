@@ -1,4 +1,7 @@
 #!/bin/bash
+#
+# test.bash runs the gocryptfs test suite against $TMPDIR,
+# or, if unset, /var/tmp.
 
 set -eu
 
@@ -19,7 +22,6 @@ else
 fi
 
 cd "$(dirname "$0")"
-export GO111MODULE=on
 MYNAME=$(basename "$0")
 TESTDIR=$TMPDIR/gocryptfs-test-parent-$UID
 mkdir -p "$TESTDIR"
@@ -35,9 +37,9 @@ unmount_leftovers() {
 	return $RET
 }
 
-(
 # Prevent multiple parallel test.bash instances as this causes
 # all kinds of mayhem
+exec 200> "$LOCKFILE"
 if ! command -v flock > /dev/null ; then
 	echo "flock is not available, skipping"
 elif ! flock -n 200 ; then
@@ -52,8 +54,8 @@ unmount_leftovers || true
 	echo "$MYNAME: build-without-openssl.bash failed"
 	exit 1
 }
-# Don't build with openssl if we were passed "-tags without_openssl"
-if [[ "$*" != *without_openssl* ]] ; then
+# Only build with openssl if cgo is enabled
+if [[ $(go env CGO_ENABLED) -eq 1 ]] ; then
 	./build.bash
 fi
 
@@ -65,12 +67,20 @@ else
 	go vet ./...
 fi
 
+if command -v staticcheck > /dev/null ; then
+	staticcheck ./...
+else
+	echo "staticcheck not installed - skipping"
+fi
+
 if command -v shellcheck > /dev/null ; then
-	# SC2002 = useless cat. Does no harm, disable the check.
-	shellcheck -x -e SC2002 ./*.bash
+	shellcheck -x ./*.bash
 else
 	echo "shellcheck not installed - skipping"
 fi
+
+echo -n "Testing on TMPDIR=$TMPDIR, filesystem: "
+findmnt --noheadings --target "$TESTDIR" --output FSTYPE,OPTIONS || echo "?"
 
 EXTRA_ARGS=""
 if [[ $VERBOSE -eq 1 ]]; then
@@ -104,18 +114,19 @@ if find internal -type f -name \*.go -print0 | xargs -0 grep "panic("; then
 	exit 1
 fi
 
-# All functions from the commit msg in https://go-review.googlesource.com/c/go/+/210639
-if find . -type f -name \*.go -print0 | xargs -0 grep -E 'syscall.(Setegid|Seteuid|Setgroups|Setgid|Setregid|Setreuid|Setresgid|Setresuid|Setuid)\(' ; then
-	echo "$MYNAME: You probably want to use unix.Setgroups and friends. See the comments in OpenatUser() for why."
+# Both syscall.Setreuid etc (since 2020, https://github.com/golang/go/commit/d1b1145cace8b968307f9311ff611e4bb810710c)
+# and unix.Setreuid etc (since 2022, https://github.com/golang/sys/commit/d0df966e6959f00dc1c74363e537872647352d51)
+# affect the whole process, not only the current thread, which is what we do NOT want.
+if find . ! -path "./vendor/*" -type f -name \*.go -print0 | xargs -0 grep -v -E '^//' |
+	grep -E '(syscall|unix).(Setegid|Seteuid|Setgroups|Setgid|Setregid|Setreuid|Setresgid|Setresuid|Setuid)\(' ; then
+	echo "$MYNAME: This affects the whole process. Please use the syscallcompat wrappers instead."
 	exit 1
 fi
 
-if find . -type f -name \*.go -print0 | xargs -0 grep '\.Creat('; then
+if find . ! -path "./vendor/*" -type f -name \*.go -print0 | xargs -0 grep '\.Creat('; then
 	# MacOS does not have syscall.Creat(). Creat() is equivalent to Open(..., O_CREAT|O_WRONLY|O_TRUNC, ...),
 	# but usually you want O_EXCL instead of O_TRUNC because it is safer, so that's what we suggest
 	# instead.
 	echo "$MYNAME: Please use Open(..., O_CREAT|O_WRONLY|O_EXCL, ...) instead of Creat()! https://github.com/rfjakob/gocryptfs/issues/623"
 	exit 1
 fi
-
-) 200> "$LOCKFILE"

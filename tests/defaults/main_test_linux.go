@@ -3,8 +3,8 @@ package defaults
 
 import (
 	"bytes"
+	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -175,7 +175,7 @@ func TestXfs124(t *testing.T) {
 
 func TestWrite0200File(t *testing.T) {
 	fn := test_helpers.DefaultPlainDir + "/TestWrite0200File"
-	err := ioutil.WriteFile(fn, nil, 0200)
+	err := os.WriteFile(fn, nil, 0200)
 	if err != nil {
 		t.Fatalf("creating empty file failed: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestWrite0200File(t *testing.T) {
 // Now we return EOPNOTSUPP and mv is happy.
 func TestMvWarnings(t *testing.T) {
 	fn := test_helpers.TmpDir + "/TestMvWarnings"
-	err := ioutil.WriteFile(fn, nil, 0600)
+	err := os.WriteFile(fn, nil, 0600)
 	if err != nil {
 		t.Fatalf("creating file failed: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestMvWarningSymlink(t *testing.T) {
 // See TestMvWarnings.
 func TestCpWarnings(t *testing.T) {
 	fn := test_helpers.TmpDir + "/TestCpWarnings"
-	err := ioutil.WriteFile(fn, []byte("foo"), 0600)
+	err := os.WriteFile(fn, []byte("foo"), 0600)
 	if err != nil {
 		t.Fatalf("creating file failed: %v", err)
 	}
@@ -504,5 +504,53 @@ func TestForceOwner(t *testing.T) {
 	}
 	if st.Uid != 1234 || st.Gid != 1234 {
 		t.Errorf("LOOKUP returned uid or gid != 1234: %#v", st)
+	}
+}
+
+func TestSeekDir(t *testing.T) {
+	wd := test_helpers.DefaultPlainDir + "/" + t.Name()
+	err := os.Mkdir(wd, 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		path := fmt.Sprintf(wd+"/%3d", i)
+		err = os.WriteFile(path, nil, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	fd, err := syscall.Open(wd, syscall.O_DIRECTORY|syscall.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Close(fd)
+
+	buf := make([]byte, 1000)
+	n, err := getdents(fd, buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("1st getdents returned %d bytes", n)
+
+	n, err = getdents(fd, buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("2nd getdents returned %d bytes", n)
+
+	_, err = unix.Seek(fd, 0, 0)
+	if err != nil {
+		t.Error(err)
+	}
+
+	n, err = getdents(fd, buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("3rd getdents (after seek) returned %d bytes", n)
+	if n == 0 {
+		t.Error("Seek did not have any effect")
 	}
 }
