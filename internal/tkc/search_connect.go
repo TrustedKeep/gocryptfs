@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/TrustedKeep/tkutils/v2/diskutil"
@@ -30,6 +31,7 @@ type searchConnector struct {
 	client      *http.Client
 	token       string
 	kmsHosts    []string
+	nexus       bool // additive: fetch keys from Nexus's Search endpoint instead of keep
 }
 
 func newSearchConnector() KMSConnector {
@@ -105,6 +107,13 @@ func (sc *searchConnector) newClient() {
 	sc.lastUpdate = fi.ModTime()
 	sc.token = string(tokenBytes)
 	sc.kmsHosts = hosts
+	// Additive: a "nexus" provider marker on the ramdisk switches key retrieval to
+	// Nexus's Search envelope-key endpoint. Absent (or any other value) preserves the
+	// keep key-provider protocol, so existing tkfs/keep deployments are unaffected.
+	sc.nexus = false
+	if modeBytes, merr := os.ReadFile(fmt.Sprintf("%s/gw.provider", sc.ramdiskPath)); merr == nil {
+		sc.nexus = strings.TrimSpace(string(modeBytes)) == "nexus"
+	}
 	sc.client = &http.Client{
 		Timeout: time.Second * 10,
 		Transport: &http.Transport{
@@ -143,11 +152,18 @@ func (sc *searchConnector) fetchKey(keyID string) (newID string, key kem.Kem, la
 	}
 
 	doFetch := func(host string) (err error) {
-		log.Printf("Fetching envelope key \"%s\" from KMS %s\n", keyID, host)
+		log.Printf("Fetching envelope key \"%s\" from %s\n", keyID, host)
 		var u string
-		if len(keyID) > 0 {
+		switch {
+		case sc.nexus && len(keyID) > 0:
+			// Nexus Search envelope-key endpoint (host already includes the port);
+			// auth is the mTLS client cert, not the tenant token.
+			u = fmt.Sprintf("https://%s/envelopekey/%s", host, keyID)
+		case sc.nexus:
+			u = fmt.Sprintf("https://%s/envelopekey/current", host)
+		case len(keyID) > 0:
 			u = fmt.Sprintf("https://%s:7070/keepsvc/tenantek/retrieve/%s", host, keyID)
-		} else {
+		default:
 			u = fmt.Sprintf("https://%s:7070/keepsvc/tenantek/current/%d", host, kem.RSA3072)
 		}
 
