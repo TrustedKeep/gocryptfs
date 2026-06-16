@@ -114,7 +114,7 @@ func (sc *searchConnector) newClient() {
 	// keep key-provider protocol, so existing tkfs/keep deployments are unaffected.
 	nexusMode := false
 	if modeBytes, merr := os.ReadFile(fmt.Sprintf("%s/gw.provider", sc.ramdiskPath)); merr == nil {
-		nexusMode = strings.TrimSpace(string(modeBytes)) == "nexus"
+		nexusMode = parseProvider(modeBytes)
 	}
 	httpClient := &http.Client{
 		Timeout: time.Second * 10,
@@ -125,14 +125,48 @@ func (sc *searchConnector) newClient() {
 			TLSClientConfig: tlsConfig,
 		},
 	}
-	// Swap the shared fields under the lock so fetchKey never sees a torn slice/string.
+	sc.setState(httpClient, string(tokenBytes), hosts, nexusMode, fi.ModTime())
+}
+
+// parseProvider reports whether the ramdisk provider marker selects Nexus mode. Only an
+// exact (whitespace-trimmed) "nexus" enables it; anything else keeps the keep protocol.
+func parseProvider(b []byte) bool {
+	return strings.TrimSpace(string(b)) == "nexus"
+}
+
+// setState atomically swaps the fields fetchKey reads, so a concurrent reader never sees
+// a torn slice/string while newClient refreshes them on cert rotation.
+func (sc *searchConnector) setState(client *http.Client, token string, hosts []string, nexus bool, modTime time.Time) {
 	sc.mu.Lock()
-	sc.lastUpdate = fi.ModTime()
-	sc.token = string(tokenBytes)
+	defer sc.mu.Unlock()
+	sc.client = client
+	sc.token = token
 	sc.kmsHosts = hosts
-	sc.nexus = nexusMode
-	sc.client = httpClient
-	sc.mu.Unlock()
+	sc.nexus = nexus
+	sc.lastUpdate = modTime
+}
+
+// snapshot returns a consistent copy of the fields needed to fetch a key.
+func (sc *searchConnector) snapshot() (client *http.Client, token string, nexus bool, hosts []string) {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.client, sc.token, sc.nexus, sc.kmsHosts
+}
+
+// keyURL builds the envelope-key retrieval URL for the active provider. Nexus mode uses
+// the Search module's REST endpoint (the host already carries the port); keep mode uses
+// the tenantek path on :7070.
+func keyURL(nexus bool, host, keyID string) string {
+	switch {
+	case nexus && len(keyID) > 0:
+		return fmt.Sprintf("https://%s/envelopekey/%s", host, keyID)
+	case nexus:
+		return fmt.Sprintf("https://%s/envelopekey/current", host)
+	case len(keyID) > 0:
+		return fmt.Sprintf("https://%s:7070/keepsvc/tenantek/retrieve/%s", host, keyID)
+	default:
+		return fmt.Sprintf("https://%s:7070/keepsvc/tenantek/current/%d", host, kem.RSA3072)
+	}
 }
 
 func (sc *searchConnector) GetKey(path []byte) ([]byte, error) {
@@ -161,30 +195,16 @@ func (sc *searchConnector) SetCurrentKeyID(id string) {
 }
 
 func (sc *searchConnector) fetchKey(keyID string) (newID string, key kem.Kem, lastErr error) {
-	// Snapshot the shared state under the lock; newClient swaps these out wholesale on
-	// cert refresh, so a consistent copy avoids a torn read during the network calls.
-	sc.mu.RLock()
 	if len(keyID) == 0 {
-		keyID = sc.currKeyID
+		keyID = sc.GetCurrentKeyID()
 	}
-	client, token, nexus, hosts := sc.client, sc.token, sc.nexus, sc.kmsHosts
-	sc.mu.RUnlock()
+	// Snapshot the shared state (newClient swaps it wholesale on cert refresh) so the
+	// network calls below operate on a consistent copy.
+	client, token, nexus, hosts := sc.snapshot()
 
 	doFetch := func(host string) (err error) {
 		log.Printf("Fetching envelope key \"%s\" from %s\n", keyID, host)
-		var u string
-		switch {
-		case nexus && len(keyID) > 0:
-			// Nexus Search envelope-key endpoint (host already includes the port);
-			// auth is the mTLS client cert, not the tenant token.
-			u = fmt.Sprintf("https://%s/envelopekey/%s", host, keyID)
-		case nexus:
-			u = fmt.Sprintf("https://%s/envelopekey/current", host)
-		case len(keyID) > 0:
-			u = fmt.Sprintf("https://%s:7070/keepsvc/tenantek/retrieve/%s", host, keyID)
-		default:
-			u = fmt.Sprintf("https://%s:7070/keepsvc/tenantek/current/%d", host, kem.RSA3072)
-		}
+		u := keyURL(nexus, host, keyID)
 
 		req, err := http.NewRequest(http.MethodGet, u, nil)
 		if err != nil {
