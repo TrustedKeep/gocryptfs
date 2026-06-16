@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/TrustedKeep/tkutils/v2/diskutil"
@@ -25,6 +26,10 @@ var errNotImplemented = errors.New("not implemented in search connector")
 var _ KMSConnector = (*searchConnector)(nil)
 
 type searchConnector struct {
+	// mu guards the fields below that newClient/SetCurrentKeyID swap out while fetchKey
+	// reads them concurrently (gocryptfs calls in on FS ops). Without it a torn slice/
+	// string read could panic.
+	mu          sync.RWMutex
 	currKeyID   string
 	ramdiskPath string
 	lastUpdate  time.Time
@@ -104,17 +109,14 @@ func (sc *searchConnector) newClient() {
 		log.Printf("error building TLS configuration: %v\n", err)
 		return
 	}
-	sc.lastUpdate = fi.ModTime()
-	sc.token = string(tokenBytes)
-	sc.kmsHosts = hosts
 	// Additive: a "nexus" provider marker on the ramdisk switches key retrieval to
 	// Nexus's Search envelope-key endpoint. Absent (or any other value) preserves the
 	// keep key-provider protocol, so existing tkfs/keep deployments are unaffected.
-	sc.nexus = false
+	nexusMode := false
 	if modeBytes, merr := os.ReadFile(fmt.Sprintf("%s/gw.provider", sc.ramdiskPath)); merr == nil {
-		sc.nexus = strings.TrimSpace(string(modeBytes)) == "nexus"
+		nexusMode = strings.TrimSpace(string(modeBytes)) == "nexus"
 	}
-	sc.client = &http.Client{
+	httpClient := &http.Client{
 		Timeout: time.Second * 10,
 		Transport: &http.Transport{
 			MaxIdleConns:    1,
@@ -123,6 +125,14 @@ func (sc *searchConnector) newClient() {
 			TLSClientConfig: tlsConfig,
 		},
 	}
+	// Swap the shared fields under the lock so fetchKey never sees a torn slice/string.
+	sc.mu.Lock()
+	sc.lastUpdate = fi.ModTime()
+	sc.token = string(tokenBytes)
+	sc.kmsHosts = hosts
+	sc.nexus = nexusMode
+	sc.client = httpClient
+	sc.mu.Unlock()
 }
 
 func (sc *searchConnector) GetKey(path []byte) ([]byte, error) {
@@ -139,27 +149,36 @@ func (sc *searchConnector) CreateEnvelopeKey(ktStr string, name string) (id stri
 }
 
 func (sc *searchConnector) GetCurrentKeyID() string {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
 	return sc.currKeyID
 }
 
 func (sc *searchConnector) SetCurrentKeyID(id string) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
 	sc.currKeyID = id
 }
 
 func (sc *searchConnector) fetchKey(keyID string) (newID string, key kem.Kem, lastErr error) {
+	// Snapshot the shared state under the lock; newClient swaps these out wholesale on
+	// cert refresh, so a consistent copy avoids a torn read during the network calls.
+	sc.mu.RLock()
 	if len(keyID) == 0 {
 		keyID = sc.currKeyID
 	}
+	client, token, nexus, hosts := sc.client, sc.token, sc.nexus, sc.kmsHosts
+	sc.mu.RUnlock()
 
 	doFetch := func(host string) (err error) {
 		log.Printf("Fetching envelope key \"%s\" from %s\n", keyID, host)
 		var u string
 		switch {
-		case sc.nexus && len(keyID) > 0:
+		case nexus && len(keyID) > 0:
 			// Nexus Search envelope-key endpoint (host already includes the port);
 			// auth is the mTLS client cert, not the tenant token.
 			u = fmt.Sprintf("https://%s/envelopekey/%s", host, keyID)
-		case sc.nexus:
+		case nexus:
 			u = fmt.Sprintf("https://%s/envelopekey/current", host)
 		case len(keyID) > 0:
 			u = fmt.Sprintf("https://%s:7070/keepsvc/tenantek/retrieve/%s", host, keyID)
@@ -171,9 +190,9 @@ func (sc *searchConnector) fetchKey(keyID string) (newID string, key kem.Kem, la
 		if err != nil {
 			return
 		}
-		req.Header.Set(kmsclient.HeaderTenantToken, sc.token)
+		req.Header.Set(kmsclient.HeaderTenantToken, token)
 
-		resp, err := sc.client.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			return
 		}
@@ -197,8 +216,8 @@ func (sc *searchConnector) fetchKey(keyID string) (newID string, key kem.Kem, la
 		return
 	}
 
-	for _, x := range rand.Perm(len(sc.kmsHosts)) {
-		if lastErr = doFetch(sc.kmsHosts[x]); lastErr == nil {
+	for _, x := range rand.Perm(len(hosts)) {
+		if lastErr = doFetch(hosts[x]); lastErr == nil {
 			return
 		}
 	}
