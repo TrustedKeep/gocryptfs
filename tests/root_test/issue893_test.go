@@ -63,7 +63,7 @@ func TestConcurrentUserOps(t *testing.T) {
 }
 
 // Test that our root_test.asUser function works as expected under concurrency by
-// similating a long-runnig operation with sleep(10ms).
+// simulating a long-running operation with sleep(10ms).
 // https://github.com/rfjakob/gocryptfs/issues/893
 func TestAsUserSleep(t *testing.T) {
 	if os.Getuid() != 0 {
