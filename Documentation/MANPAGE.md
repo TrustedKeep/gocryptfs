@@ -500,7 +500,7 @@ Applies to: all actions that ask for a password.
 #### -fido2-assert-option OPTION
 Options passed to `fido2-assert` with `-t` option.
 This option may be specified multiple times, each time it will add two 
-arguements `-t` `OPTION` to `fido2-assert`.
+arguments `-t` `OPTION` to `fido2-assert`.
 See `man fido2-assert` to check supported options.
 
 Examples:
