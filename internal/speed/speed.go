@@ -10,13 +10,30 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log"
+	"runtime"
 	"testing"
 
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/sys/cpu"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
-	"github.com/rfjakob/gocryptfs/v2/internal/stupidgcm"
 )
+
+// hasAESGCMHardwareSupport returns true if the CPU has AES-GCM acceleration.
+//
+// Logic carbon-copied from Go stdlib crypto/tls:
+// https://github.com/golang/go/blob/45967bb18e04fa6dc62c2786c87ce120443c64f6/src/crypto/tls/cipher_suites.go#L367
+func hasAESGCMHardwareSupport() bool {
+	hasGCMAsmAMD64 := cpu.X86.HasAES && cpu.X86.HasPCLMULQDQ
+	hasGCMAsmARM64 := cpu.ARM64.HasAES && cpu.ARM64.HasPMULL
+	// Keep in sync with crypto/aes/cipher_s390x.go.
+	hasGCMAsmS390X := cpu.S390X.HasAES && cpu.S390X.HasAESCBC && cpu.S390X.HasAESCTR &&
+		(cpu.S390X.HasGHASH || cpu.S390X.HasAESGCM)
+
+	return runtime.GOARCH == "amd64" && hasGCMAsmAMD64 ||
+		runtime.GOARCH == "arm64" && hasGCMAsmARM64 ||
+		runtime.GOARCH == "s390x" && hasGCMAsmS390X
+}
 
 // 128-bit file ID + 64 bit block number = 192 bits = 24 bytes
 const adLen = 24
@@ -31,7 +48,7 @@ func Run() {
 		cpu = "unknown"
 	}
 	aes := "; no AES-GCM acceleration"
-	if stupidgcm.HasAESGCMHardwareSupport() {
+	if hasAESGCMHardwareSupport() {
 		aes = "; with AES-GCM acceleration"
 	}
 	fmt.Printf("cpu: %s%s\n", cpu, aes)

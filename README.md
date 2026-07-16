@@ -173,9 +173,8 @@ Since version 0.7.2, gocryptfs is as fast as EncFS in the default mode,
 and significantly faster than EncFS' "paranoia" mode that provides
 a security level comparable to gocryptfs.
 
-On CPUs without AES-NI, gocryptfs uses OpenSSL through a thin wrapper called `stupidgcm`.
-This provides a 4x speedup compared to Go's builtin AES-GCM
-implementation. See [CPU-Benchmarks](https://github.com/rfjakob/gocryptfs/wiki/CPU-Benchmarks)
+On CPUs without AES-NI, XChaCha20-Poly1305 (`-xchacha`) gives much better
+performance than AES-GCM. See [CPU-Benchmarks](https://github.com/rfjakob/gocryptfs/wiki/CPU-Benchmarks)
 for details, or run `gocryptfs -speed` to see the encryption performance of your CPU.
 Example for a CPU with AES-NI:
 

@@ -296,7 +296,7 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 		DeterministicNames: args.deterministic_names,
 	}
 	var keyPool int
-	// confFile is nil when "-zerokey" or "-masterkey" was used
+	// confFile is nil when "-zerokey" was used
 	if confFile != nil {
 		// Settings from the config file override command line args
 		frontendArgs.PlaintextNames = confFile.IsFeatureFlagSet(configfile.FlagPlaintextNames)

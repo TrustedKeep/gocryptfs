@@ -30,9 +30,7 @@ const (
 	// PasswordIncorrect - the password was incorrect when mounting or when
 	// changing the password.
 	PasswordIncorrect = 12
-	// MasterKey means that something went wrong when parsing the "-masterkey"
-	// command line option
-	MasterKey = 14
+	// skip 14 (was MasterKey, "-masterkey" is not supported in this fork)
 	// SigInt means we got SIGINT
 	SigInt = 15
 	// PanicLogNotEmpty means the panic log was not empty when we were unmounted
@@ -64,8 +62,7 @@ const (
 	// DeprecatedFS - this filesystem is deprecated
 	DeprecatedFS = 27
 	// skip 28
-	// ExcludeError - an error occurred while processing "-exclude"
-	ExcludeError = 29
+	// skip 29 (was ExcludeError, "-exclude" is not supported in this fork)
 	// DevNull means that /dev/null could not be opened
 	DevNull = 30
 )

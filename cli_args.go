@@ -35,7 +35,7 @@ type argContainer struct {
 	xchacha bool
 	// Mount options with opposites
 	dev, nodev, suid, nosuid, exec, noexec, rw, ro, kernel_cache, acl bool
-	masterkey, mountpoint, cipherdir, cpuprofile,
+	mountpoint, cipherdir, cpuprofile,
 	memprofile, ko, ctlsock, fsname, force_owner, trace, context string
 	// -extpass, -badname, -passfile can be passed multiple times
 	extpass, badname, passfile []string
@@ -206,7 +206,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.kernel_cache, "kernel_cache", false, "Enable the FUSE kernel_cache option")
 	flagSet.BoolVar(&args.acl, "acl", false, "Enforce ACLs")
 
-	flagSet.StringVar(&args.masterkey, "masterkey", "", "Mount with explicit master key")
 	flagSet.StringVar(&args.cpuprofile, "cpuprofile", "", "Write cpu profile to specified file")
 	flagSet.StringVar(&args.memprofile, "memprofile", "", "Write memory profile to specified file")
 	flagSet.StringVar(&args.config, "config", "", "Use specified config file instead of CIPHERDIR/gocryptfs.conf")
@@ -254,14 +253,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	}
 	if len(args.extpass) > 0 && len(args.passfile) != 0 {
 		tlog.Fatal.Printf("The options -extpass and -passfile cannot be used at the same time")
-		os.Exit(exitcodes.Usage)
-	}
-	if len(args.passfile) != 0 && args.masterkey != "" {
-		tlog.Fatal.Printf("The options -passfile and -masterkey cannot be used at the same time")
-		os.Exit(exitcodes.Usage)
-	}
-	if len(args.extpass) > 0 && args.masterkey != "" && !args.init {
-		tlog.Fatal.Printf("The options -extpass and -masterkey cannot be used at the same time")
 		os.Exit(exitcodes.Usage)
 	}
 	if args.idle < 0 {
