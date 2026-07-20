@@ -127,6 +127,16 @@ func TestMockGatewayUnknownKey(t *testing.T) {
 	}
 }
 
+// keyIDs that would make the storeKey composition ambiguous are rejected up front.
+func TestMockGatewayRejectsInvalidKeyID(t *testing.T) {
+	gw := newTestGateway(t, "node-A")
+	for _, bad := range []string{"", "has/slash"} {
+		if _, err := gw.UnwrapDataKey(bad, []byte("x")); err == nil {
+			t.Errorf("expected error unwrapping invalid key id %q", bad)
+		}
+	}
+}
+
 // A valid KeyID with a corrupted ciphertext must be rejected by the AEAD integrity check,
 // not silently returned as bogus plaintext.
 func TestMockGatewayRejectsTamperedCiphertext(t *testing.T) {

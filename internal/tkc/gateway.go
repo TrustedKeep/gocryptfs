@@ -1,5 +1,7 @@
 package tkc
 
+import "fmt"
+
 // TrustedGateway data-key API contract (net-new gateway endpoints).
 //
 // The gateway (backed by keep) holds the key-encryption key (KEK) and wraps/unwraps
@@ -17,9 +19,9 @@ package tkc
 //
 // Authorization is per-operation: the gateway matches the client cert DN against a
 // {generate,unwrap} allowlist. Key isolation between filesystems is by
-// keyspace = DN + NodeID — the DN comes from the client cert on the real connector, the
-// NodeID travels in the request. The mock connector has no cert, so its keyspace is the
-// NodeID alone.
+// keyspace = DN + NodeID (see Keyspace) — the DN comes from the client cert on the real
+// connector, the NodeID travels in the request. The mock connector has no cert, so it
+// passes an empty DN.
 
 // dataKeyLength is the size of the master key the gateway wraps: a 32-byte AES-256 key
 // from which the EME (filename) and content keys are HKDF-derived.
@@ -47,11 +49,10 @@ type GatewayConnector interface {
 	UnwrapDataKey(keyID string, ciphertext []byte) (plaintext []byte, err error)
 }
 
-// Keyspace returns the per-filesystem key-isolation scope, keyspace = DN + NodeID. On the
-// mock connector dn is empty, so the keyspace is the NodeID alone.
+// Keyspace returns the per-filesystem key-isolation scope for a (DN, NodeID) pair. Each
+// component is length-prefixed so the composition is injective even when a component itself
+// contains the "/" delimiter (a DN may): distinct pairs never collide. The DN comes from
+// the client cert on the real connector; the mock passes an empty DN.
 func Keyspace(dn, nodeID string) string {
-	if dn == "" {
-		return nodeID
-	}
-	return dn + "/" + nodeID
+	return fmt.Sprintf("%d:%s/%d:%s", len(dn), dn, len(nodeID), nodeID)
 }

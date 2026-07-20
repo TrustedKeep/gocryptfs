@@ -3,6 +3,7 @@ package tkc
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/TrustedKeep/tkutils/v2/kek"
@@ -31,6 +32,10 @@ type mockGatewayConnector struct {
 }
 
 func newMockGatewayConnector(nodeID, dbPath string) *mockGatewayConnector {
+	if nodeID == "" {
+		tlog.Fatal.Printf("mock gateway: empty NodeID would defeat keyspace isolation")
+		os.Exit(exitcodes.Other)
+	}
 	if dbPath == "" {
 		dbPath = MockGatewayDBPath
 	}
@@ -73,6 +78,11 @@ func (m *mockGatewayConnector) GenerateDataKey() (DataKey, error) {
 
 // UnwrapDataKey looks up the KEK for keyID within this keyspace and unwraps the ciphertext.
 func (m *mockGatewayConnector) UnwrapDataKey(keyID string, ciphertext []byte) ([]byte, error) {
+	// keyID comes from the persisted key ring; reject values that would make the storeKey
+	// composition ambiguous before they reach the store.
+	if keyID == "" || strings.Contains(keyID, "/") {
+		return nil, fmt.Errorf("invalid data key id %q", keyID)
+	}
 	packed, err := m.get(keyID)
 	if err != nil {
 		return nil, err
@@ -92,6 +102,8 @@ func (m *mockGatewayConnector) Close() error {
 	return m.db.Close()
 }
 
+// storeKey namespaces a key ID under this keyspace. keyID is a UUID on write and validated
+// to contain no "/" on read, so the trailing "/" unambiguously separates the two.
 func (m *mockGatewayConnector) storeKey(keyID string) []byte {
 	return []byte(m.keyspace + "/" + keyID)
 }
