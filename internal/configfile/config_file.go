@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"syscall"
+	"time"
 
 	"os"
 
@@ -51,8 +52,24 @@ type ConfFile struct {
 	EnvEncAlg string `json:",omitempty"`
 	// LongNameMax corresponds to the -longnamemax flag
 	LongNameMax uint8 `json:",omitempty"`
+	// KeyRing holds the gateway-wrapped master keys when the GatewayKEK feature flag is
+	// set. Ordered; the newest entry is the active write key. Ciphertext only —
+	// plaintext keys are unwrapped at startup and held in memory.
+	KeyRing []KeyRingEntry `json:",omitempty"`
 	// Filename is the name of the config file. Not exported to JSON.
 	filename string
+}
+
+// KeyRingEntry is one gateway-wrapped master key in the config key ring.
+type KeyRingEntry struct {
+	// KeyID identifies the gateway wrapping-key generation, passed back on unwrap.
+	KeyID string
+	// Ciphertext is the gateway-wrapped master key (base64-encoded in JSON).
+	Ciphertext []byte
+	// CreatedAt records when this key was appended to the ring.
+	CreatedAt time.Time
+	// OpCount is the persisted per-key encrypt-op counter that drives auto-rotation.
+	OpCount uint64 `json:",omitempty"`
 }
 
 // CreateArgs exists because the argument list to Create became too long.

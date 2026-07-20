@@ -29,6 +29,11 @@ const (
 	FlagHKDF
 	// FlagXChaCha20Poly1305 means we use XChaCha20-Poly1305 file content encryption
 	FlagXChaCha20Poly1305
+	// FlagGatewayKEK marks the TrustedGateway KEK wrapped-key model: the master key's
+	// ciphertext lives in the config key ring and is unwrapped by the gateway at startup.
+	// It is mandatory on every v2 filesystem (like HKDF/EMENames/GCMIV128), not an opt-in;
+	// v2 dropped the legacy per-file envelope model entirely.
+	FlagGatewayKEK
 )
 
 // knownFlags stores the known feature flags and their string representation
@@ -43,6 +48,7 @@ var knownFlags = map[flagIota]string{
 	FlagRaw64:             "Raw64",
 	FlagHKDF:              "HKDF",
 	FlagXChaCha20Poly1305: "XChaCha20Poly1305",
+	FlagGatewayKEK:        "GatewayKEK",
 }
 
 // isFeatureFlagKnown verifies that we understand a feature flag.
