@@ -116,7 +116,7 @@ func doMount(args *argContainer) {
 
 	// connect to KMS
 	security.Memlock()
-	tkc.Connect(cf.BoundaryHost, cf.NodeID, cf.MockAWS, cf.MockKMS, cf.IsSearch)
+	tkc.Connect(cf.GatewayHost, args.gatewayCertDir, cf.NodeID, cf.MockKMS, cf.MockAWS, cf.IsSearch)
 
 	// Initialize gocryptfs (read config file, ask for password, ...)
 	fs, wipeKeys := initFuseFrontend(args)

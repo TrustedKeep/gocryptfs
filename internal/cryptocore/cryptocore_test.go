@@ -9,7 +9,7 @@ import (
 
 // "New" should accept at least these param combinations
 func TestCryptoCoreNew(t *testing.T) {
-	tkc.Connect("", "", true, true, false)
+	tkc.Connect("", "", "", true, false, false)
 	id, kem, err := tkc.Get().CreateEnvelopeKey(kem.RSA2048.String(), "")
 	if err != nil {
 		t.Fatalf("couldnt create env key err: %v\n", err)
