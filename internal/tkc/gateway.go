@@ -48,7 +48,8 @@ type GatewayConnector interface {
 	// UnwrapTKFSDataKey recovers the plaintext master key for a key-ring entry.
 	UnwrapTKFSDataKey(keyID string, ciphertext []byte) (plaintext []byte, err error)
 	// Close releases the connector's resources: network connections for the real
-	// connector, the bbolt handle for the mock. Called on unmount.
+	// connector, the bbolt handle for the mock. Not yet wired into the unmount path —
+	// the gateway connector joins the mount/crypto lifecycle in a later phase.
 	Close() error
 }
 

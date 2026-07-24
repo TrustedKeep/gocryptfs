@@ -187,7 +187,7 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.IntVar(&args.healthCheckPort, "health-check-port", 8000, "Port that can be pinged to ensure TKFS is fully up and running")
 
 	// TK specific options
-	defaultGatewayHost := fmt.Sprintf("%s:%d", network.GetLocalIP(), 7080)
+	defaultGatewayHost := fmt.Sprintf("%s:%d", network.GetLocalIP(), 7083)
 	flagSet.StringVar(&args.gatewayHost, "gateway-host", defaultGatewayHost, "Host:port of the TrustedGateway")
 	flagSet.StringVar(&args.gatewayCertDir, "gateway-cert-dir", "", "Directory holding the operator-provisioned gateway mTLS material: tls.crt, tls.key, ca.crt")
 	flagSet.StringVar(&args.nodeID, "node-id", "", "Unique identifier for the mount")

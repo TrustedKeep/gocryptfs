@@ -36,6 +36,11 @@ const gwIdleConnTimeout = time.Minute
 // gwHTTPTimeout bounds a single data-key call.
 const gwHTTPTimeout = 10 * time.Second
 
+// maxGatewayResponseBytes bounds a gateway response body. Data-key responses are tiny (a wrapped
+// 32-byte key plus small JSON); this cap only stops a misbehaving gateway or proxy from forcing an
+// unbounded read.
+const maxGatewayResponseBytes = 1 << 20 // 1 MiB
+
 var _ GatewayConnector = (*gwConnector)(nil)
 
 // gwConnector is the real client of the gateway data-key API. It presents an
@@ -186,7 +191,10 @@ func (g *gwConnector) post(path string, body, out any) error {
 		return fmt.Errorf("gateway %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxGatewayResponseBytes))
+	if err != nil {
+		return fmt.Errorf("gateway %s: reading response: %w", path, err)
+	}
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return fmt.Errorf("gateway %s: not authorized (HTTP %d): cert DN is not in the ACL: %s", path, resp.StatusCode, bytes.TrimSpace(respBody))
