@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/TrustedKeep/tkutils/v2/certutil"
+	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/TrustedKeep/tkutils/v2/model"
 	"github.com/TrustedKeep/tkutils/v2/tlsutils"
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
@@ -132,34 +134,95 @@ func (g *gwConnector) load() error {
 	return nil
 }
 
-// GenerateTKFSDataKey mints a fresh gateway-wrapped master key.
+// transportKemType is the KEM used for the per-request transit-wrap keypair. RSA-OAEP for now;
+// a post-quantum KEM (e.g. kem.Kyber768X25519) can replace it later with no protocol break — the
+// wire carries TransportAlg so the gateway learns the algorithm, and kem.Unwrap already handles
+// the PQ types, so nothing here changes.
+const transportKemType = kem.RSA3072
+
+// newTransport mints a fresh ephemeral wrap keypair for a single data-key call. The gateway wraps
+// the returned data key to pubPEM; only this process holds the private half, so the plaintext key
+// is recoverable only here and never appears on the wire (a second layer under mTLS).
+func newTransport() (k kem.Kem, pubPEM []byte, err error) {
+	if k, err = kem.NewKem(transportKemType); err != nil {
+		return nil, nil, err
+	}
+	if pubPEM, err = certutil.EncodePublicKey(k.GetPublicKey()); err != nil {
+		return nil, nil, err
+	}
+	return k, pubPEM, nil
+}
+
+// unwrapTransport recovers the plaintext data key from the gateway's transit-wrapped response.
+// An empty WrappedKey is rejected: the response type carries no plaintext field, so an empty
+// wrap is the only way a non-wrapping gateway shows up, and we must never silently proceed
+// without a key. The recovered key must be exactly tkfsDataKeyLength bytes.
+func unwrapTransport(k kem.Kem, wrapped []byte) ([]byte, error) {
+	if len(wrapped) == 0 {
+		return nil, fmt.Errorf("empty wrapped key: gateway must transit-wrap the data key")
+	}
+	dek, err := k.Unwrap(wrapped)
+	if err != nil {
+		return nil, fmt.Errorf("transport unwrap: %w", err)
+	}
+	if len(dek) != tkfsDataKeyLength {
+		return nil, fmt.Errorf("expected %d-byte data key, got %d", tkfsDataKeyLength, len(dek))
+	}
+	return dek, nil
+}
+
+// GenerateTKFSDataKey mints a fresh gateway-wrapped master key. The plaintext key comes back
+// wrapped to a per-call ephemeral transport key (never in the clear); we unwrap it in memory.
 func (g *gwConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
+	k, pubPEM, err := newTransport()
+	if err != nil {
+		return TKFSDataKey{}, fmt.Errorf("gateway generate: transport keygen: %w", err)
+	}
+	req := model.TKFSDataKeyGenerateRequest{
+		NodeID:          g.nodeID,
+		TransportAlg:    uint16(transportKemType),
+		TransportPubKey: pubPEM,
+	}
 	var out model.TKFSDataKeyGenerateResponse
-	if err := g.post(gatewayGeneratePath, model.TKFSDataKeyGenerateRequest{NodeID: g.nodeID}, &out); err != nil {
+	if err := g.post(gatewayGeneratePath, req, &out); err != nil {
 		return TKFSDataKey{}, err
 	}
 	if out.KeyID == "" || len(out.Ciphertext) == 0 {
 		return TKFSDataKey{}, fmt.Errorf("gateway generate: incomplete response (keyID=%q, ciphertext=%dB)", out.KeyID, len(out.Ciphertext))
 	}
-	if len(out.Plaintext) != tkfsDataKeyLength {
-		return TKFSDataKey{}, fmt.Errorf("gateway generate: expected %d-byte data key, got %d", tkfsDataKeyLength, len(out.Plaintext))
+	dek, err := unwrapTransport(k, out.WrappedKey)
+	if err != nil {
+		return TKFSDataKey{}, fmt.Errorf("gateway generate: %w", err)
 	}
-	return TKFSDataKey{KeyID: out.KeyID, Plaintext: out.Plaintext, Ciphertext: out.Ciphertext}, nil
+	return TKFSDataKey{KeyID: out.KeyID, Plaintext: dek, Ciphertext: out.Ciphertext}, nil
 }
 
-// UnwrapTKFSDataKey recovers the plaintext master key for a key-ring entry.
+// UnwrapTKFSDataKey recovers the plaintext master key for a key-ring entry. As with generate, the
+// gateway returns the key wrapped to a per-call ephemeral transport key; we unwrap it in memory.
 func (g *gwConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]byte, error) {
 	if keyID == "" {
 		return nil, fmt.Errorf("gateway unwrap: empty key id")
 	}
+	k, pubPEM, err := newTransport()
+	if err != nil {
+		return nil, fmt.Errorf("gateway unwrap: transport keygen: %w", err)
+	}
+	req := model.TKFSDataKeyUnwrapRequest{
+		NodeID:          g.nodeID,
+		KeyID:           keyID,
+		Ciphertext:      ciphertext,
+		TransportAlg:    uint16(transportKemType),
+		TransportPubKey: pubPEM,
+	}
 	var out model.TKFSDataKeyUnwrapResponse
-	if err := g.post(gatewayUnwrapPath, model.TKFSDataKeyUnwrapRequest{NodeID: g.nodeID, KeyID: keyID, Ciphertext: ciphertext}, &out); err != nil {
+	if err := g.post(gatewayUnwrapPath, req, &out); err != nil {
 		return nil, err
 	}
-	if len(out.Plaintext) != tkfsDataKeyLength {
-		return nil, fmt.Errorf("gateway unwrap: expected %d-byte data key, got %d", tkfsDataKeyLength, len(out.Plaintext))
+	dek, err := unwrapTransport(k, out.WrappedKey)
+	if err != nil {
+		return nil, fmt.Errorf("gateway unwrap: %w", err)
 	}
-	return out.Plaintext, nil
+	return dek, nil
 }
 
 // Close releases idle connections to the gateway.

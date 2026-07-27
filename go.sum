@@ -1,5 +1,3 @@
-github.com/TrustedKeep/tkutils/v2 v2.16.1-0.20260727034355-2e29c1bbada0 h1:wNdBW/J0/BbM3rxr34PMYsb+7AHxgJUeKoxKnMCyP+M=
-github.com/TrustedKeep/tkutils/v2 v2.16.1-0.20260727034355-2e29c1bbada0/go.mod h1:bdUjAZjkBJkZgVU5fFnV86wJJRaV+3jORA9lgueRVNU=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.95.0 h1:MIWra+MSq53CFaXXAywB2qg9YvVZifkk6vEGl/1Qor0=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.95.0/go.mod h1:79S2BdqCJpScXZA2y+cpZuocWsjGjJINyXnOsf5DTz8=
 github.com/aws/smithy-go v1.25.1 h1:J8ERsGSU7d+aCmdQur5Txg6bVoYelvQJgtZehD12GkI=
