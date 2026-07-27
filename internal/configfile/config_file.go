@@ -36,9 +36,9 @@ type ConfFile struct {
 	FeatureFlags []string
 	// NodeID is the unique identifier for this host/mount
 	NodeID string
-	// BoundaryHost is the host:port of the Boundary instance that will retrieve
-	// our encryption keys
-	BoundaryHost string
+	// GatewayHost is the host:port of the TrustedGateway that wraps and unwraps
+	// our data keys
+	GatewayHost string
 	// MockAWS uses a mock AWS connection for development
 	MockAWS bool `json:",omitempty"`
 	// MockKMS uses a mock KMS for development
@@ -79,7 +79,7 @@ type CreateArgs struct {
 	DeterministicNames bool
 	XChaCha20Poly1305  bool
 	NodeID             string
-	BoundaryHost       string
+	GatewayHost        string
 	MockAWS            bool
 	MockKMS            bool
 	IsSearch           bool
@@ -91,16 +91,16 @@ type CreateArgs struct {
 // Create - create a new config and write it to "Filename".
 func Create(args *CreateArgs) error {
 	cf := ConfFile{
-		filename:     args.Filename,
-		Version:      contentenc.CurrentVersion,
-		NodeID:       args.NodeID,
-		BoundaryHost: args.BoundaryHost,
-		MockAWS:      args.MockAWS,
-		MockKMS:      args.MockKMS,
-		IsSearch:     args.IsSearch,
-		KeyPool:      args.KeyPool,
-		EnvelopeID:   uuid.NewString(),
-		EnvEncAlg:    args.EnvEncAlg,
+		filename:    args.Filename,
+		Version:     contentenc.CurrentVersion,
+		NodeID:      args.NodeID,
+		GatewayHost: args.GatewayHost,
+		MockAWS:     args.MockAWS,
+		MockKMS:     args.MockKMS,
+		IsSearch:    args.IsSearch,
+		KeyPool:     args.KeyPool,
+		EnvelopeID:  uuid.NewString(),
+		EnvEncAlg:   args.EnvEncAlg,
 	}
 
 	if cf.NodeID == "" {

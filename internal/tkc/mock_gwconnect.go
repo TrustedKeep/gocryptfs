@@ -58,26 +58,26 @@ func newMockGatewayConnector(nodeID, dbPath string) *mockGatewayConnector {
 	}
 }
 
-// GenerateDataKey mints a fresh KEK, wraps a new master key under it, and persists the KEK
+// GenerateTKFSDataKey mints a fresh KEK, wraps a new master key under it, and persists the KEK
 // so the ciphertext can be unwrapped later.
-func (m *mockGatewayConnector) GenerateDataKey() (DataKey, error) {
+func (m *mockGatewayConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	k, err := kek.Generate(kek.AES256_GCM)
 	if err != nil {
-		return DataKey{}, err
+		return TKFSDataKey{}, err
 	}
 	pt, ct, err := k.Wrap()
 	if err != nil {
-		return DataKey{}, err
+		return TKFSDataKey{}, err
 	}
 	keyID := uuid.NewString()
 	if err = m.put(keyID, kek.Pack(k)); err != nil {
-		return DataKey{}, err
+		return TKFSDataKey{}, err
 	}
-	return DataKey{KeyID: keyID, Plaintext: pt, Ciphertext: ct}, nil
+	return TKFSDataKey{KeyID: keyID, Plaintext: pt, Ciphertext: ct}, nil
 }
 
-// UnwrapDataKey looks up the KEK for keyID within this keyspace and unwraps the ciphertext.
-func (m *mockGatewayConnector) UnwrapDataKey(keyID string, ciphertext []byte) ([]byte, error) {
+// UnwrapTKFSDataKey looks up the KEK for keyID within this keyspace and unwraps the ciphertext.
+func (m *mockGatewayConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]byte, error) {
 	// keyID comes from the persisted key ring; reject values that would make the storeKey
 	// composition ambiguous before they reach the store.
 	if keyID == "" || strings.Contains(keyID, "/") {

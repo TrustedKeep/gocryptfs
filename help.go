@@ -22,7 +22,8 @@ Common Options (use -hh to show all):
   -fusedebug         Debug FUSE calls
   -h, -help          This short help text
   -init              Initialize encrypted directory
-  -boundary-host     URL to the TrustedBoundary host in format host:port
+  -gateway-host      Host:port of the TrustedGateway
+  -gateway-cert-dir  Directory with the gateway mTLS material: tls.crt, tls.key, ca.crt
   -node-id           Unique identifier for the mount
   -key-pool          If set, Number indicates size of legacy encryption key pool, otherwise envelope encryption is used
   -mock-aws          Use a mock AWS connection for development and testing

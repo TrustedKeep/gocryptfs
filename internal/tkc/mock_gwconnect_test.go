@@ -16,15 +16,15 @@ func newTestGateway(t *testing.T, nodeID string) *mockGatewayConnector {
 func TestMockGatewayGenerateUnwrap(t *testing.T) {
 	gw := newTestGateway(t, "node-A")
 
-	dk, err := gw.GenerateDataKey()
+	dk, err := gw.GenerateTKFSDataKey()
 	if err != nil {
-		t.Fatalf("GenerateDataKey: %v", err)
+		t.Fatalf("GenerateTKFSDataKey: %v", err)
 	}
 	if dk.KeyID == "" {
 		t.Error("empty KeyID")
 	}
-	if len(dk.Plaintext) != dataKeyLength {
-		t.Errorf("plaintext length = %d, want %d", len(dk.Plaintext), dataKeyLength)
+	if len(dk.Plaintext) != tkfsDataKeyLength {
+		t.Errorf("plaintext length = %d, want %d", len(dk.Plaintext), tkfsDataKeyLength)
 	}
 	if len(dk.Ciphertext) == 0 {
 		t.Error("empty Ciphertext")
@@ -33,9 +33,9 @@ func TestMockGatewayGenerateUnwrap(t *testing.T) {
 		t.Error("ciphertext must not equal plaintext")
 	}
 
-	pt, err := gw.UnwrapDataKey(dk.KeyID, dk.Ciphertext)
+	pt, err := gw.UnwrapTKFSDataKey(dk.KeyID, dk.Ciphertext)
 	if err != nil {
-		t.Fatalf("UnwrapDataKey: %v", err)
+		t.Fatalf("UnwrapTKFSDataKey: %v", err)
 	}
 	if !bytes.Equal(pt, dk.Plaintext) {
 		t.Error("unwrapped key does not match generated plaintext")
@@ -47,13 +47,13 @@ func TestMockGatewayGenerateUnwrap(t *testing.T) {
 func TestMockGatewayRegenerateRetainsOldKeys(t *testing.T) {
 	gw := newTestGateway(t, "node-A")
 
-	k1, err := gw.GenerateDataKey()
+	k1, err := gw.GenerateTKFSDataKey()
 	if err != nil {
-		t.Fatalf("GenerateDataKey (first): %v", err)
+		t.Fatalf("GenerateTKFSDataKey (first): %v", err)
 	}
-	k2, err := gw.GenerateDataKey()
+	k2, err := gw.GenerateTKFSDataKey()
 	if err != nil {
-		t.Fatalf("GenerateDataKey (second): %v", err)
+		t.Fatalf("GenerateTKFSDataKey (second): %v", err)
 	}
 	if k1.KeyID == k2.KeyID {
 		t.Error("second generate produced the same KeyID")
@@ -63,10 +63,10 @@ func TestMockGatewayRegenerateRetainsOldKeys(t *testing.T) {
 	}
 
 	// Both the old and the new key must still unwrap (old data stays readable).
-	for _, dk := range []DataKey{k1, k2} {
-		pt, err := gw.UnwrapDataKey(dk.KeyID, dk.Ciphertext)
+	for _, dk := range []TKFSDataKey{k1, k2} {
+		pt, err := gw.UnwrapTKFSDataKey(dk.KeyID, dk.Ciphertext)
 		if err != nil {
-			t.Fatalf("UnwrapDataKey(%s): %v", dk.KeyID, err)
+			t.Fatalf("UnwrapTKFSDataKey(%s): %v", dk.KeyID, err)
 		}
 		if !bytes.Equal(pt, dk.Plaintext) {
 			t.Errorf("unwrapped key %s does not match", dk.KeyID)
@@ -80,9 +80,9 @@ func TestMockGatewayPersistsAcrossReopen(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "gw.db")
 
 	gw1 := newMockGatewayConnector("node-A", dbPath)
-	dk, err := gw1.GenerateDataKey()
+	dk, err := gw1.GenerateTKFSDataKey()
 	if err != nil {
-		t.Fatalf("GenerateDataKey: %v", err)
+		t.Fatalf("GenerateTKFSDataKey: %v", err)
 	}
 	if err := gw1.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -90,9 +90,9 @@ func TestMockGatewayPersistsAcrossReopen(t *testing.T) {
 
 	gw2 := newMockGatewayConnector("node-A", dbPath)
 	defer gw2.Close()
-	pt, err := gw2.UnwrapDataKey(dk.KeyID, dk.Ciphertext)
+	pt, err := gw2.UnwrapTKFSDataKey(dk.KeyID, dk.Ciphertext)
 	if err != nil {
-		t.Fatalf("UnwrapDataKey after reopen: %v", err)
+		t.Fatalf("UnwrapTKFSDataKey after reopen: %v", err)
 	}
 	if !bytes.Equal(pt, dk.Plaintext) {
 		t.Error("unwrapped key after reopen does not match")
@@ -105,9 +105,9 @@ func TestMockGatewayKeyspaceIsolation(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "gw.db")
 
 	gwA := newMockGatewayConnector("node-A", dbPath)
-	dk, err := gwA.GenerateDataKey()
+	dk, err := gwA.GenerateTKFSDataKey()
 	if err != nil {
-		t.Fatalf("GenerateDataKey: %v", err)
+		t.Fatalf("GenerateTKFSDataKey: %v", err)
 	}
 	if err := gwA.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -115,14 +115,14 @@ func TestMockGatewayKeyspaceIsolation(t *testing.T) {
 
 	gwB := newMockGatewayConnector("node-B", dbPath)
 	defer gwB.Close()
-	if _, err := gwB.UnwrapDataKey(dk.KeyID, dk.Ciphertext); err == nil {
+	if _, err := gwB.UnwrapTKFSDataKey(dk.KeyID, dk.Ciphertext); err == nil {
 		t.Error("node-B unwrapped node-A's key across keyspaces")
 	}
 }
 
 func TestMockGatewayUnknownKey(t *testing.T) {
 	gw := newTestGateway(t, "node-A")
-	if _, err := gw.UnwrapDataKey("does-not-exist", []byte("whatever")); err == nil {
+	if _, err := gw.UnwrapTKFSDataKey("does-not-exist", []byte("whatever")); err == nil {
 		t.Error("expected error unwrapping an unknown key ID")
 	}
 }
@@ -131,7 +131,7 @@ func TestMockGatewayUnknownKey(t *testing.T) {
 func TestMockGatewayRejectsInvalidKeyID(t *testing.T) {
 	gw := newTestGateway(t, "node-A")
 	for _, bad := range []string{"", "has/slash"} {
-		if _, err := gw.UnwrapDataKey(bad, []byte("x")); err == nil {
+		if _, err := gw.UnwrapTKFSDataKey(bad, []byte("x")); err == nil {
 			t.Errorf("expected error unwrapping invalid key id %q", bad)
 		}
 	}
@@ -141,14 +141,14 @@ func TestMockGatewayRejectsInvalidKeyID(t *testing.T) {
 // not silently returned as bogus plaintext.
 func TestMockGatewayRejectsTamperedCiphertext(t *testing.T) {
 	gw := newTestGateway(t, "node-A")
-	dk, err := gw.GenerateDataKey()
+	dk, err := gw.GenerateTKFSDataKey()
 	if err != nil {
-		t.Fatalf("GenerateDataKey: %v", err)
+		t.Fatalf("GenerateTKFSDataKey: %v", err)
 	}
 	corrupt := make([]byte, len(dk.Ciphertext))
 	copy(corrupt, dk.Ciphertext)
 	corrupt[len(corrupt)-1] ^= 0x01 // flip a bit in the GCM tag
-	if _, err := gw.UnwrapDataKey(dk.KeyID, corrupt); err == nil {
+	if _, err := gw.UnwrapTKFSDataKey(dk.KeyID, corrupt); err == nil {
 		t.Error("expected error unwrapping a tampered ciphertext under a valid key ID")
 	}
 }

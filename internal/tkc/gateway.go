@@ -10,8 +10,8 @@ import "fmt"
 // from it — in memory only, for the life of the mount, zeroized on unmount. The operations
 // map to gateway HTTP routes reached over mutually-authenticated TLS:
 //
-//	generate  POST .../datakey/generate  -> {KeyID, Ciphertext} (+ Plaintext in the mTLS body)
-//	unwrap    POST .../datakey/unwrap    -> {Plaintext}
+//	generate  POST .../tkfsdatakey/generate  -> {KeyID, Ciphertext} (+ Plaintext in the mTLS body)
+//	unwrap    POST .../tkfsdatakey/unwrap    -> {Plaintext}
 //
 // Only Ciphertext is persisted, in the gocryptfs.conf key ring. Rotation is not a distinct
 // operation: it is just another generate whose result is appended to the key ring as the
@@ -23,12 +23,12 @@ import "fmt"
 // connector, the NodeID travels in the request. The mock connector has no cert, so it
 // passes an empty DN.
 
-// dataKeyLength is the size of the master key the gateway wraps: a 32-byte AES-256 key
+// tkfsDataKeyLength is the size of the master key the gateway wraps: a 32-byte AES-256 key
 // from which the EME (filename) and content keys are HKDF-derived.
-const dataKeyLength = 32
+const tkfsDataKeyLength = 32
 
-// DataKey is the result of a generate operation.
-type DataKey struct {
+// TKFSDataKey is the result of a generate operation.
+type TKFSDataKey struct {
 	// KeyID identifies the wrapping-key generation. It is persisted in the ring and
 	// passed back on unwrap so the gateway can select the right KEK.
 	KeyID string
@@ -42,11 +42,15 @@ type DataKey struct {
 // envelope-model KMSConnector for the KEK wrapped-key design; the two coexist
 // until the envelope path is removed in a later phase.
 type GatewayConnector interface {
-	// GenerateDataKey mints a fresh data key wrapped by the gateway KEK. Rotation is
+	// GenerateTKFSDataKey mints a fresh data key wrapped by the gateway KEK. Rotation is
 	// performed by calling this again and appending the result to the key ring.
-	GenerateDataKey() (DataKey, error)
-	// UnwrapDataKey recovers the plaintext master key for a key-ring entry.
-	UnwrapDataKey(keyID string, ciphertext []byte) (plaintext []byte, err error)
+	GenerateTKFSDataKey() (TKFSDataKey, error)
+	// UnwrapTKFSDataKey recovers the plaintext master key for a key-ring entry.
+	UnwrapTKFSDataKey(keyID string, ciphertext []byte) (plaintext []byte, err error)
+	// Close releases the connector's resources: network connections for the real
+	// connector, the bbolt handle for the mock. Not yet wired into the unmount path —
+	// the gateway connector joins the mount/crypto lifecycle in a later phase.
+	Close() error
 }
 
 // Keyspace returns the per-filesystem key-isolation scope for a (DN, NodeID) pair. Each
