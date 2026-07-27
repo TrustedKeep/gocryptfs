@@ -10,9 +10,12 @@ import "fmt"
 // from it — in memory only, for the life of the mount, zeroized on unmount. The operations
 // map to gateway HTTP routes reached over mutually-authenticated TLS:
 //
-//	generate  POST .../tkfsdatakey/generate  -> {KeyID, Ciphertext} (+ Plaintext in the mTLS body)
-//	unwrap    POST .../tkfsdatakey/unwrap    -> {Plaintext}
+//	generate  POST .../tkfsdatakey/generate  -> {KeyID, Ciphertext, WrappedKey}
+//	unwrap    POST .../tkfsdatakey/unwrap    -> {WrappedKey}
 //
+// The plaintext data key never crosses the wire even inside mTLS: the client sends a per-call
+// ephemeral transport public key and the gateway returns the key OAEP-wrapped to it
+// (WrappedKey), which the client unwraps in memory (see gwconnect.go, newTransport).
 // Only Ciphertext is persisted, in the gocryptfs.conf key ring. Rotation is not a distinct
 // operation: it is just another generate whose result is appended to the key ring as the
 // new active key, with prior entries retained for unwrap.
