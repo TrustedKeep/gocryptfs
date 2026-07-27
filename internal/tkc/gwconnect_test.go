@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -148,10 +149,14 @@ func TestGatewayConnectorNoPlaintextOnWire(t *testing.T) {
 	if !bytes.Equal(dk.Plaintext, master) {
 		t.Fatal("client did not recover the master key")
 	}
-	if bytes.Contains(reqBody, master) {
+	// JSON encodes []byte as base64, so a leaked plaintext key would appear on the wire in its
+	// base64 form, not as raw bytes; assert against that (a raw-bytes search would pass trivially
+	// and prove nothing).
+	masterB64 := []byte(base64.StdEncoding.EncodeToString(master))
+	if bytes.Contains(reqBody, masterB64) {
 		t.Error("plaintext data key leaked into the request body")
 	}
-	if bytes.Contains(respBody, master) {
+	if bytes.Contains(respBody, masterB64) {
 		t.Error("plaintext data key leaked into the response body")
 	}
 }
