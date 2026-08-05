@@ -1,14 +1,11 @@
 package nametransform
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
-	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 )
 
 func TestIsLongName(t *testing.T) {
@@ -37,20 +34,7 @@ func TestRemoveLongNameSuffix(t *testing.T) {
 }
 
 func newLognamesTestInstance(longNameMax uint8) *NameTransform {
-	tkc.Connect("", "", "", true, false, false)
-	id, kem, err := tkc.Get().CreateEnvelopeKey(kem.RSA2048.String(), "")
-	if err != nil {
-		fmt.Printf("couldnt create env key err: %v\n", err)
-		return nil
-	}
-
-	_, wrapped, err := kem.Wrap()
-	if err != nil {
-		fmt.Printf("wrapping key err: %v\n", err)
-		return nil
-	}
-
-	cCore := cryptocore.New(cryptocore.BackendGoGCM, contentenc.DefaultIVBits, 0, true, id, wrapped)
+	cCore := cryptocore.New(make([]byte, cryptocore.KeyLen), cryptocore.BackendGoGCM, contentenc.DefaultIVBits)
 	return New(cCore.EMECipher, true, longNameMax, true, nil, false)
 }
 

@@ -25,7 +25,6 @@ var ctlsockPath string
 
 type testcaseMatrix struct {
 	plaintextnames bool
-	raw64          bool
 	extraArgs      []string
 }
 
@@ -41,19 +40,22 @@ func (tc *testcaseMatrix) isSet(extraArg string) bool {
 
 // This is the entry point for the tests
 func TestMain(m *testing.M) {
+	// No Raw64 axis. The -raw64 flag exists (upstream parity) but cannot change what lands on
+	// disk: Create sets FlagRaw64 on every filesystem it writes, and the mount takes the encoding
+	// from the config, overriding the command line. Upstream's raw64=false cases only differed
+	// here because -zerokey meant there was no config to override them, so a case for it now would
+	// be an exact duplicate of "Normal" that looks like coverage.
 	var matrix = []testcaseMatrix{
 		// Normal
-		{false, false, nil},
+		{false, nil},
 		// Plaintextnames
-		{true, false, nil},
-		// Raw64
-		{false, true, nil},
+		{true, nil},
 		// -sharedstorage
-		{false, false, []string{"-sharedstorage"}},
+		{false, []string{"-sharedstorage"}},
 		// -deterministic-names
-		{false, false, []string{"-deterministic-names"}},
+		{false, []string{"-deterministic-names"}},
 		// Test xchacha
-		{false, true, []string{"-xchacha"}},
+		{false, []string{"-xchacha"}},
 	}
 
 	// Make "testing.Verbose()" return the correct value
@@ -63,19 +65,26 @@ func TestMain(m *testing.M) {
 		if testing.Verbose() {
 			fmt.Printf("matrix: testcase = %#v\n", testcase)
 		}
-		createDirIV := true
-		if testcase.plaintextnames {
-			createDirIV = false
-		} else if testcase.isSet("-deterministic-names") {
-			createDirIV = false
-		}
 		ctlsockPath = fmt.Sprintf("%s/ctlsock.%d", test_helpers.TmpDir, i)
-		test_helpers.ResetTmpDir(createDirIV)
-		opts := []string{"-zerokey", "-ctlsock", ctlsockPath}
+		// -init writes the config and, unless names are plaintext or deterministic, the diriv.
+		// The name and content-cipher options are recorded in the config, so they have to be
+		// chosen here: passing them at mount time would be silently overridden by the config.
+		// -sharedstorage is a genuine mount option and stays below.
+		test_helpers.ResetTmpDir(false)
+		initOpts := []string{
+			fmt.Sprintf("-plaintextnames=%v", testcase.plaintextnames),
+		}
+		for _, a := range testcase.extraArgs {
+			if a == "-deterministic-names" || a == "-xchacha" {
+				initOpts = append(initOpts, a)
+			}
+		}
+		test_helpers.InitDefaultCipherDir(initOpts...)
+		opts := []string{"-ctlsock", ctlsockPath}
 		//opts = append(opts, "-fusedebug")
-		opts = append(opts, fmt.Sprintf("-plaintextnames=%v", testcase.plaintextnames))
-		opts = append(opts, fmt.Sprintf("-raw64=%v", testcase.raw64))
-		opts = append(opts, testcase.extraArgs...)
+		if testcase.isSet("-sharedstorage") {
+			opts = append(opts, "-sharedstorage")
+		}
 		test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir, opts...)
 		before := test_helpers.ListFds(0, test_helpers.TmpDir)
 		t0 := time.Now()

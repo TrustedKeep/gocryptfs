@@ -4,76 +4,47 @@ import (
 	"os"
 	"sync"
 
-	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
 var (
-	c        KMSConnector
-	gw       GatewayConnector
+	dkc      DataKeyConnector
 	initOnce sync.Once
 )
 
-const (
-	EnvelopeIDLength   = 36 //UUID length, including the hyphens
-	EnvelopeIDAttrName = "user.envID"
-	WrappedKeyAttrName = "user.wrapped"
-
-	NameTransformEnvName = "eme_fn_key"
-)
-
-// KMSConnector connects the encryptor to a KMS (envelope key model). It is retained for
-// the existing crypto/key model; the gateway KEK model (GatewayConnector) supersedes it
-// and is wired into the crypto path in a later phase.
-type KMSConnector interface {
-	GetKey(path []byte) (key []byte, err error)
-	GetEnvelopeKey(id string) (key kem.Kem, err error)
-	CreateEnvelopeKey(ktStr string, name string) (id string, key kem.Kem, err error)
-	GetCurrentKeyID() string
-	SetCurrentKeyID(string)
-}
-
-// Connect starts up our key-provider connections. Should be the first thing we do.
+// Connect establishes the KEK data-key connector. It is the first key-provider call and runs
+// exactly once. The connector depends on the mode:
+//   - search:  the TrustedSearch KMS over mTLS + tenant token (ramdisk-provisioned certs)
+//   - mockKMS: an in-process bbolt-backed mock gateway (no live key service required)
+//   - default: TrustedGateway over mTLS (operator-provisioned certs)
 //
-// In gateway mode — the default now that TrustedBoundary is gone — we establish the mTLS
-// GatewayConnector to TrustedGateway. The mock and search providers keep serving the
-// envelope KMSConnector so the existing crypto path stays functional; wiring the gateway
-// KEK into that path is a later phase.
-//
-// mockAWS selects the source of the signed instance identity document the gateway connector
-// will attach to data-key requests (mock session vs real AWS IMDS); it is threaded to the
-// connector now, the document itself is attached in a later phase.
+// Only mount(-like) processes call Connect (-init writes the config without contacting the
+// key service); the id (NodeID) is read back from the config on every mount, so the first
+// mount's generate and all later unwraps share one keyspace. mockAWS selects the
+// instance-identity source for the real gateway connector (mock vs AWS IMDS); it is threaded
+// now and attached to requests in a later phase.
 func Connect(gatewayHost, gatewayCertDir, id string, mockKMS, mockAWS, isSearch bool) {
 	initOnce.Do(func() {
 		switch {
 		case isSearch:
 			tlog.Info.Printf("Opening TrustedSearch key provider")
-			c = newSearchConnector()
+			dkc = newSearchConnector(id)
 		case mockKMS:
-			tlog.Info.Printf("Opening mock KMS local store")
-			c = newMockConnector(id)
+			tlog.Info.Printf("Opening mock gateway local store")
+			dkc = newMockGatewayConnector(id, "")
 		default:
 			tlog.Info.Printf("Connecting to TrustedGateway: %s", gatewayHost)
-			gw = newGatewayConnector(gatewayHost, gatewayCertDir, id, mockAWS)
+			dkc = newGatewayConnector(gatewayHost, gatewayCertDir, id, mockAWS)
 		}
 	})
 }
 
-// Get retrieves the envelope-model KMS connector.
-func Get() KMSConnector {
-	if nil == c {
-		tlog.Fatal.Printf("Attempted to retrieve KMS connection before initialization")
+// DataKey retrieves the KEK data-key connector established by Connect.
+func DataKey() DataKeyConnector {
+	if dkc == nil {
+		tlog.Fatal.Printf("Attempted to retrieve data-key connector before initialization")
 		os.Exit(exitcodes.Other)
 	}
-	return c
-}
-
-// Gateway retrieves the gateway KEK connector.
-func Gateway() GatewayConnector {
-	if nil == gw {
-		tlog.Fatal.Printf("Attempted to retrieve gateway connection before initialization")
-		os.Exit(exitcodes.Other)
-	}
-	return gw
+	return dkc
 }

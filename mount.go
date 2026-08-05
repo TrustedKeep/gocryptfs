@@ -2,11 +2,11 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"log"
 	"log/syslog"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,8 +21,6 @@ import (
 
 	"golang.org/x/crypto/chacha20poly1305"
 
-	"github.com/TrustedKeep/tkutils/v2/crypto"
-	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/TrustedKeep/tkutils/v2/security"
 	"github.com/coreos/go-systemd/daemon"
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -57,7 +55,12 @@ func doMount(args *argContainer) {
 		tlog.Fatal.Printf("Invalid mountpoint: %v", err)
 		os.Exit(exitcodes.MountPoint)
 	}
-	cf, _ := loadConfig(args)
+	// A config file is mandatory: it names the key service and carries the NodeID that scopes
+	// the keyspace, and there is no password or master-key path to fall back on.
+	cf, err := loadConfig(args)
+	if err != nil {
+		exitcodes.Exit(err)
+	}
 
 	// We cannot mount "/home/user/.cipher" at "/home/user" because the mount
 	// will hide ".cipher" also for us.
@@ -93,6 +96,10 @@ func doMount(args *argContainer) {
 		tlog.Fatal.Printf("Invalid mountpoint: %v", err)
 		os.Exit(exitcodes.MountPoint)
 	}
+	// Bind the health-check port for the same reason the control socket is opened early, one step
+	// below: a failure here must happen before anything is mounted, or the fatal exit would leave
+	// a live mountpoint attached with no process behind it.
+	healthCheckLn := listenHealthCheck(args.healthCheckPort)
 	// Open control socket early so we can error out before asking the user
 	// for the password
 	if args.ctlsock != "" {
@@ -127,6 +134,11 @@ func doMount(args *argContainer) {
 	if x, ok := fs.(AfterUnmounter); ok {
 		defer x.AfterUnmount()
 	}
+
+	// Start serving before we tell anyone we are ready: a supervisor that probes the moment it
+	// sees the ready signal would otherwise race us and get a connection refused. The port was
+	// bound long before this, so all that is left is to accept on it.
+	serveHealthCheck(healthCheckLn)
 
 	tlog.Info.Println(tlog.ColorGreen + "Filesystem mounted and ready." + tlog.ColorReset)
 
@@ -174,25 +186,69 @@ func doMount(args *argContainer) {
 		go idleMonitor(args.idle, fwdFs, srv, args.mountpoint)
 	}
 	// Wait for unmount.
-	go runHealthCheck(args.healthCheckPort)
 	tlog.Info.Printf("Notifying systemd that TKFS is ready.")
 	daemon.SdNotify(false, daemon.SdNotifyReady)
 	srv.Wait()
 }
 
-func runHealthCheck(port int) {
+// defaultHealthCheckPort is where the liveness endpoint lands when -health-check-port is not given.
+const defaultHealthCheckPort = 8000
+
+// resolveHealthCheckPort maps a -health-check-port value onto the port to bind.
+//
+// Zero is treated as unset, not as a request: it is the int zero value, so "-health-check-port=0"
+// and passing no flag at all are the same statement, and it would be a trap for one to mean
+// something the other does not. Disabling is therefore a **negative** value — out of band, since no
+// real port is negative. Zero also does not mean "pick an ephemeral port": an endpoint on a port
+// nobody can predict is useless to a supervisor.
+func resolveHealthCheckPort(port int) (resolved int, enabled bool) {
+	if port < 0 {
+		return 0, false
+	}
+	if port == 0 {
+		return defaultHealthCheckPort, true
+	}
+	return port, true
+}
+
+// listenHealthCheck binds the health-check port, or dies trying. A mount nobody can probe is
+// invisible to whatever is supervising it, and the usual cause of a bind failure — another mount
+// already holding the port — means one of the two is misconfigured; carrying on would leave the
+// operator with a filesystem whose liveness answers for a different mount than they think.
+//
+// A negative port disables the endpoint — the opt-out for stacking several mounts on one host, and
+// what the test suite passes.
+func listenHealthCheck(portArg int) net.Listener {
+	port, enabled := resolveHealthCheckPort(portArg)
+	if !enabled {
+		tlog.Info.Printf("Health checks disabled (-health-check-port=%d)", portArg)
+		return nil
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		tlog.Fatal.Printf("Cannot serve health checks on port %d: %v", port, err)
+		os.Exit(exitcodes.HealthCheck)
+	}
+	return ln
+}
+
+// serveHealthCheck answers on the already-bound listener. Split from the bind so the bind can fail
+// early, before there is a mount to leave behind.
+func serveHealthCheck(ln net.Listener) {
+	if ln == nil {
+		return
+	}
+	tlog.Info.Printf("Serving health checks on %v", ln.Addr())
 	pingSvr := &http.Server{
-		Addr: fmt.Sprintf(":%d", port),
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
 	}
-
-	tlog.Info.Printf("Starting health check server on port:  %d\n", port)
-	if err := pingSvr.ListenAndServe(); err != nil {
-		fmt.Printf("Could not set up health check port: %v\n", err)
-		return
-	}
+	go func() {
+		if err := pingSvr.Serve(ln); err != nil {
+			tlog.Info.Printf("Health check server stopped: %v", err)
+		}
+	}()
 }
 
 // Based on the EncFS idle monitor:
@@ -263,10 +319,13 @@ func setOpenFileLimit() {
 // initFuseFrontend - initialize gocryptfs/internal/fusefrontend
 // Calls os.Exit on errors
 func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys func()) {
-	var err error
 	confFile, err := loadConfig(args)
 	if err != nil {
-		panic(err)
+		// Exit with the code the error carries (configfile.Load reports an unsupported
+		// on-disk format as DeprecatedFS) rather than panicking. -fsck reaches this path on
+		// an old-format filesystem, and a panic there would report exit code 2 and a stack
+		// trace instead of the real reason.
+		exitcodes.Exit(err)
 	}
 
 	// Reconciliate CLI and config file arguments into a fusefrontend.Args struct
@@ -295,26 +354,20 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 		OneFileSystem:      args.one_file_system,
 		DeterministicNames: args.deterministic_names,
 	}
-	var keyPool int
-	// confFile is nil when "-zerokey" was used
-	if confFile != nil {
-		// Settings from the config file override command line args
-		frontendArgs.PlaintextNames = confFile.IsFeatureFlagSet(configfile.FlagPlaintextNames)
-		frontendArgs.DeterministicNames = !confFile.IsFeatureFlagSet(configfile.FlagDirIV)
-		// Things that don't have to be in frontendArgs are only in args
-		args.longnamemax = confFile.LongNameMax
-		args.raw64 = confFile.IsFeatureFlagSet(configfile.FlagRaw64)
-		args.hkdf = confFile.IsFeatureFlagSet(configfile.FlagHKDF)
+	// Settings from the config file override command line args
+	frontendArgs.PlaintextNames = confFile.IsFeatureFlagSet(configfile.FlagPlaintextNames)
+	frontendArgs.DeterministicNames = !confFile.IsFeatureFlagSet(configfile.FlagDirIV)
+	// Things that don't have to be in frontendArgs are only in args
+	args.longnamemax = confFile.LongNameMax
+	args.raw64 = confFile.IsFeatureFlagSet(configfile.FlagRaw64)
 
-		// Note: this will always return the non-openssl variant
-		cryptoBackend, err = confFile.ContentEncryption()
-		if err != nil {
-			tlog.Fatal.Printf("%v", err)
-			os.Exit(exitcodes.DeprecatedFS)
-		}
-		IVBits = cryptoBackend.NonceSize * 8
-		keyPool = confFile.KeyPool
+	// Note: this will always return the non-openssl variant
+	cryptoBackend, err = confFile.ContentEncryption()
+	if err != nil {
+		tlog.Fatal.Printf("%v", err)
+		exitcodes.Exit(err)
 	}
+	IVBits = cryptoBackend.NonceSize * 8
 	// If allow_other is set and we run as root, create files as the accessing
 	// user.
 	// Except when -force_owner is set, because in this case the user may
@@ -324,90 +377,154 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, wipeKeys f
 	if args.allow_other && os.Getuid() == 0 && args._forceOwner == nil {
 		frontendArgs.PreserveOwner = true
 	}
-	var rootWrappedKey []byte
-	var rootID string
-	var rootKey []byte
-	flagFile := filepath.Dir(args.config) + "/" + configfile.EnvSetUpFlag
-	if keyPool == -1 {
-		frontendArgs.Envelope = true
-		//if not  set up yet
-		var envAlg string
-		if confFile == nil {
-			envAlg = DefaultEnvAlg
-		} else {
-			envAlg = confFile.EnvEncAlg
+	// Obtain the 32-byte master key through the data-key connector (established by
+	// tkc.Connect in doMount). First mount of a freshly initialized filesystem (no key-ring
+	// file): generate the data key now and persist its ciphertext. Later mounts: unwrap the
+	// active key-ring entry. Either way the gateway holds the KEK and the plaintext never
+	// crosses the wire in the clear.
+	keyRing, err := configfile.LoadKeyRing(args.config)
+	if err != nil {
+		tlog.Fatal.Printf("Cannot read key ring: %v", err)
+		exitcodes.Exit(err)
+	}
+	var masterKey []byte
+	if len(keyRing.Keys) == 0 {
+		// The first mount has to write the generated key's ciphertext into the cipherdir, which
+		// happens before the FUSE mount exists and is therefore outside the kernel's read-only
+		// enforcement. Refuse rather than write anyway: that also means a never-mounted
+		// filesystem on read-only media fails here with a clear message instead of at the
+		// persist call. Mount it writable once first. (fsck sets -ro, so it hits this too.)
+		if args.ro {
+			tlog.Fatal.Printf("This filesystem has no data key yet, and the first mount must persist one; " +
+				"mount it writable once before mounting read-only")
+			os.Exit(exitcodes.Usage)
 		}
-		if _, err := os.Stat(flagFile); errors.Is(err, os.ErrNotExist) {
-
-			//create eme key
-			var envKey kem.Kem
-			if rootID, envKey, err = tkc.Get().CreateEnvelopeKey(envAlg, ""); err != nil {
-				tlog.Fatal.Printf("%v", err)
-				os.Exit(exitcodes.Other)
-			}
-			//create general env key
-			var genID string
-			if genID, _, err = tkc.Get().CreateEnvelopeKey(envAlg, confFile.EnvelopeID); err != nil {
-				tlog.Fatal.Printf("%v", err)
-				os.Exit(exitcodes.Other)
-			}
-			fmt.Printf("genID: %s\n", genID)
-			tkc.Get().SetCurrentKeyID(genID)
-			//use env key to generate the wrapped key
-			if rootKey, rootWrappedKey, err = envKey.Wrap(); err != nil {
-				tlog.Fatal.Printf("Error generating wrapped key %v", err)
-				os.Exit(exitcodes.Other)
-			}
-			crypto.Zeroize(rootKey) //make sure this key is cleared
-			combined := append([]byte(rootID), rootWrappedKey...)
-			//write the wrapped key
-			if err = os.WriteFile(flagFile, combined, 0600); err != nil { //TODO: try this out, might have to change the perms...in fact I dont think it needs write at all
-				tlog.Fatal.Printf("Error writing wrapped key %v", err)
-				os.Exit(exitcodes.Other)
-			}
-		} else {
-			// get wrapped key
-			combined, err := os.ReadFile(flagFile)
-			if err != nil {
-				tlog.Fatal.Printf("Could not get wrapped key and rootID from file: %v", err)
-				os.Exit(exitcodes.Other)
-			}
-			if len(combined) < tkc.EnvelopeIDLength {
-				tlog.Fatal.Printf("The bytes in the file could not possibly be long enough to have both the root key id and the wrapped key")
-				os.Exit(exitcodes.Other)
-			}
-
-			//TODO: Possible alternative here is pulling it from the conf file and changing the conf file during key rotations
-			var genID string
-			if genID, _, err = tkc.Get().CreateEnvelopeKey(envAlg, ""); err != nil {
-				tlog.Fatal.Printf("%v", err)
-				os.Exit(exitcodes.Other)
-			}
-
-			fmt.Printf("genID alt case: %s\n", genID)
-			tkc.Get().SetCurrentKeyID(genID)
-
-			rootID = string(combined[:tkc.EnvelopeIDLength])
-			rootWrappedKey = combined[tkc.EnvelopeIDLength:]
+		masterKey, keyRing = generateInitialDataKey(args)
+	}
+	// masterKey is nil when the ring already has a key (the usual case), or when a concurrent
+	// first mount won the generate race while we waited on the lock.
+	if masterKey == nil {
+		active, err := keyRing.Active()
+		if err != nil {
+			tlog.Fatal.Printf("%v", err)
+			os.Exit(exitcodes.Other)
 		}
-
+		if masterKey, err = tkc.DataKey().UnwrapTKFSDataKey(active.KeyID, active.Ciphertext); err != nil {
+			tlog.Fatal.Printf("Failed to unwrap the gateway data key: %v", err)
+			os.Exit(exitcodes.Other)
+		}
 	}
 
-	// Init crypto backend
-	cCore := cryptocore.New(cryptoBackend, IVBits, keyPool, args.hkdf, rootID, rootWrappedKey)
+	// Init crypto backend, then zeroize our copy of the master key: cryptocore has HKDF-derived
+	// and cached the EME/content keys it needs, so the master key is no longer required in memory
+	// (a single active key; multi-key retention for rotation is Phase 3).
+	cCore := cryptocore.New(masterKey, cryptoBackend, IVBits)
+	for i := range masterKey {
+		masterKey[i] = 0
+	}
 	cEnc := contentenc.New(cCore, contentenc.DefaultBS)
 	nameTransform := nametransform.New(cCore.EMECipher, frontendArgs.LongNames, args.longnamemax,
 		args.raw64, []string(args.badname), frontendArgs.DeterministicNames)
 	// Spawn fusefrontend
 	tlog.Debug.Printf("frontendArgs: %s", tlog.JSONDump(frontendArgs))
-	rootNode = fusefrontend.NewRootNode(frontendArgs, cEnc, nameTransform, rootID, rootWrappedKey)
+	rootNode = fusefrontend.NewRootNode(frontendArgs, cEnc, nameTransform)
 
 	// We have opened the socket early so that we cannot fail here after
 	// asking the user for the password
 	if args._ctlsockFd != nil {
 		go ctlsocksrv.Serve(args._ctlsockFd, rootNode.(ctlsocksrv.Interface))
 	}
-	return rootNode, func() { cCore.Wipe() }
+	return rootNode, func() {
+		cCore.Wipe()
+		// Release the data-key connector (network connections / bbolt handle).
+		if err := tkc.DataKey().Close(); err != nil {
+			tlog.Warn.Printf("Error closing data-key connector: %v", err)
+		}
+	}
+}
+
+// generateInitialDataKey mints and persists the data key for a freshly initialized filesystem
+// (no key-ring file) and returns its plaintext, plus the ring as re-loaded under the lock. If the
+// ring turns out to be populated once we hold the lock, the returned key is nil and the caller
+// unwraps that entry instead. The ciphertext is persisted before the key is used: nothing may be
+// encrypted under a key that is not recoverable from disk.
+//
+// The lock is taken on gocryptfs.conf. Not on the key-ring file, which is the file we are about to
+// create — there is nothing to lock yet, and creating it early would expose a zero-length ring to a
+// concurrent mount. The config is the one file guaranteed to exist for the life of the filesystem,
+// which makes it the natural rendezvous, and Phase-3 rotation can take the same lock.
+//
+// flock is advisory and conflicts only with another flock() on the same inode, so this blocks
+// nothing except a second TKFS first-mount: no read, write, open or readdir anywhere in the
+// cipherdir is affected, and the lock is released before the FUSE mount comes up. What it buys:
+// two mounts of the same never-mounted cipherdir would otherwise each generate a key, and
+// everything the loser of the write race encrypted would be silently orphaned by the winner's ring.
+// What it does NOT buy: mounts on different hosts sharing storage (this fork has -sharedstorage),
+// where flock does not carry.
+func generateInitialDataKey(args *argContainer) ([]byte, *configfile.KeyRing) {
+	confFd, err := os.Open(args.config)
+	if err != nil {
+		tlog.Fatal.Printf("Cannot open config file for locking: %v", err)
+		os.Exit(exitcodes.OpenConf)
+	}
+	// Close also releases the flock. Flock blocks (no LOCK_NB) — a competing first mount waits
+	// here rather than failing, which is the point: the loser then unwraps the winner's entry
+	// instead of erroring out of an otherwise valid mount.
+	defer confFd.Close()
+	if err := syscall.Flock(int(confFd.Fd()), syscall.LOCK_EX); err != nil {
+		tlog.Fatal.Printf("Cannot lock config file: %v", err)
+		os.Exit(exitcodes.OpenConf)
+	}
+	// Re-load under the lock: a competing first mount may have generated and persisted while
+	// we waited.
+	keyRing, err := configfile.LoadKeyRing(args.config)
+	if err != nil {
+		tlog.Fatal.Printf("Cannot read key ring: %v", err)
+		exitcodes.Exit(err)
+	}
+	if len(keyRing.Keys) > 0 {
+		return nil, keyRing
+	}
+	ensureCipherdirFresh(args)
+	dk, err := tkc.DataKey().GenerateTKFSDataKey()
+	if err != nil {
+		tlog.Fatal.Printf("Failed to generate the initial data key: %v", err)
+		os.Exit(exitcodes.Other)
+	}
+	keyRing.Keys = []configfile.KeyRingEntry{{
+		KeyID:      dk.KeyID,
+		Ciphertext: dk.Ciphertext,
+		CreatedAt:  time.Now().UTC(),
+	}}
+	if err := keyRing.WriteFileUnderLock(); err != nil {
+		tlog.Fatal.Printf("Failed to persist the initial key-ring entry: %v", err)
+		os.Exit(exitcodes.WriteConf)
+	}
+	return dk.Plaintext, keyRing
+}
+
+// ensureCipherdirFresh refuses to mint a new key over existing data: a missing key ring is only
+// legitimate while the cipherdir still looks exactly as -init left it (config + diriv, nothing
+// else). Encrypted payload with no key ring means the ring was deleted, the cipherdir was
+// restored from a pre-first-mount backup, or it was tampered with — generating a fresh key would
+// leave the existing files permanently undecryptable while new writes silently succeed, so fail
+// closed instead.
+func ensureCipherdirFresh(args *argContainer) {
+	entries, err := os.ReadDir(args.cipherdir)
+	if err != nil {
+		tlog.Fatal.Printf("Cannot list cipherdir: %v", err)
+		os.Exit(exitcodes.CipherDir)
+	}
+	for _, e := range entries {
+		switch e.Name() {
+		case configfile.ConfDefaultName, configfile.KeyRingFileName,
+			configfile.KeyRingFileName + ".tmp", nametransform.DirIVFilename:
+			continue
+		}
+		tlog.Fatal.Printf("Cipherdir %q contains %q but there is no key ring; refusing to generate a new key over existing data",
+			args.cipherdir, e.Name())
+		os.Exit(exitcodes.CipherDir)
+	}
 }
 
 type RootInoer interface {
@@ -461,8 +578,8 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 	mOpts := &fuseOpts.MountOptions
 	opts := make(map[string]string)
 	if args.allow_other {
-		tlog.Info.Printf(tlog.ColorYellow + "The option \"-allow_other\" is set. Make sure the file " +
-			"permissions protect your data from unwanted access." + tlog.ColorReset)
+		tlog.Info.Printf("%s", tlog.ColorYellow+"The option \"-allow_other\" is set. Make sure the file "+
+			"permissions protect your data from unwanted access."+tlog.ColorReset)
 		mOpts.AllowOther = true
 		// Make the kernel check the file permissions for us
 		opts["default_permissions"] = ""

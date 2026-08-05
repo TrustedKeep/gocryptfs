@@ -2,6 +2,7 @@ package tkc
 
 import (
 	"bytes"
+	"crypto/rsa"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,7 +11,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/TrustedKeep/tkutils/v2/certutil"
 	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/TrustedKeep/tkutils/v2/model"
 	"github.com/TrustedKeep/tkutils/v2/tlsutils"
@@ -43,7 +43,7 @@ const gwHTTPTimeout = 10 * time.Second
 // unbounded read.
 const maxGatewayResponseBytes = 1 << 20 // 1 MiB
 
-var _ GatewayConnector = (*gwConnector)(nil)
+var _ DataKeyConnector = (*gwConnector)(nil)
 
 // gwConnector is the real client of the gateway data-key API. It presents an
 // operator-provisioned client cert over mTLS and speaks the generate/unwrap contract in
@@ -134,36 +134,27 @@ func (g *gwConnector) load() error {
 	return nil
 }
 
-// transportKemType is the KEM used for the per-request transit-wrap keypair. RSA-OAEP for now;
-// a post-quantum KEM (e.g. kem.Kyber768X25519) can replace it later with no protocol break — the
-// wire carries TransportAlg so the gateway learns the algorithm, and kem.Unwrap already handles
-// the PQ types, so nothing here changes.
+// transportKemType identifies the transit-wrap algorithm sent on the wire as TransportAlg; the
+// wrap/unwrap protocol lives in model.NewTransportKey / model.TransitWrap / model.TransitUnwrap
+// (RSA-OAEP). RSA is the only transport algorithm wired end-to-end today; a post-quantum or hybrid
+// transport (e.g. RFC 9180 HPKE) is a deliberate, tested change, not a silent flip of this constant.
 const transportKemType = kem.RSA3072
 
-// newTransport mints a fresh ephemeral wrap keypair for a single data-key call. The gateway wraps
-// the returned data key to pubPEM; only this process holds the private half, so the plaintext key
-// is recoverable only here and never appears on the wire (a second layer under mTLS).
-func newTransport() (k kem.Kem, pubPEM []byte, err error) {
-	if k, err = kem.NewKem(transportKemType); err != nil {
-		return nil, nil, err
-	}
-	if pubPEM, err = certutil.EncodePublicKey(k.GetPublicKey()); err != nil {
-		return nil, nil, err
-	}
-	return k, pubPEM, nil
+// newTransport mints a fresh ephemeral transport keypair for a single data-key call. The peer seals
+// the returned data key to pubPEM; only this process holds the private half, so the plaintext key is
+// recoverable only here and never appears on the wire (a second layer under mTLS).
+func newTransport() (priv *rsa.PrivateKey, pubPEM []byte, err error) {
+	return model.NewTransportKey(uint16(transportKemType))
 }
 
-// unwrapTransport recovers the plaintext data key from the gateway's transit-wrapped response.
-// An empty WrappedKey is rejected: the response type carries no plaintext field, so an empty
-// wrap is the only way a non-wrapping gateway shows up, and we must never silently proceed
-// without a key. The recovered key must be exactly tkfsDataKeyLength bytes.
-func unwrapTransport(k kem.Kem, wrapped []byte) ([]byte, error) {
-	if len(wrapped) == 0 {
-		return nil, fmt.Errorf("empty wrapped key: gateway must transit-wrap the data key")
-	}
-	dek, err := k.Unwrap(wrapped)
+// unwrapTransit recovers the plaintext data key from the peer's TransitWrappedKey and
+// enforces the expected data-key length. An empty wrap is rejected inside model.TransitUnwrap: the
+// response carries no plaintext field, so an empty wrap is the only way a non-wrapping peer shows up
+// and must never be silently accepted.
+func unwrapTransit(priv *rsa.PrivateKey, wrapped []byte) ([]byte, error) {
+	dek, err := model.TransitUnwrap(priv, wrapped)
 	if err != nil {
-		return nil, fmt.Errorf("transport unwrap: %w", err)
+		return nil, err
 	}
 	if len(dek) != tkfsDataKeyLength {
 		return nil, fmt.Errorf("expected %d-byte data key, got %d", tkfsDataKeyLength, len(dek))
@@ -190,7 +181,7 @@ func (g *gwConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	if out.KeyID == "" || len(out.Ciphertext) == 0 {
 		return TKFSDataKey{}, fmt.Errorf("gateway generate: incomplete response (keyID=%q, ciphertext=%dB)", out.KeyID, len(out.Ciphertext))
 	}
-	dek, err := unwrapTransport(k, out.WrappedKey)
+	dek, err := unwrapTransit(k, out.TransitWrappedKey)
 	if err != nil {
 		return TKFSDataKey{}, fmt.Errorf("gateway generate: %w", err)
 	}
@@ -218,7 +209,7 @@ func (g *gwConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]byte
 	if err := g.post(gatewayUnwrapPath, req, &out); err != nil {
 		return nil, err
 	}
-	dek, err := unwrapTransport(k, out.WrappedKey)
+	dek, err := unwrapTransit(k, out.TransitWrappedKey)
 	if err != nil {
 		return nil, fmt.Errorf("gateway unwrap: %w", err)
 	}

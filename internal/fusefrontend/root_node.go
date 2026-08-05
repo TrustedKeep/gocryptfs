@@ -62,13 +62,9 @@ type RootNode struct {
 	quirks uint64
 	// rootIno is the inode number that we report for the root node on mount
 	rootIno uint64
-
-	//The things necessary for envelope encryption
-	rootEnvKeyID   string
-	rootWrappedKey []byte
 }
 
-func NewRootNode(args Args, c *contentenc.ContentEnc, n *nametransform.NameTransform, rootEnvKeyID string, rootWrappedKey []byte) *RootNode {
+func NewRootNode(args Args, c *contentenc.ContentEnc, n *nametransform.NameTransform) *RootNode {
 	var rootDev uint64
 	var st syscall.Stat_t
 	var statErr error
@@ -84,14 +80,12 @@ func NewRootNode(args Args, c *contentenc.ContentEnc, n *nametransform.NameTrans
 	}
 
 	rn := &RootNode{
-		args:           args,
-		nameTransform:  n,
-		contentEnc:     c,
-		inoMap:         inomap.New(rootDev),
-		dirCache:       dirCache{ivLen: ivLen},
-		quirks:         syscallcompat.DetectQuirks(args.Cipherdir),
-		rootEnvKeyID:   rootEnvKeyID,
-		rootWrappedKey: rootWrappedKey,
+		args:          args,
+		nameTransform: n,
+		contentEnc:    c,
+		inoMap:        inomap.New(rootDev),
+		dirCache:      dirCache{ivLen: ivLen},
+		quirks:        syscallcompat.DetectQuirks(args.Cipherdir),
 	}
 	if statErr == nil {
 		rn.inoMap.TranslateStat(&st)
@@ -170,6 +164,12 @@ func (rn *RootNode) isFiltered(child string) bool {
 // The empty string decrypts to the empty string.
 //
 // This function does not do any I/O and is hence symlink-safe.
+//
+// Symlink targets and xattr values are encrypted like a content block but have no file header, so
+// decrypt has to assume the write key rather than being told which one was used. Phase-3 rotation
+// therefore has to either re-encrypt them or record the index alongside the value — the envelope
+// model this replaced did the latter, in a plain unencrypted xattr, and the index is likewise not
+// secret.
 func (rn *RootNode) decryptSymlinkTarget(cData64 string) (string, error) {
 	if cData64 == "" {
 		return "", nil
@@ -178,7 +178,7 @@ func (rn *RootNode) decryptSymlinkTarget(cData64 string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := rn.contentEnc.DecryptBlock([]byte(cData), 0, nil, rn.rootEnvKeyID, rn.rootWrappedKey)
+	data, err := rn.contentEnc.DecryptBlock([]byte(cData), 0, nil, contentenc.WriteKeyIdx)
 	if err != nil {
 		return "", err
 	}
@@ -240,7 +240,7 @@ func (rn *RootNode) encryptSymlinkTarget(data string) (cData64 string) {
 		return ""
 	}
 
-	cData := rn.contentEnc.EncryptBlock([]byte(data), 0, nil, rn.rootEnvKeyID, rn.rootWrappedKey)
+	cData := rn.contentEnc.EncryptBlock([]byte(data), 0, nil, contentenc.WriteKeyIdx)
 	cData64 = rn.nameTransform.B64EncodeToString(cData)
 	return cData64
 }
@@ -254,7 +254,7 @@ func (rn *RootNode) encryptXattrValue(data []byte) (cData []byte) {
 		return []byte{}
 	}
 
-	return rn.contentEnc.EncryptBlock(data, 0, nil, rn.rootEnvKeyID, rn.rootWrappedKey)
+	return rn.contentEnc.EncryptBlock(data, 0, nil, contentenc.WriteKeyIdx)
 }
 
 // decryptXattrValue decrypts the xattr value "cData".
@@ -262,7 +262,7 @@ func (rn *RootNode) decryptXattrValue(cData []byte) (data []byte, err error) {
 	if len(cData) == 0 {
 		return []byte{}, nil
 	}
-	data, err1 := rn.contentEnc.DecryptBlock([]byte(cData), 0, nil, rn.rootEnvKeyID, rn.rootWrappedKey)
+	data, err1 := rn.contentEnc.DecryptBlock([]byte(cData), 0, nil, contentenc.WriteKeyIdx)
 	if err1 == nil {
 		return data, nil
 	}
@@ -274,7 +274,7 @@ func (rn *RootNode) decryptXattrValue(cData []byte) (data []byte, err error) {
 		// Return the original decryption error: err1
 		return nil, err1
 	}
-	return rn.contentEnc.DecryptBlock([]byte(cData), 0, nil, rn.rootEnvKeyID, rn.rootWrappedKey)
+	return rn.contentEnc.DecryptBlock([]byte(cData), 0, nil, contentenc.WriteKeyIdx)
 }
 
 // encryptXattrName transforms "user.foo" to "user.gocryptfs.a5sAd4XAa47f5as6dAf"

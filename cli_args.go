@@ -24,13 +24,11 @@ import (
 
 // argContainer stores the parsed CLI options and arguments
 
-const DefaultEnvAlg = "RSA-2048"
-
 type argContainer struct {
-	debug, init, zerokey, fusedebug, fg, version,
+	debug, init, fusedebug, fg, version,
 	plaintextnames, quiet, nosyslog, wpanic,
 	longnames, allow_other, nonempty, raw64,
-	noprealloc, speed, hkdf, hh, info,
+	noprealloc, speed, hh, info,
 	sharedstorage, fsck, one_file_system, deterministic_names,
 	xchacha bool
 	// Mount options with opposites
@@ -57,9 +55,8 @@ type argContainer struct {
 	healthCheckPort int
 	// tk specific options
 	gatewayHost, gatewayCertDir string
-	nodeID, envEncAlg           string
+	nodeID                      string
 	mockAWS, mockKMS, isSearch  bool
-	keyPool                     int // -1 means envelope encryption, anything above 0 means legacy mode
 }
 
 var flagSet *flag.FlagSet
@@ -158,7 +155,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.debug, "debug", false, "Enable debug output")
 	flagSet.BoolVar(&args.fusedebug, "fusedebug", false, "Enable fuse library debug output")
 	flagSet.BoolVar(&args.init, "init", false, "Initialize encrypted directory")
-	flagSet.BoolVar(&args.zerokey, "zerokey", false, "Use all-zero dummy master key")
 	// Tri-state true/false/auto
 	flagSet.BoolVar(&args.fg, "f", false, "")
 	flagSet.BoolVar(&args.fg, "fg", false, "Stay in the foreground")
@@ -175,7 +171,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.raw64, "raw64", true, "Use unpadded base64 for file names")
 	flagSet.BoolVar(&args.noprealloc, "noprealloc", false, "Disable preallocation before writing")
 	flagSet.BoolVar(&args.speed, "speed", false, "Run crypto speed test")
-	flagSet.BoolVar(&args.hkdf, "hkdf", true, "Use HKDF as an additional key derivation step")
 	flagSet.BoolVar(&args.hh, "hh", false, "Show this long help text")
 	flagSet.BoolVar(&args.info, "info", false, "Display information about CIPHERDIR")
 	flagSet.BoolVar(&args.sharedstorage, "sharedstorage", false, "Make concurrent access to a shared CIPHERDIR safer")
@@ -184,18 +179,17 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.deterministic_names, "deterministic-names", false, "Disable diriv file name randomisation")
 	flagSet.BoolVar(&args.xchacha, "xchacha", false, "Use XChaCha20-Poly1305 file content encryption")
 
-	flagSet.IntVar(&args.healthCheckPort, "health-check-port", 8000, "Port that can be pinged to ensure TKFS is fully up and running")
+	flagSet.IntVar(&args.healthCheckPort, "health-check-port", defaultHealthCheckPort, "Port that can be pinged to ensure TKFS is fully up and running. "+
+		"The mount fails if it cannot be bound. 0 means unset and uses the default; a negative value disables the endpoint")
 
 	// TK specific options
 	defaultGatewayHost := fmt.Sprintf("%s:%d", network.GetLocalIP(), 7083)
 	flagSet.StringVar(&args.gatewayHost, "gateway-host", defaultGatewayHost, "Host:port of the TrustedGateway")
 	flagSet.StringVar(&args.gatewayCertDir, "gateway-cert-dir", "", "Directory holding the operator-provisioned gateway mTLS material: tls.crt, tls.key, ca.crt")
 	flagSet.StringVar(&args.nodeID, "node-id", "", "Unique identifier for the mount")
-	flagSet.StringVar(&args.envEncAlg, "env-enc-alg", DefaultEnvAlg, "The encrytion algorithm that will be used to envelop encrypt the file encryption keys. Options are RSA-2048, RSA-3072, Kyber-512, KyberX25519-512, Kyber-768, KyberX25519-768, KyberX448-768, Kyber-1024, KyberX448-1024")
 	flagSet.BoolVarP(&args.mockAWS, "mock-aws", "", false, "Mock AWS connection for development")
-	flagSet.BoolVarP(&args.mockKMS, "mock-kms", "", false, "Use a mock KMS for development, no gateway required")
+	flagSet.BoolVarP(&args.mockKMS, "mock-kms", "", false, "Use a mock gateway (bbolt-backed) for development, no key service required")
 	flagSet.BoolVarP(&args.isSearch, "search", "", false, "Use TrustedSearch as key provider")
-	flagSet.IntVarP(&args.keyPool, "key-pool", "", -1, "Size of pool of encryption keys, when not explicitly set, envelope encryption will be used for file keys instead of a keypool")
 
 	// Mount options with opposites
 	flagSet.BoolVar(&args.dev, "dev", false, "Allow device files")
@@ -275,11 +269,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 		os.Exit(exitcodes.Usage)
 	}
 
-	//keypool either needs to be the default of -1 or greater than 0
-	if args.keyPool != -1 && args.keyPool <= 0 {
-		tlog.Fatal.Printf("-keypool: value %d is not greater than zero", args.keyPool)
-		os.Exit(exitcodes.Usage)
-	}
 	return args
 }
 

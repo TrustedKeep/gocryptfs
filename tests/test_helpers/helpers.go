@@ -137,7 +137,7 @@ func isExt4(path string) bool {
 
 // InitFS creates a new empty cipherdir and calls
 //
-//     gocryptfs -q -init -extpass "echo test" $extraArgs $cipherdir
+//	gocryptfs -q -init -extpass "echo test" $extraArgs $cipherdir
 //
 // It returns cipherdir without a trailing slash.
 //
@@ -157,6 +157,13 @@ func InitFS(t *testing.T, extraArgs ...string) string {
 	}
 	args := []string{"-q", "-init", "-extpass", "echo test"}
 	args = append(args, extraArgs...)
+	// -init itself contacts no key service, but it persists the key source in the config, and
+	// every mount needs one (there is no password/master-key path); default the integration
+	// suite to the in-process mock gateway unless the caller already selected a key source.
+	// The mock keys its store by NodeID, so parallel tests don't contend on a shared bbolt lock.
+	if needsMockKMS(extraArgs) {
+		args = append(args, "-mock-kms")
+	}
 	args = append(args, dir)
 
 	cmd := exec.Command(GocryptfsBinary, args...)
@@ -173,6 +180,36 @@ func InitFS(t *testing.T, extraArgs ...string) string {
 	}
 
 	return dir
+}
+
+// InitDefaultCipherDir runs "-init" on DefaultCipherDir, which the caller must have just
+// (re-)created empty via ResetTmpDir(false). Suites that mount DefaultCipherDir directly, rather
+// than a per-test InitFS temp dir, need this: every mount requires a config file naming a key
+// source, and -init is what writes it (along with gocryptfs.diriv).
+//
+// extraArgs carries the options that are decided at init because they are recorded in the config
+// — -plaintextnames, -xchacha, -deterministic-names — not mount-time options.
+func InitDefaultCipherDir(extraArgs ...string) {
+	args := []string{"-q", "-init", "-extpass", "echo test", "-mock-kms"}
+	args = append(args, extraArgs...)
+	args = append(args, DefaultCipherDir)
+	// Callers run this from TestMain before flag.Parse(), so testing.Verbose() would panic;
+	// capture the output instead and surface it only when init actually fails.
+	out, err := exec.Command(GocryptfsBinary, args...).CombinedOutput()
+	if err != nil {
+		log.Panicf("InitDefaultCipherDir: %v\n%s", err, out)
+	}
+}
+
+// needsMockKMS reports whether InitFS should append -mock-kms. It defaults on, so plain InitFS
+// calls use the mock gateway, and backs off only when the caller already picked a key source.
+func needsMockKMS(extraArgs []string) bool {
+	for _, a := range extraArgs {
+		if a == "-mock-kms" || a == "-search" {
+			return false
+		}
+	}
+	return true
 }
 
 // Md5fn returns an md5 string for file "filename"

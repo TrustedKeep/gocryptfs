@@ -133,8 +133,8 @@ func (f *File) Readdirent(ctx context.Context) (entry *fuse.DirEntry, errno sysc
 			// We want these as-is
 			return
 		}
-		if f.dirHandle.isRootDir && (cName == configfile.ConfDefaultName || cName == configfile.EnvSetUpFlag) {
-			// silently ignore "gocryptfs.conf" and "CEK" in the top level dir
+		if f.dirHandle.isRootDir && (cName == configfile.ConfDefaultName || cName == configfile.KeyRingFileName) {
+			// silently ignore "gocryptfs.conf" and the "KR" key ring in the top level dir
 			continue
 		}
 		if f.rootNode.args.PlaintextNames {

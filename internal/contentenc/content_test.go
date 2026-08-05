@@ -1,12 +1,9 @@
 package contentenc
 
 import (
-	"fmt"
 	"testing"
 
-	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
-	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 )
 
 type testRange struct {
@@ -14,11 +11,13 @@ type testRange struct {
 	length uint64
 }
 
+// newTestCore builds a CryptoCore from an all-zero master key. The range-math tests below do not
+// encrypt anything, so the key material is irrelevant; only IVLen / cipherBS matter.
+func newTestCore() *cryptocore.CryptoCore {
+	return cryptocore.New(make([]byte, cryptocore.KeyLen), cryptocore.BackendGoGCM, DefaultIVBits)
+}
+
 func TestSplitRange(t *testing.T) {
-	id, wrapped, err := createTKKeys()
-	if err != nil {
-		t.Fatalf("Couldn't set up tk: %v", err)
-	}
 	var ranges []testRange
 
 	ranges = append(ranges, testRange{0, 70000},
@@ -29,7 +28,7 @@ func TestSplitRange(t *testing.T) {
 		testRange{0, 65536},
 		testRange{6654, 8945})
 
-	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true, id, wrapped)
+	cc := newTestCore()
 	f := New(cc, DefaultBS)
 
 	for _, r := range ranges {
@@ -48,10 +47,6 @@ func TestSplitRange(t *testing.T) {
 }
 
 func TestCiphertextRange(t *testing.T) {
-	id, wrapped, err := createTKKeys()
-	if err != nil {
-		t.Fatalf("Couldn't set up tk: %v", err)
-	}
 	var ranges []testRange
 
 	ranges = append(ranges, testRange{0, 70000},
@@ -60,7 +55,7 @@ func TestCiphertextRange(t *testing.T) {
 		testRange{65444, 54},
 		testRange{6654, 8945})
 
-	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true, id, wrapped)
+	cc := newTestCore()
 	f := New(cc, DefaultBS)
 
 	for _, r := range ranges {
@@ -82,11 +77,7 @@ func TestCiphertextRange(t *testing.T) {
 }
 
 func TestBlockNo(t *testing.T) {
-	id, wrapped, err := createTKKeys()
-	if err != nil {
-		t.Fatalf("Couldn't set up tk: %v", err)
-	}
-	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true, id, wrapped)
+	cc := newTestCore()
 	f := New(cc, DefaultBS)
 
 	b := f.CipherOffToBlockNo(788)
@@ -105,18 +96,4 @@ func TestBlockNo(t *testing.T) {
 	if b != 1 {
 		t.Errorf("actual: %d", b)
 	}
-}
-
-func createTKKeys() (id string, wrapped []byte, err error) {
-	tkc.Connect("", "", "", true, false, false)
-	id, kem, err := tkc.Get().CreateEnvelopeKey(kem.RSA2048.String(), "")
-	if err != nil {
-		err = fmt.Errorf("couldnt create env key err: %v\n", err)
-	}
-
-	_, wrapped, err = kem.Wrap()
-	if err != nil {
-		err = fmt.Errorf("wrapping key err: %v\n", err)
-	}
-	return
 }

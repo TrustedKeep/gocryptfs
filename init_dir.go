@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/google/uuid"
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
@@ -43,12 +44,10 @@ func isDir(dir string) error {
 	return nil
 }
 
-// initDir handles "gocryptfs -init". It prepares a directory for use as a
-// gocryptfs storage directory.
-// In forward mode, this means creating the gocryptfs.conf and gocryptfs.diriv
-// files in an empty directory.
-// In reverse mode, we create .gocryptfs.reverse.conf and the directory does
-// not need to be empty.
+// initDir handles "gocryptfs -init". It prepares a directory for use as a gocryptfs storage
+// directory: the cipherdir must be empty, and it creates gocryptfs.conf plus gocryptfs.diriv.
+// It does not contact the key service and writes no key ring: the first mount generates the
+// data key and creates the key-ring file (mount.go).
 func initDir(args *argContainer) {
 	err := isEmptyDir(args.cipherdir)
 	if err != nil {
@@ -56,25 +55,29 @@ func initDir(args *argContainer) {
 		os.Exit(exitcodes.CipherDir)
 	}
 
-	{
-		err = configfile.Create(&configfile.CreateArgs{
-			Filename:           args.config,
-			PlaintextNames:     args.plaintextnames,
-			DeterministicNames: args.deterministic_names,
-			XChaCha20Poly1305:  args.xchacha,
-			NodeID:             args.nodeID,
-			MockAWS:            args.mockAWS,
-			MockKMS:            args.mockKMS,
-			IsSearch:           args.isSearch,
-			GatewayHost:        args.gatewayHost,
-			KeyPool:            args.keyPool,
-			LongNameMax:        args.longnamemax,
-			EnvEncAlg:          args.envEncAlg,
-		})
-		if err != nil {
-			tlog.Fatal.Println(err)
-			os.Exit(exitcodes.WriteConf)
-		}
+	// Resolve the NodeID once and persist it: every mount reads it back from the config, so
+	// the first mount's generate and all later unwraps happen in the same keyspace. Minting
+	// it here — not inside configfile.Create — keeps the value visible to initDir.
+	nodeID := args.nodeID
+	if nodeID == "" {
+		nodeID = uuid.NewString()
+	}
+
+	err = configfile.Create(&configfile.CreateArgs{
+		Filename:           args.config,
+		PlaintextNames:     args.plaintextnames,
+		DeterministicNames: args.deterministic_names,
+		XChaCha20Poly1305:  args.xchacha,
+		NodeID:             nodeID,
+		MockAWS:            args.mockAWS,
+		MockKMS:            args.mockKMS,
+		IsSearch:           args.isSearch,
+		GatewayHost:        args.gatewayHost,
+		LongNameMax:        args.longnamemax,
+	})
+	if err != nil {
+		tlog.Fatal.Println(err)
+		os.Exit(exitcodes.WriteConf)
 	}
 	// Forward mode with filename encryption enabled needs a gocryptfs.diriv file
 	// in the root dir
