@@ -18,5 +18,5 @@ const (
 )
 
 func logQuirk(s string) {
-	tlog.Info.Printf(tlog.ColorYellow + "DetectQuirks: " + s + tlog.ColorReset)
+	tlog.Info.Printf("%s", tlog.ColorYellow+"DetectQuirks: "+s+tlog.ColorReset)
 }

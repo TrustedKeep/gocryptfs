@@ -20,11 +20,11 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	test_helpers.ResetTmpDir(true)
-	// TestZerokey() in tests/cli verifies that mounting with `-zerokey` is equivalent
-	// to mounting with a config file with all-default options (just the masterkey
-	// set to all-zero).
-	test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir, "-zerokey")
+	// -init writes the config (and gocryptfs.diriv) with all-default options; the first mount
+	// generates the data key through the mock gateway.
+	test_helpers.ResetTmpDir(false)
+	test_helpers.InitDefaultCipherDir()
+	test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir)
 	r := m.Run()
 	test_helpers.UnmountPanic(test_helpers.DefaultPlainDir)
 	os.Exit(r)
@@ -361,7 +361,7 @@ func TestMd5sumMaintainers(t *testing.T) {
 	// Remount to clear the linux kernel attr cache
 	// (otherwise we would have to wait 2 seconds for the entry to expire)
 	test_helpers.UnmountPanic(test_helpers.DefaultPlainDir)
-	test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir, "-zerokey")
+	test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir)
 
 	cmd := exec.Command("md5sum", fn, fn, fn, fn)
 	out2, err := cmd.CombinedOutput()

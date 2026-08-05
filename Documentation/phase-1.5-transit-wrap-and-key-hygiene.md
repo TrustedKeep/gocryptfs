@@ -91,6 +91,12 @@ forward secrecy.
 
 ### Wire protocol change (coordinated with tkutils `model` — TK-1391)
 
+> **Superseded name (Phase 2):** the response field this section calls `WrappedKey` was renamed to
+> **`TransitWrappedKey`** during Phase 2, because it collided with keep/oec's `KekWrapResponse.WrappedKey`
+> — which is the durable *KEK ciphertext*, not the per-call transit-wrapped plaintext. Both are `[]byte`,
+> so the two were interchangeable to the compiler. Read every `WrappedKey` below as `TransitWrappedKey`;
+> the rest of the design is unchanged. See `Documentation/phase-2-kek-lifecycle.md`.
+
 These wire types mirror `model.TKFSDataKey{Generate,Unwrap}{Request,Response}` (see the
 comment block in `gwconnect.go`), so the field changes must land in tkutils `model` too.
 `Plaintext` is replaced by `WrappedKey`; the request gains the transport key.
@@ -213,6 +219,15 @@ No new cache. Keep `tkutils/lru` (already used by cryptocore) with its zeroizing
 eviction callback, and close the two usage-level gaps plus add swap protection.
 
 ### 2a. Wipe on teardown (the real bug today)
+
+> **Superseded (Phase 2):** this section is moot — the caches it wipes no longer exist. Phase 2
+> ripped the envelope model, which took `tk_aead_keys.go`'s two LRU caches with it, and the
+> `WipeCache` helper this describes shipped as `internal/cryptocore/wipe.go`, sat unwired, and was
+> deleted in the 2026-08-04 review round as the last `tkutils/lru` user. The KEK model has no key
+> cache to purge: the master key is zeroized immediately after `cryptocore.New`, so nothing is
+> resident at unmount but the ciphers themselves. What remains open is narrower — making
+> `CryptoCore.Wipe()` zeroize the *derived* EME/content key bytes rather than only nilling the
+> stdlib cipher refs. See `Documentation/phase-2-kek-lifecycle.md` §5.
 
 `lru.Purge()` / `Destory()` do not invoke the eviction callback, so a mount that tears
 down its caches leaves key bytes unwiped for the GC. Replace any such teardown with a

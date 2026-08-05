@@ -23,17 +23,12 @@ const (
 	FlagAESSIV
 	// FlagRaw64 enables raw (unpadded) base64 encoding for file names
 	FlagRaw64
-	// FlagHKDF enables HKDF-derived keys for use with GCM, EME and SIV
-	// instead of directly using the master key (GCM and EME) or the SHA-512
-	// hashed master key (SIV).
-	FlagHKDF
 	// FlagXChaCha20Poly1305 means we use XChaCha20-Poly1305 file content encryption
 	FlagXChaCha20Poly1305
-	// FlagGatewayKEK marks the TrustedGateway KEK wrapped-key model: the master key's
-	// ciphertext lives in the config key ring and is unwrapped by the gateway at startup.
-	// It is mandatory on every v2 filesystem (like HKDF/EMENames/GCMIV128), not an opt-in;
-	// v2 dropped the legacy per-file envelope model entirely.
-	FlagGatewayKEK
+	// There is no HKDF flag. Upstream uses one to mark filesystems whose EME and content keys
+	// are HKDF-derived from the master key rather than being it; this fork derives them
+	// unconditionally (see cryptocore.New), so the flag would be set on every config it ever
+	// writes and describe nothing.
 )
 
 // knownFlags stores the known feature flags and their string representation
@@ -46,9 +41,7 @@ var knownFlags = map[flagIota]string{
 	FlagLongNameMax:       "LongNameMax",
 	FlagAESSIV:            "AESSIV",
 	FlagRaw64:             "Raw64",
-	FlagHKDF:              "HKDF",
 	FlagXChaCha20Poly1305: "XChaCha20Poly1305",
-	FlagGatewayKEK:        "GatewayKEK",
 }
 
 // isFeatureFlagKnown verifies that we understand a feature flag.

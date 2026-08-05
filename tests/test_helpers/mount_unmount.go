@@ -35,7 +35,10 @@ type mountInfo struct {
 // Contrary to InitFS(), you MUST passt "-extpass=echo test" (or another way for
 // getting the master key) explicitly.
 func Mount(c string, p string, showOutput bool, extraArgs ...string) error {
-	args := []string{"-q", "-wpanic", "-nosyslog", "-fg", fmt.Sprintf("-notifypid=%d", os.Getpid())}
+	// Health checks off by default: a failed bind is fatal now, and `go test ./tests/...` runs
+	// packages in parallel, so several mounts would race for the one default port. extraArgs comes
+	// after, so a test that wants the endpoint can pass its own -health-check-port and win.
+	args := []string{"-q", "-wpanic", "-nosyslog", "-fg", "-health-check-port=-1", fmt.Sprintf("-notifypid=%d", os.Getpid())}
 	args = append(args, extraArgs...)
 	if _, isset := os.LookupEnv("FUSEDEBUG"); isset {
 		fmt.Println("FUSEDEBUG is set, enabling -fusedebug")

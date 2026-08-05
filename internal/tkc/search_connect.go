@@ -1,112 +1,126 @@
 package tkc
 
 import (
-	"crypto/tls"
+	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"go/build"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/TrustedKeep/tkutils/v2/diskutil"
-	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/TrustedKeep/tkutils/v2/kmsclient"
+	"github.com/TrustedKeep/tkutils/v2/model"
 	"github.com/TrustedKeep/tkutils/v2/tlsutils"
+	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
+	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
-var errNotImplemented = errors.New("not implemented in search connector")
+var _ DataKeyConnector = (*searchConnector)(nil)
 
-var _ KMSConnector = (*searchConnector)(nil)
+// TrustedSearch ramdisk file names. lizard's connector writes these to a tmpfs before launching
+// gocryptfs; the search connector reads them here. Same contract as the envelope-era connector.
+const (
+	searchRamdiskDefault = "/usr/local/trustedsearch/ramdisk"
+	searchCertFile       = "gw.cert.pem"
+	searchKeyFile        = "gw.key.pem"
+	searchCAFile         = "gw.ca.pem"
+	searchTokenFile      = "gw.token"
+	searchHostsFile      = "gw.hosts.json"
+)
 
+// TrustedSearch KMS data-key routes. keep serves them under its /keepsvc prefix on the
+// management port; the client authenticates with the ramdisk mTLS cert plus a tenant token.
+const (
+	searchKMSPort      = 7070
+	searchGeneratePath = "/keepsvc/tenantdatakey/generate"
+	searchUnwrapPath   = "/keepsvc/tenantdatakey/unwrap"
+)
+
+const searchHTTPTimeout = 10 * time.Second
+
+// searchConnector is the -search client of the KEK data-key API. Unlike the gateway connector it
+// talks to the TrustedSearch KMS (keep) directly and authenticates with a tenant token in
+// addition to its mTLS client cert, reading that material from the TrustedSearch tmpfs ramdisk.
+// It speaks the same generate/unwrap contract (model.TKFSDataKey*) with the same per-call
+// transit-wrap (newTransport/unwrapTransit, shared with the gateway connector).
 type searchConnector struct {
-	currKeyID   string
-	ramdiskPath string
-	lastUpdate  time.Time
-	client      *http.Client
-	token       string
-	kmsHosts    []string
+	nodeID   string
+	token    string
+	kmsHosts []string
+	client   *http.Client
 }
 
-func newSearchConnector() KMSConnector {
-	s := &searchConnector{
-		ramdiskPath: "/usr/local/trustedsearch/ramdisk",
+// newSearchConnector loads the ramdisk-provisioned material and builds the mTLS client. lizard
+// writes the ramdisk before launching gocryptfs, so a missing/empty file set is a fatal
+// misconfiguration. Data-key calls happen only at mount start, so the material is read
+// once; a remount picks up rotated certs.
+func newSearchConnector(nodeID string) *searchConnector {
+	if nodeID == "" {
+		tlog.Fatal.Printf("search connector: NodeID is required")
+		os.Exit(exitcodes.Usage)
 	}
-	if _, err := os.Stat(s.ramdiskPath); err != nil {
-		if goPath := build.Default.GOPATH; len(goPath) > 0 {
-			s.ramdiskPath = fmt.Sprintf("%s/src/github.com/TrustedKeep/lizard/local/ramdisk", goPath)
-			diskutil.EnsureDir(s.ramdiskPath)
+	ramdisk := searchRamdiskDefault
+	if _, err := os.Stat(ramdisk); err != nil {
+		if goPath := build.Default.GOPATH; goPath != "" {
+			ramdisk = fmt.Sprintf("%s/src/github.com/TrustedKeep/lizard/local/ramdisk", goPath)
+			diskutil.EnsureDir(ramdisk)
 		}
 	}
-	s.newClient()
-	go func() {
-		for {
-			<-time.After(time.Minute)
-			s.newClient()
-		}
-	}()
+	s := &searchConnector{nodeID: nodeID}
+	if err := s.load(ramdisk); err != nil {
+		tlog.Fatal.Printf("search connector: %v", err)
+		os.Exit(exitcodes.Other)
+	}
 	return s
 }
 
-func (sc *searchConnector) newClient() {
-	certPath := fmt.Sprintf("%s/gw.cert.pem", sc.ramdiskPath)
-	fi, err := os.Stat(certPath)
+func (s *searchConnector) load(ramdisk string) error {
+	read := func(name string) ([]byte, error) {
+		return os.ReadFile(fmt.Sprintf("%s/%s", ramdisk, name))
+	}
+	certPEM, err := read(searchCertFile)
 	if err != nil {
-		log.Printf("error in stat on ramdisk cert : %v\n", err)
-		return
+		return fmt.Errorf("reading search client cert: %w", err)
 	}
-	if !fi.ModTime().After(sc.lastUpdate) {
-		return
+	keyPEM, err := read(searchKeyFile)
+	if err != nil {
+		return fmt.Errorf("reading search client key: %w", err)
 	}
-
-	var hostsData []byte
-	if hostsData, err = os.ReadFile(fmt.Sprintf("%s/gw.hosts.json", sc.ramdiskPath)); err != nil {
-		log.Printf("error reading hosts data file: %v\n", err)
-		return
+	caPEM, err := read(searchCAFile)
+	if err != nil {
+		return fmt.Errorf("reading search CA: %w", err)
+	}
+	// Fail closed: an empty CA makes NewTLSConfigWithCert set InsecureSkipVerify.
+	if len(bytes.TrimSpace(caPEM)) == 0 {
+		return fmt.Errorf("search CA is empty")
+	}
+	tokenBytes, err := read(searchTokenFile)
+	if err != nil {
+		return fmt.Errorf("reading search tenant token: %w", err)
+	}
+	hostsData, err := read(searchHostsFile)
+	if err != nil {
+		return fmt.Errorf("reading search KMS hosts: %w", err)
 	}
 	var hosts []string
-	if err = json.Unmarshal(hostsData, &hosts); err != nil {
-		log.Printf("error unmarshaling hosts data: %v\n", err)
-		return
+	if err := json.Unmarshal(hostsData, &hosts); err != nil {
+		return fmt.Errorf("parsing search KMS hosts: %w", err)
 	}
 	if len(hosts) == 0 {
-		log.Printf("empty hosts configuration\n")
-		return
+		return fmt.Errorf("search KMS host list is empty")
 	}
-
-	log.Printf("updating key retrieval certificate, last mod %s\n", fi.ModTime().String())
-	var keyPEM, certPEM, caPEM []byte
-	if certPEM, err = os.ReadFile(certPath); err != nil {
-		log.Printf("error reading cert from ramdisk: %v\n", err)
-		return
+	tlsConfig, err := tlsutils.NewTLSConfigWithCert(keyPEM, certPEM, caPEM)
+	if err != nil {
+		return fmt.Errorf("building search TLS config: %w", err)
 	}
-	if keyPEM, err = os.ReadFile(fmt.Sprintf("%s/gw.key.pem", sc.ramdiskPath)); err != nil {
-		log.Printf("error reading key from ramdisk: %v\n", err)
-		return
-	}
-	if caPEM, err = os.ReadFile(fmt.Sprintf("%s/gw.ca.pem", sc.ramdiskPath)); err != nil {
-		log.Printf("error reading ca from ramdisk:  %v\n", err)
-		return
-	}
-	var tokenBytes []byte
-	if tokenBytes, err = os.ReadFile(fmt.Sprintf("%s/gw.token", sc.ramdiskPath)); err != nil {
-		log.Printf("error reading token from ramdisk: %v\n", err)
-		return
-	}
-	var tlsConfig *tls.Config
-	if tlsConfig, err = tlsutils.NewTLSConfigWithCert(keyPEM, certPEM, caPEM); err != nil {
-		log.Printf("error building TLS configuration: %v\n", err)
-		return
-	}
-	sc.lastUpdate = fi.ModTime()
-	sc.token = string(tokenBytes)
-	sc.kmsHosts = hosts
-	sc.client = &http.Client{
-		Timeout: time.Second * 10,
+	s.token = string(bytes.TrimSpace(tokenBytes))
+	s.kmsHosts = hosts
+	s.client = &http.Client{
+		Timeout: searchHTTPTimeout,
 		Transport: &http.Transport{
 			MaxIdleConns:    1,
 			MaxConnsPerHost: 2,
@@ -114,77 +128,115 @@ func (sc *searchConnector) newClient() {
 			TLSClientConfig: tlsConfig,
 		},
 	}
+	tlog.Info.Printf("Loaded TrustedSearch mTLS material from %s (%d KMS hosts)", ramdisk, len(hosts))
+	return nil
 }
 
-func (sc *searchConnector) GetKey(path []byte) ([]byte, error) {
-	return nil, errNotImplemented
-}
-
-func (sc *searchConnector) GetEnvelopeKey(id string) (key kem.Kem, err error) {
-	_, key, err = sc.fetchKey(id)
-	return
-}
-
-func (sc *searchConnector) CreateEnvelopeKey(ktStr string, name string) (id string, key kem.Kem, err error) {
-	return sc.fetchKey("")
-}
-
-func (sc *searchConnector) GetCurrentKeyID() string {
-	return sc.currKeyID
-}
-
-func (sc *searchConnector) SetCurrentKeyID(id string) {
-	sc.currKeyID = id
-}
-
-func (sc *searchConnector) fetchKey(keyID string) (newID string, key kem.Kem, lastErr error) {
-	if len(keyID) == 0 {
-		keyID = sc.currKeyID
+// GenerateTKFSDataKey mints a fresh KMS-wrapped master key, returned transit-wrapped to a
+// per-call ephemeral key and recovered in memory.
+func (s *searchConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
+	k, pubPEM, err := newTransport()
+	if err != nil {
+		return TKFSDataKey{}, fmt.Errorf("search generate: transport keygen: %w", err)
 	}
+	req := model.TKFSDataKeyGenerateRequest{
+		NodeID:          s.nodeID,
+		TransportAlg:    uint16(transportKemType),
+		TransportPubKey: pubPEM,
+	}
+	var out model.TKFSDataKeyGenerateResponse
+	if err := s.post(searchGeneratePath, req, &out); err != nil {
+		return TKFSDataKey{}, err
+	}
+	if out.KeyID == "" || len(out.Ciphertext) == 0 {
+		return TKFSDataKey{}, fmt.Errorf("search generate: incomplete response (keyID=%q, ciphertext=%dB)", out.KeyID, len(out.Ciphertext))
+	}
+	dek, err := unwrapTransit(k, out.TransitWrappedKey)
+	if err != nil {
+		return TKFSDataKey{}, fmt.Errorf("search generate: %w", err)
+	}
+	return TKFSDataKey{KeyID: out.KeyID, Plaintext: dek, Ciphertext: out.Ciphertext}, nil
+}
 
-	doFetch := func(host string) (err error) {
-		log.Printf("Fetching envelope key \"%s\" from KMS %s\n", keyID, host)
-		var u string
-		if len(keyID) > 0 {
-			u = fmt.Sprintf("https://%s:7070/keepsvc/tenantek/retrieve/%s", host, keyID)
-		} else {
-			u = fmt.Sprintf("https://%s:7070/keepsvc/tenantek/current/%d", host, kem.RSA3072)
-		}
+// UnwrapTKFSDataKey recovers the plaintext master key for a key-ring entry.
+func (s *searchConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]byte, error) {
+	if keyID == "" {
+		return nil, fmt.Errorf("search unwrap: empty key id")
+	}
+	k, pubPEM, err := newTransport()
+	if err != nil {
+		return nil, fmt.Errorf("search unwrap: transport keygen: %w", err)
+	}
+	req := model.TKFSDataKeyUnwrapRequest{
+		NodeID:          s.nodeID,
+		KeyID:           keyID,
+		Ciphertext:      ciphertext,
+		TransportAlg:    uint16(transportKemType),
+		TransportPubKey: pubPEM,
+	}
+	var out model.TKFSDataKeyUnwrapResponse
+	if err := s.post(searchUnwrapPath, req, &out); err != nil {
+		return nil, err
+	}
+	dek, err := unwrapTransit(k, out.TransitWrappedKey)
+	if err != nil {
+		return nil, fmt.Errorf("search unwrap: %w", err)
+	}
+	return dek, nil
+}
 
-		req, err := http.NewRequest(http.MethodGet, u, nil)
+// Close releases idle connections to the KMS.
+func (s *searchConnector) Close() error {
+	if s.client != nil {
+		s.client.CloseIdleConnections()
+	}
+	return nil
+}
+
+// post sends body as JSON to a KMS data-key route, trying the configured hosts in random order
+// until one answers. Each request carries the tenant token in addition to the mTLS client cert.
+// A 401/403 is returned immediately (retrying other hosts will not fix an authorization failure);
+// transport and 5xx errors fall through to the next host.
+func (s *searchConnector) post(path string, body, out any) error {
+	if s.client == nil {
+		return fmt.Errorf("search client not initialized")
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	var lastErr error
+	for _, idx := range rand.Perm(len(s.kmsHosts)) {
+		host := s.kmsHosts[idx]
+		url := fmt.Sprintf("https://%s:%d%s", host, searchKMSPort, path)
+		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(buf))
 		if err != nil {
-			return
+			return err
 		}
-		req.Header.Set(kmsclient.HeaderTenantToken, sc.token)
-
-		resp, err := sc.client.Do(req)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(kmsclient.HeaderTenantToken, s.token)
+		resp, err := s.client.Do(req)
 		if err != nil {
-			return
+			lastErr = fmt.Errorf("search %s @ %s: %w", path, host, err)
+			continue
 		}
-		body, _ := io.ReadAll(resp.Body)
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxGatewayResponseBytes))
 		resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			err = fmt.Errorf("error retrieving envelope key, server returned %d (%s)", resp.StatusCode, body)
-			return
+		if readErr != nil {
+			lastErr = fmt.Errorf("search %s @ %s: reading response: %w", path, host, readErr)
+			continue
 		}
-
-		if key, err = kem.UnmarshalKem(body); err != nil {
-			return
+		switch {
+		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+			return fmt.Errorf("search %s: not authorized (HTTP %d): tenant token or cert DN rejected: %s", path, resp.StatusCode, bytes.TrimSpace(respBody))
+		case resp.StatusCode < 200 || resp.StatusCode >= 300:
+			lastErr = fmt.Errorf("search %s @ %s: HTTP %d: %s", path, host, resp.StatusCode, bytes.TrimSpace(respBody))
+			continue
 		}
-
-		if newID = resp.Header.Get("x-tk-kem-id"); len(newID) == 0 {
-			newID = keyID
+		if err := json.Unmarshal(respBody, out); err != nil {
+			return fmt.Errorf("search %s: decoding response: %w", path, err)
 		}
-
-		log.Printf("Fetched key \"%s\" from KMS", newID)
-		return
+		return nil
 	}
-
-	for _, x := range rand.Perm(len(sc.kmsHosts)) {
-		if lastErr = doFetch(sc.kmsHosts[x]); lastErr == nil {
-			return
-		}
-	}
-	return
+	return lastErr
 }

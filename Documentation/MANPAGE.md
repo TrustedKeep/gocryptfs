@@ -61,10 +61,10 @@ human consumption, stripping out sensitive data.
 Example:
 
     $ gocryptfs -info my_cipherdir
-    Creator:      gocryptfs v2.0-beta2
-    FeatureFlags: GCMIV128 HKDF DirIV EMENames LongNames Raw64
-    EncryptedKey: 64B
-    ScryptObject: Salt=32B N=65536 R=8 P=1 KeyLen=32
+    FeatureFlags:      GCMIV128 DirIV EMENames LongNames Raw64
+
+There is no key material to strip: the wrapped data key lives in the separate
+`KR` key-ring file, not in the config.
 
 #### -init
 Initialize encrypted directory.
@@ -119,10 +119,6 @@ Obsolete and ignored on gocryptfs v2.2 and later.
 See https://github.com/rfjakob/gocryptfs/commit/f3c777d5eaa682d878c638192311e52f9c204294
 and https://github.com/rfjakob/gocryptfs/issues/596 for background info.
 
-#### -hkdf
-Use HKDF to derive separate keys for content and name encryption from
-the master key. Default true.
-
 #### -longnamemax
 
     integer value, allowed range 62...255
@@ -150,8 +146,13 @@ Do not encrypt file names and symlink targets.
 
 #### -raw64
 Use unpadded base64 encoding for file names. This gets rid of the
-trailing "\\=\\=". A filesystem created with this option can only be
-mounted using gocryptfs v1.2 and higher. Default true.
+trailing "\\=\\=". Default true.
+
+Note this flag has no effect in TKFS: every filesystem is created with the
+Raw64 feature flag set, and a mount takes the encoding from the config file
+rather than from the command line. Upstream keeps it reachable for config-less
+mounts (`-masterkey`, `-zerokey`), neither of which exists here, so there is no
+path on which it can matter. It is kept for upstream parity.
 
 #### -reverse
 Reverse mode shows a read-only encrypted view of a plaintext
@@ -300,6 +301,16 @@ same name. By default, CIPHERDIR is used.
 #### -fusedebug
 Enable fuse library debug output.
 
+#### -health-check-port int
+Serve an HTTP liveness endpoint on this port (default 8000); any request gets
+200 OK once the filesystem is mounted and ready. **The mount fails if the port
+cannot be bound**, because a mount nobody can probe is invisible to whatever is
+supervising it, and the usual cause is a second mount colliding with the first.
+
+0 means unset and uses the default, exactly as if the flag were absent. Pass a
+**negative** value to disable the endpoint, which is what you want when stacking
+several mounts on one host.
+
 #### -i duration, -idle duration
 Only for forward mode: automatically unmount the filesystem if it has been idle
 for the specified duration. Durations can be specified like "500s" or "2h45m".
@@ -441,10 +452,6 @@ Enable (`-suid`) or disable (`-nosuid`) suid and sgid executables in a gocryptfs
 mount (default: `-nosuid`). If both are specified, `-nosuid` takes precedence.
 You need root permissions to use `-suid`.
 
-#### -zerokey
-Use all-zero dummy master key. This options is only intended for
-automated testing as it does not provide any security.
-
 COMMON OPTIONS
 ==============
 
@@ -555,7 +562,7 @@ Applies to: all actions.
 #### -o COMMA-SEPARATED-OPTIONS
 For compatibility with mount(1), options are also accepted as
 "-o COMMA-SEPARATED-OPTIONS" at the end of the command line.
-For example, "-o q,zerokey" is equivalent to passing "-q -zerokey".
+For example, "-o q,nosyslog" is equivalent to passing "-q -nosyslog".
 
 Note that you can only use options that are understood by gocryptfs
 with "-o". If you want to pass special flags to the kernel, you should
@@ -565,7 +572,7 @@ understand along to the kernel.
 
 Example:
 
-    gocryptfs /tmp/foo /tmp/bar -o q,zerokey
+    gocryptfs /tmp/foo /tmp/bar -o q,nosyslog
 
 Applies to: all actions.
 

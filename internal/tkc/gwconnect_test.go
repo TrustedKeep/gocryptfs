@@ -2,42 +2,22 @@ package tkc
 
 import (
 	"bytes"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/TrustedKeep/tkutils/v2/certutil"
-	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/TrustedKeep/tkutils/v2/model"
 )
 
-// wrapForTransport is the gateway side of the transit wrap: it OAEP-encrypts dek to the client's
-// ephemeral transport public key. In production this lives in the gateway (keep); here it lets the
-// test server exercise the whole wrap/unwrap path without a real gateway.
+// wrapForTransport is the gateway side of the transit wrap in this test's fake server. It delegates to
+// the shared model.TransitWrap so the test drives the exact production transit path (RSA-OAEP, the
+// inverse of the client's model.TransitUnwrap). In production this same call lives in keep and gatehouse.
 func wrapForTransport(alg uint16, pubPEM, dek []byte) ([]byte, error) {
-	switch kem.KemType(alg) {
-	case kem.RSA2048, kem.RSA3072, kem.RSA4096:
-		pub, err := certutil.ParsePublicKey(pubPEM)
-		if err != nil {
-			return nil, fmt.Errorf("parse transport key: %w", err)
-		}
-		rp, ok := pub.(*rsa.PublicKey)
-		if !ok {
-			return nil, errors.New("transport key is not RSA")
-		}
-		return rsa.EncryptOAEP(sha256.New(), rand.Reader, rp, dek, nil)
-	default:
-		return nil, fmt.Errorf("unsupported transport alg %d", alg)
-	}
+	return model.TransitWrap(alg, pubPEM, dek)
 }
 
 // newTestGWConnector wires a gwConnector to a TLS test server, skipping the cert-loading
@@ -68,7 +48,7 @@ func TestGatewayConnectorGenerateUnwrap(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(model.TKFSDataKeyGenerateResponse{KeyID: "key-1", Ciphertext: ciphertext, WrappedKey: wrapped})
+			_ = json.NewEncoder(w).Encode(model.TKFSDataKeyGenerateResponse{KeyID: "key-1", Ciphertext: ciphertext, TransitWrappedKey: wrapped})
 		case gatewayUnwrapPath:
 			_ = json.NewDecoder(r.Body).Decode(&unwReq)
 			wrapped, err := wrapForTransport(unwReq.TransportAlg, unwReq.TransportPubKey, master)
@@ -76,7 +56,7 @@ func TestGatewayConnectorGenerateUnwrap(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(model.TKFSDataKeyUnwrapResponse{WrappedKey: wrapped})
+			_ = json.NewEncoder(w).Encode(model.TKFSDataKeyUnwrapResponse{TransitWrappedKey: wrapped})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -136,7 +116,7 @@ func TestGatewayConnectorNoPlaintextOnWire(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		respBody, _ = json.Marshal(model.TKFSDataKeyGenerateResponse{KeyID: "key-1", Ciphertext: ciphertext, WrappedKey: wrapped})
+		respBody, _ = json.Marshal(model.TKFSDataKeyGenerateResponse{KeyID: "key-1", Ciphertext: ciphertext, TransitWrappedKey: wrapped})
 		_, _ = w.Write(respBody)
 	}))
 	defer ts.Close()
@@ -176,9 +156,9 @@ func TestTransitWrapRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wrapForTransport: %v", err)
 	}
-	got, err := unwrapTransport(k, wrapped)
+	got, err := unwrapTransit(k, wrapped)
 	if err != nil {
-		t.Fatalf("unwrapTransport: %v", err)
+		t.Fatalf("unwrapTransit: %v", err)
 	}
 	if !bytes.Equal(got, dek) {
 		t.Fatal("round-tripped data key mismatch")
@@ -188,10 +168,10 @@ func TestTransitWrapRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newTransport (other): %v", err)
 	}
-	if _, err := unwrapTransport(other, wrapped); err == nil {
+	if _, err := unwrapTransit(other, wrapped); err == nil {
 		t.Fatal("expected unwrap with the wrong transport key to fail closed")
 	}
-	if _, err := unwrapTransport(k, nil); err == nil {
+	if _, err := unwrapTransit(k, nil); err == nil {
 		t.Fatal("expected an empty wrapped key to be rejected")
 	}
 }

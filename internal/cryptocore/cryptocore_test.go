@@ -1,32 +1,41 @@
 package cryptocore
 
 import (
+	"bytes"
 	"testing"
-
-	"github.com/TrustedKeep/tkutils/v2/kem"
-	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 )
 
 // "New" should accept at least these param combinations
 func TestCryptoCoreNew(t *testing.T) {
-	tkc.Connect("", "", "", true, false, false)
-	id, kem, err := tkc.Get().CreateEnvelopeKey(kem.RSA2048.String(), "")
-	if err != nil {
-		t.Fatalf("couldnt create env key err: %v\n", err)
+	key := make([]byte, KeyLen)
+	c := New(key, BackendGoGCM, 96)
+	if c.IVLen != 12 {
+		t.Fail()
 	}
+	c = New(key, BackendGoGCM, 128)
+	if c.IVLen != 16 {
+		t.Fail()
+	}
+}
 
-	_, wrapped, err := kem.Wrap()
-	if err != nil {
-		t.Fatalf("wrapping key err: %v\n", err)
+// The EME (filename) key and the content key must both be derived, and must differ from each
+// other and from the master key. Reusing the master key across EME's raw AES-ECB layer and GCM's
+// AES-CTR keystream is the failure this derivation exists to prevent, so assert the keys are in
+// fact distinct rather than trusting the call.
+func TestCryptoCoreDerivesDistinctKeys(t *testing.T) {
+	key := make([]byte, KeyLen)
+	for i := range key {
+		key[i] = byte(i)
 	}
-	for _, useHKDF := range []bool{true, false} {
-		c := New(BackendGoGCM, 96, 0, useHKDF, id, wrapped)
-		if c.IVLen != 12 {
-			t.Fail()
-		}
-		c = New(BackendGoGCM, 128, 0, useHKDF, id, wrapped)
-		if c.IVLen != 16 {
-			t.Fail()
-		}
+	emeKey := hkdfDerive(key, hkdfInfoEMENames, KeyLen)
+	gcmKey := hkdfDerive(key, hkdfInfoGCMContent, KeyLen)
+	if bytes.Equal(emeKey, gcmKey) {
+		t.Error("EME and content keys are identical")
+	}
+	if bytes.Equal(emeKey, key) {
+		t.Error("EME key equals the master key")
+	}
+	if bytes.Equal(gcmKey, key) {
+		t.Error("content key equals the master key")
 	}
 }

@@ -11,13 +11,16 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/pkg/xattr"
 
+	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
+	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
 
@@ -26,8 +29,10 @@ func TestMain(m *testing.M) {
 		fmt.Printf("xattrs not supported on %q\n", test_helpers.TmpDir)
 		os.Exit(1)
 	}
-	test_helpers.ResetTmpDir(true)
-	// Write deterministic diriv so encrypted filenames are deterministic.
+	test_helpers.ResetTmpDir(false)
+	test_helpers.InitDefaultCipherDir()
+	// Replace the diriv -init wrote with a deterministic one, so encrypted filenames are
+	// deterministic.
 	os.Remove(test_helpers.DefaultCipherDir + "/gocryptfs.diriv")
 	diriv := []byte("1234567890123456")
 	err := os.WriteFile(test_helpers.DefaultCipherDir+"/gocryptfs.diriv", diriv, 0400)
@@ -35,7 +40,7 @@ func TestMain(m *testing.M) {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir, "-zerokey")
+	test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir)
 	r := m.Run()
 	test_helpers.UnmountPanic(test_helpers.DefaultPlainDir)
 	os.RemoveAll(test_helpers.TmpDir)
@@ -220,30 +225,106 @@ func xattrSupported(path string) bool {
 	return err2.Err != syscall.EOPNOTSUPP
 }
 
+// lsCipherdir lists the encrypted entries of a cipherdir directory, skipping filesystem
+// metadata.
+func lsCipherdir(t *testing.T, dir string) map[string]bool {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make(map[string]bool)
+	for _, e := range entries {
+		switch e.Name() {
+		case nametransform.DirIVFilename, configfile.ConfDefaultName, configfile.KeyRingFileName:
+			continue
+		}
+		out[e.Name()] = true
+	}
+	return out
+}
+
+// findNewCiphertextName returns the single entry "dir" gained since the "before" snapshot. The
+// encrypted name cannot be hard-coded: it depends on the EME filename key, which is HKDF-derived
+// from the gateway-issued master key and so differs per filesystem. Diffing against a snapshot
+// works regardless of what earlier tests left in the directory.
+func findNewCiphertextName(t *testing.T, dir string, before map[string]bool) string {
+	t.Helper()
+	var found []string
+	for name := range lsCipherdir(t, dir) {
+		if !before[name] {
+			found = append(found, name)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly one new ciphertext entry in %q, have %v", dir, found)
+	}
+	return filepath.Join(dir, found[0])
+}
+
+// findEncryptedXattrName returns the single "user.gocryptfs.*" xattr name on the backing file.
+// Like the filename, the encrypted xattr name depends on the EME key and cannot be hard-coded.
+func findEncryptedXattrName(t *testing.T, cPath string) string {
+	t.Helper()
+	names, err := xattr.LList(cPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	for _, n := range names {
+		if strings.HasPrefix(n, "user.gocryptfs.") {
+			found = append(found, n)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly one encrypted xattr on %q, have %v", cPath, found)
+	}
+	return found[0]
+}
+
 func TestBase64XattrRead(t *testing.T) {
 	attrName := "user.test"
 	attrName2 := "user.test2"
-	encryptedAttrName := "user.gocryptfs.LB1kHHVrX1OEBdLmj3LTKw"
-	encryptedAttrName2 := "user.gocryptfs.d2yn5l7-0zUVqviADw-Oyw"
 	attrValue := fmt.Sprintf("test.%d", cryptocore.RandUint64())
 
-	fileName := "TestBase64Xattr"
-	encryptedFileName := "BaGak7jIoqAZQMlP0N5uCw"
+	// Own subdirectory, so the file's backing ciphertext is the only entry in it.
+	beforeRoot := lsCipherdir(t, test_helpers.DefaultCipherDir)
+	pSubdir := test_helpers.DefaultPlainDir + "/TestBase64XattrDir"
+	if err := os.Mkdir(pSubdir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cSubdir := findNewCiphertextName(t, test_helpers.DefaultCipherDir, beforeRoot)
 
-	plainFn := test_helpers.DefaultPlainDir + "/" + fileName
-	encryptedFn := test_helpers.DefaultCipherDir + "/" + encryptedFileName
+	plainFn := pSubdir + "/TestBase64Xattr"
 	err := os.WriteFile(plainFn, nil, 0700)
 	if err != nil {
 		t.Fatalf("creating empty file failed: %v", err)
 	}
-	if _, err2 := os.Stat(encryptedFn); os.IsNotExist(err2) {
-		t.Fatalf("encrypted file does not exist: %v", err2)
-	}
+	encryptedFn := findNewCiphertextName(t, cSubdir, nil)
+
 	xattr.LSet(plainFn, attrName, []byte(attrValue))
+	encryptedAttrName := findEncryptedXattrName(t, encryptedFn)
 
 	encryptedAttrValue, err1 := xattr.LGet(encryptedFn, encryptedAttrName)
 	if err1 != nil {
 		t.Fatal(err1)
+	}
+
+	// The name for attrName2, obtained the same way: set it through the mount, then read back
+	// the name that appeared on the backing file.
+	xattr.LSet(plainFn, attrName2, []byte("placeholder"))
+	var encryptedAttrName2 string
+	names, err := xattr.LList(encryptedFn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range names {
+		if strings.HasPrefix(n, "user.gocryptfs.") && n != encryptedAttrName {
+			encryptedAttrName2 = n
+		}
+	}
+	if encryptedAttrName2 == "" {
+		t.Fatalf("could not find the encrypted name for %q in %v", attrName2, names)
 	}
 
 	xattr.LSet(encryptedFn, encryptedAttrName2, encryptedAttrValue)
@@ -264,7 +345,7 @@ func TestBase64XattrRead(t *testing.T) {
 	// Remount with -wpanic=false so gocryptfs does not panics when it sees
 	// the broken xattrs
 	test_helpers.UnmountPanic(test_helpers.DefaultPlainDir)
-	test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir, "-zerokey", "-wpanic=false")
+	test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir, "-wpanic=false")
 
 	brokenVals := []string{
 		"111",

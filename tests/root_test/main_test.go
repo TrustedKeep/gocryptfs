@@ -10,9 +10,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	test_helpers.ResetTmpDir(true)
+	test_helpers.ResetTmpDir(false)
+	test_helpers.InitDefaultCipherDir()
 	os.Chmod(test_helpers.DefaultCipherDir, 0777)
-	test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir, "-zerokey", "-allow_other")
+	test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir, "-allow_other")
 	r := m.Run()
 	test_helpers.UnmountPanic(test_helpers.DefaultPlainDir)
 	os.RemoveAll(test_helpers.TmpDir)

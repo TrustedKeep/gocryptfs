@@ -1,5 +1,11 @@
 github.com/TrustedKeep/tkutils/v2 v2.16.1-0.20260727154949-e0ac85e05c11 h1:iHqRa51SvPZhkcaj21iRGpyLlAN5fFZT5nqawp2iFmI=
 github.com/TrustedKeep/tkutils/v2 v2.16.1-0.20260727154949-e0ac85e05c11/go.mod h1:bdUjAZjkBJkZgVU5fFnV86wJJRaV+3jORA9lgueRVNU=
+github.com/TrustedKeep/tkutils/v2 v2.16.1-0.20260803160836-47196f14ac40 h1:KPaIsIASaeGk8+bXzc4269ZUpoENsi0AlWc/6re3WrU=
+github.com/TrustedKeep/tkutils/v2 v2.16.1-0.20260803160836-47196f14ac40/go.mod h1:bdUjAZjkBJkZgVU5fFnV86wJJRaV+3jORA9lgueRVNU=
+github.com/TrustedKeep/tkutils/v2 v2.16.1-0.20260805161027-2f36ac6306bb h1:hqCSCjntknosfy2ewaAk4RQkFgZPs55Qh9sVEIGQRUE=
+github.com/TrustedKeep/tkutils/v2 v2.16.1-0.20260805161027-2f36ac6306bb/go.mod h1:bdUjAZjkBJkZgVU5fFnV86wJJRaV+3jORA9lgueRVNU=
+github.com/TrustedKeep/tkutils/v2 v2.16.1-0.20260805163953-1ab6a631cd0d h1:wIQ8Y2WcJSooW2MqnOhTutuRPplKBuv0ao6N/fmvFsU=
+github.com/TrustedKeep/tkutils/v2 v2.16.1-0.20260805163953-1ab6a631cd0d/go.mod h1:bdUjAZjkBJkZgVU5fFnV86wJJRaV+3jORA9lgueRVNU=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.95.0 h1:MIWra+MSq53CFaXXAywB2qg9YvVZifkk6vEGl/1Qor0=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.95.0/go.mod h1:79S2BdqCJpScXZA2y+cpZuocWsjGjJINyXnOsf5DTz8=
 github.com/aws/smithy-go v1.25.1 h1:J8ERsGSU7d+aCmdQur5Txg6bVoYelvQJgtZehD12GkI=

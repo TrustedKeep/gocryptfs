@@ -65,6 +65,9 @@ const (
 	// skip 29 (was ExcludeError, "-exclude" is not supported in this fork)
 	// DevNull means that /dev/null could not be opened
 	DevNull = 30
+	// HealthCheck - the health-check port could not be bound. Usually another mount already
+	// holds it; pass -health-check-port to move it, or a negative value to opt out.
+	HealthCheck = 31
 )
 
 // Err wraps an error with an associated numeric exit code
@@ -79,6 +82,11 @@ func NewErr(msg string, code int) Err {
 		error: errors.New(msg),
 		code:  code,
 	}
+}
+
+// Code returns the exit code carried by the error.
+func (e Err) Code() int {
+	return e.code
 }
 
 // Exit extracts the numeric exit code from "err" (if available) and exits the

@@ -1,30 +1,35 @@
 package tkc
 
-import "fmt"
-
 // TrustedGateway data-key API contract (net-new gateway endpoints).
 //
-// The gateway (backed by keep) holds the key-encryption key (KEK) and wraps/unwraps
-// 32-byte AES-256 data keys under it. TKFS never holds the KEK and never persists any
-// plaintext key; it holds an unwrapped data key — and the EME/content keys HKDF-derived
-// from it — in memory only, for the life of the mount, zeroized on unmount. The operations
-// map to gateway HTTP routes reached over mutually-authenticated TLS:
+// keep holds the key-encryption key (KEK) and performs the wrap/unwrap of 32-byte AES-256 data keys;
+// the gateway is a proxy that forwards those calls (see gatehouse management/tkfsdatakey.go). TKFS
+// never holds the KEK and never persists any plaintext key. It holds an unwrapped data key only long
+// enough to HKDF-derive the EME (filename) and content keys, then zeroizes it immediately (mount.go);
+// those derived keys live in memory for the mount and are wiped on unmount. The operations map to
+// gateway HTTP routes reached over mutually-authenticated TLS:
 //
-//	generate  POST .../tkfsdatakey/generate  -> {KeyID, Ciphertext, WrappedKey}
-//	unwrap    POST .../tkfsdatakey/unwrap    -> {WrappedKey}
+//	generate  POST .../tkfsdatakey/generate  -> {KeyID, Ciphertext, TransitWrappedKey}
+//	unwrap    POST .../tkfsdatakey/unwrap    -> {TransitWrappedKey}
 //
 // The plaintext data key never crosses the wire even inside mTLS: the client sends a per-call
 // ephemeral transport public key and the gateway returns the key OAEP-wrapped to it
-// (WrappedKey), which the client unwraps in memory (see gwconnect.go, newTransport).
-// Only Ciphertext is persisted, in the gocryptfs.conf key ring. Rotation is not a distinct
-// operation: it is just another generate whose result is appended to the key ring as the
-// new active key, with prior entries retained for unwrap.
+// (TransitWrappedKey), which the client unwraps in memory (see gwconnect.go, newTransport).
+// Of the key material, only Ciphertext is persisted, in the key-ring file next to gocryptfs.conf
+// (alongside the non-secret KeyID; the NodeID lives in the config). -init does not contact the
+// gateway and writes no ring: the first mount finds none, generates the data key, and persists its
+// ciphertext; later mounts unwrap it. Phase 2 is single-key: at most one ring entry is accepted and
+// a ring with more fails the mount closed.
+// Rotation — another generate appended as the new active key, with prior entries retained for
+// unwrap — is Phase 3 and is NOT implemented here yet.
 //
-// Authorization is per-operation: the gateway matches the client cert DN against a
-// {generate,unwrap} allowlist. Key isolation between filesystems is by
-// keyspace = DN + NodeID (see Keyspace) — the DN comes from the client cert on the real
-// connector, the NodeID travels in the request. The mock connector has no cert, so it
-// passes an empty DN.
+// Authorization is per-operation: the gateway matches the client cert DN against a {generate,unwrap}
+// allowlist. Key isolation is by keyspace = DN + NodeID, composed entirely server-side (the gateway
+// takes the DN from the presented cert; the NodeID travels in the request body), so the client never
+// composes a keyspace itself — the one definition of that composition is model.TKFSKeyspace in
+// tkutils, which the gateway calls. Note only the cert-derived DN half is unforgeable: NodeID is
+// self-asserted and ships next to the KeyID and Ciphertext, so treat the DN/tenant as the hard
+// boundary and NodeID as a partition within it.
 
 // tkfsDataKeyLength is the size of the master key the gateway wraps: a 32-byte AES-256 key
 // from which the EME (filename) and content keys are HKDF-derived.
@@ -37,29 +42,21 @@ type TKFSDataKey struct {
 	KeyID string
 	// Plaintext is the 32-byte master key. Memory only — it is never written to disk.
 	Plaintext []byte
-	// Ciphertext is the wrapped master key. This is what the config key ring stores.
+	// Ciphertext is the wrapped master key. This is what the on-disk key ring stores.
 	Ciphertext []byte
 }
 
-// GatewayConnector is the client side of the gateway data-key API. It supersedes the
-// envelope-model KMSConnector for the KEK wrapped-key design; the two coexist
-// until the envelope path is removed in a later phase.
-type GatewayConnector interface {
+// DataKeyConnector is the client side of the KEK data-key API. Both the default gateway
+// connector (mTLS to TrustedGateway) and the -search connector (mTLS + tenant token to the
+// TrustedSearch KMS) implement it; they differ only in endpoint, auth, and cert source. It is
+// the sole key provider in the KEK model, replacing the envelope-model KMS connector.
+type DataKeyConnector interface {
 	// GenerateTKFSDataKey mints a fresh data key wrapped by the gateway KEK. Rotation is
 	// performed by calling this again and appending the result to the key ring.
 	GenerateTKFSDataKey() (TKFSDataKey, error)
 	// UnwrapTKFSDataKey recovers the plaintext master key for a key-ring entry.
 	UnwrapTKFSDataKey(keyID string, ciphertext []byte) (plaintext []byte, err error)
 	// Close releases the connector's resources: network connections for the real
-	// connector, the bbolt handle for the mock. Not yet wired into the unmount path —
-	// the gateway connector joins the mount/crypto lifecycle in a later phase.
+	// connectors, the bbolt handle for the mock. Called from the unmount teardown.
 	Close() error
-}
-
-// Keyspace returns the per-filesystem key-isolation scope for a (DN, NodeID) pair. Each
-// component is length-prefixed so the composition is injective even when a component itself
-// contains the "/" delimiter (a DN may): distinct pairs never collide. The DN comes from
-// the client cert on the real connector; the mock passes an empty DN.
-func Keyspace(dn, nodeID string) string {
-	return fmt.Sprintf("%d:%s/%d:%s", len(dn), dn, len(nodeID), nodeID)
 }

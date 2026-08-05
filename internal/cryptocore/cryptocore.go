@@ -10,10 +10,8 @@ import (
 
 	"golang.org/x/crypto/chacha20poly1305"
 
-	"github.com/TrustedKeep/tkutils/v2/kem"
 	"github.com/rfjakob/eme"
 
-	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
@@ -63,50 +61,40 @@ type CryptoCore struct {
 
 // New returns a new CryptoCore object or panics.
 //
+// "key" is the master key: in the TKFS KEK model this is the 32-byte AES-256 data key
+// unwrapped from the on-disk key ring (gateway-issued). The EME (filename) key and the content
+// key are always HKDF-derived from it, so the master key is never used directly for encryption.
+// The caller retains ownership of "key" and should zeroize it once the CryptoCore is built.
+//
+// The derivation is not optional. Upstream gocryptfs can skip it, but only to read filesystems
+// created by v0.7 through v1.2; this fork's format is a hard break with no such filesystems, so
+// there is nothing to be compatible with. It is also load-bearing rather than ceremonial: EME
+// uses its key as a raw AES-ECB key over attacker-chosen filenames, while GCM uses its key for
+// AES-CTR keystream. Were they the same key, a filename block that collided with a
+// nonce‖counter value would expose that GCM keystream block as EME ciphertext on disk, which
+// decrypts file content. Two independent derived keys remove that path entirely.
+//
 // Even though the "GCMIV128" feature flag is now mandatory, we must still
 // support 96-bit IVs here because they were used for encrypting the master
 // key in gocryptfs.conf up to gocryptfs v1.2. v1.3 switched to 128 bits.
-//wrapped key is only used if we are set up to use enveloping (keypool is-1), otherwise it can be nil or empty
-func New(aeadType AEADTypeEnum, IVBitLen, keyPool int, useHKDF bool, rootID string, wrappedKey []byte) *CryptoCore {
-	tlog.Debug.Printf("cryptocore.New: aeadType=%v, IVBitLen=%d, useHKDF=%v, keyPool=%d",
-		aeadType, IVBitLen, useHKDF, keyPool)
+func New(key []byte, aeadType AEADTypeEnum, IVBitLen int) *CryptoCore {
+	tlog.Debug.Printf("cryptocore.New: key=%d bytes, aeadType=%v, IVBitLen=%d",
+		len(key), aeadType, IVBitLen)
 
+	if len(key) != KeyLen {
+		log.Panicf("Unsupported key length of %d bytes", len(key))
+	}
 	if IVBitLen != 96 && IVBitLen != 128 && IVBitLen != chacha20poly1305.NonceSizeX*8 {
 		log.Panicf("Unsupported IV length of %d bits", IVBitLen)
-	}
-
-	var key []byte
-	var err error
-	//keypool -1 means we are using envelope encryption
-	if keyPool == -1 {
-		var envKey kem.Kem
-		envKey, err = tkc.Get().GetEnvelopeKey(rootID)
-		if err != nil {
-			log.Panicf("Unable to retrieve filename encryption key envelope key: %v", err)
-		}
-		key, err = envKey.Unwrap(wrappedKey)
-		if err != nil {
-			log.Panicf("Unable to unwrap encryption key: %v", err)
-		}
-	} else {
-		key, err = tkc.Get().GetKey([]byte(tkc.NameTransformEnvName))
-		if err != nil {
-			log.Panicf("Unable to retrieve filename encryption key: %v", err)
-		}
 	}
 
 	// Initialize EME for filename encryption.
 	var emeCipher *eme.EMECipher
 	{
-		var emeBlockCipher cipher.Block
-		if useHKDF {
-			emeKey := hkdfDerive(key, hkdfInfoEMENames, KeyLen)
-			emeBlockCipher, err = aes.NewCipher(emeKey)
-			for i := range emeKey {
-				emeKey[i] = 0
-			}
-		} else {
-			emeBlockCipher, err = aes.NewCipher(key)
+		emeKey := hkdfDerive(key, hkdfInfoEMENames, KeyLen)
+		emeBlockCipher, err := aes.NewCipher(emeKey)
+		for i := range emeKey {
+			emeKey[i] = 0
 		}
 		if err != nil {
 			log.Panic(err)
@@ -114,16 +102,33 @@ func New(aeadType AEADTypeEnum, IVBitLen, keyPool int, useHKDF bool, rootID stri
 		emeCipher = eme.New(emeBlockCipher)
 	}
 
-	// Initialize an AEAD cipher for file content encryption.
+	// Initialize an AEAD cipher for file content encryption. The content key is HKDF-derived
+	// from the master key and the AEAD is built once — there is no per-block key fetch.
 	var aeadCipher cipher.AEAD
 	if aeadType == BackendGoGCM {
-		aeadCipher = newTkAes(IVBitLen/8, keyPool)
+		gcmKey := hkdfDerive(key, hkdfInfoGCMContent, KeyLen)
+		blockCipher, err := aes.NewCipher(gcmKey)
+		if err != nil {
+			log.Panic(err)
+		}
+		if aeadCipher, err = cipher.NewGCMWithNonceSize(blockCipher, IVBitLen/8); err != nil {
+			log.Panic(err)
+		}
+		for i := range gcmKey {
+			gcmKey[i] = 0
+		}
 	} else if aeadType == BackendXChaCha20Poly1305 {
-		// We don't support legacy modes with XChaCha20-Poly1305
 		if IVBitLen != chacha20poly1305.NonceSizeX*8 {
 			log.Panicf("XChaCha20-Poly1305 must use 192-bit IVs, you wanted %d", IVBitLen)
 		}
-		aeadCipher = newTkCha(keyPool)
+		chaKey := hkdfDerive(key, hkdfInfoXChaChaPoly1305Content, chacha20poly1305.KeySize)
+		var err error
+		if aeadCipher, err = chacha20poly1305.NewX(chaKey); err != nil {
+			log.Panic(err)
+		}
+		for i := range chaKey {
+			chaKey[i] = 0
+		}
 	} else {
 		log.Panicf("unknown cipher backend %q", aeadType)
 	}
