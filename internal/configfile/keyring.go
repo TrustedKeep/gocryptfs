@@ -67,12 +67,17 @@ func LoadKeyRing(confPath string) (*KeyRing, error) {
 		return nil, exitcodes.NewErr(fmt.Sprintf("failed to parse key ring %q: %v", filename, err), exitcodes.LoadConf)
 	}
 	if err := kr.Validate(); err != nil {
-		return nil, err
+		// Attach the code here rather than inside Validate: this is the path where the ring came
+		// off disk, so a bad entry is a malformed file. Without the wrap, exitcodes.Exit sees a
+		// plain error and falls back to Other, which tells the operator nothing.
+		return nil, exitcodes.NewErr(err.Error(), exitcodes.LoadConf)
 	}
 	return kr, nil
 }
 
-// Validate checks that every entry carries the material needed to recover its key.
+// Validate checks that every entry carries the material needed to recover its key. It stays a plain
+// predicate: the caller knows whether a bad entry means a malformed file on disk (LoadKeyRing) or a
+// ring this process built wrong (WriteFile), and attaches the exit code accordingly.
 func (kr *KeyRing) Validate() error {
 	for i, e := range kr.Keys {
 		if e.KeyID == "" {

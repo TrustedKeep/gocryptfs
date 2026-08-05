@@ -66,7 +66,7 @@ const (
 	// DevNull means that /dev/null could not be opened
 	DevNull = 30
 	// HealthCheck - the health-check port could not be bound. Usually another mount already
-	// holds it; pass -health-check-port to move it, or 0 to opt out.
+	// holds it; pass -health-check-port to move it, or a negative value to opt out.
 	HealthCheck = 31
 )
 

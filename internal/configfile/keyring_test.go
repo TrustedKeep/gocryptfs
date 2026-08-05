@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 )
 
 // confPath is the config path a test filesystem in "dir" would have. LoadKeyRing takes this,
@@ -159,7 +161,9 @@ func TestLoadKeyRingAbsentVsEmpty(t *testing.T) {
 	}
 }
 
-// A malformed entry on disk must be caught at load, not at first use.
+// A malformed entry on disk must be caught at load, not at first use — and the error has to carry
+// LoadConf, since callers hand it to exitcodes.Exit. A plain error there degrades to Other, which
+// tells the operator nothing about what is wrong.
 func TestLoadKeyRingRejectsMalformed(t *testing.T) {
 	dir := t.TempDir()
 	js, err := json.Marshal(&KeyRing{Keys: []KeyRingEntry{{KeyID: "k1"}}})
@@ -169,7 +173,15 @@ func TestLoadKeyRingRejectsMalformed(t *testing.T) {
 	if err := os.WriteFile(keyRingPath(confPath(dir)), js, 0400); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadKeyRing(confPath(dir)); err == nil {
-		t.Error("entry with no Ciphertext should be rejected at load")
+	_, err = LoadKeyRing(confPath(dir))
+	if err == nil {
+		t.Fatal("entry with no Ciphertext should be rejected at load")
+	}
+	coded, ok := err.(exitcodes.Err)
+	if !ok {
+		t.Fatalf("error must carry an exit code, got %T", err)
+	}
+	if coded.Code() != exitcodes.LoadConf {
+		t.Errorf("exit code = %d, want %d (LoadConf)", coded.Code(), exitcodes.LoadConf)
 	}
 }
