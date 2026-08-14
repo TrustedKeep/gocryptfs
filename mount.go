@@ -565,21 +565,20 @@ func unmount(srv *fuse.Server, mountpoint string) {
 	err := srv.Unmount()
 	if err != nil {
 		tlog.Warn.Printf("unmount: srv.Unmount returned %v", err)
-		if runtime.GOOS != "linux" {
+		if runtime.GOOS == "linux" {
 			// MacOSX does not support lazy unmount
-			return
-		}
-		tlog.Info.Printf("Trying lazy unmount")
-		fusermountPath, err := getFusermountPath()
-		if err != nil {
-			tlog.Warn.Printf("Lazy unmount failed: %v", err)
-			return
-		}
-		cmd := exec.Command(fusermountPath, "-u", "-z", mountpoint)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			tlog.Info.Printf("lazy unmount failed: %v", err)
+			tlog.Info.Printf("Trying lazy unmount")
+			fusermountPath, err := getFusermountPath()
+			if err != nil {
+				tlog.Warn.Printf("lazy unmount failed: %v", err)
+				return
+			}
+			cmd := exec.Command(fusermountPath, "-u", "-z", mountpoint)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				tlog.Info.Printf("lazy unmount failed: %v", err)
+			}
 		}
 	}
 }
