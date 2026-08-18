@@ -23,7 +23,7 @@ Overhead = (16+16)/4096 = 1/128 = 0.78125 %
 Data block, AES-SIV mode
 ------------------------
 
-AES-SIV is used in reverse mode, or when explicitly enabled with `-init -aessiv`.
+AES-SIV is used when the `AESSIV` feature flag is set in `gocryptfs.conf`.
 
 	16 bytes nonce
 	16 bytes SIV

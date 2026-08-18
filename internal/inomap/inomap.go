@@ -71,9 +71,7 @@ func New(rootDev uint64) *InoMap {
 var spillWarn sync.Once
 
 // NextSpillIno returns a fresh inode number from the spill pool without adding it to
-// spillMap.
-// Reverse mode NextSpillIno() for gocryptfs.longname.*.name files where a stable
-// mapping is not needed.
+// spillMap. Use this where a stable mapping is not needed.
 func (m *InoMap) NextSpillIno() (out uint64) {
 	if m.spillNext.Load() == math.MaxUint64 {
 		log.Panicf("spillMap overflow: spillNext = 0x%x", m.spillNext.Load())

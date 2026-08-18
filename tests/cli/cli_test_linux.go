@@ -154,13 +154,6 @@ func TestPasswd(t *testing.T) {
 	}
 }
 
-// Test -passwd with -reverse
-func TestPasswdReverse(t *testing.T) {
-	// Create FS
-	dir := test_helpers.InitFS(t, "-reverse")
-	testPasswd(t, dir, "-reverse")
-}
-
 // Test -init & -config flag
 func TestInitConfig(t *testing.T) {
 	config := test_helpers.TmpDir + "/TestInitConfig.conf"

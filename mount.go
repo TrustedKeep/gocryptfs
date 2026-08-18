@@ -66,8 +66,8 @@ func doMount(args *argContainer) {
 			args.mountpoint, args.cipherdir)
 		os.Exit(exitcodes.MountPoint)
 	}
-	// Reverse-mounting "/foo" at "/foo/mnt" means we would be recursively
-	// encrypting ourselves.
+	// Mounting "/foo" at "/foo/mnt" means the mountpoint would hide part of
+	// our own backing storage.
 	if strings.HasPrefix(args.mountpoint, args.cipherdir+"/") {
 		tlog.Fatal.Printf("Mountpoint %q is contained in cipherdir %q, this is not supported",
 			args.mountpoint, args.cipherdir)
@@ -169,7 +169,6 @@ func doMount(args *argContainer) {
 	debug.FreeOSMemory()
 	// Set up autounmount, if requested.
 	if args.idle > 0 {
-		// Not being in reverse mode means we always have a forward file system.
 		fwdFs := fs.(*fusefrontend.RootNode)
 		go idleMonitor(args.idle, fwdFs, srv, args.mountpoint)
 	}
