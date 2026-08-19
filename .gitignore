@@ -23,6 +23,7 @@ gocryptfs.1
 
 # Various developer/debugging excludes
 .vscode
+.idea
 gocryptfs-xray
 __debug_bin*
 

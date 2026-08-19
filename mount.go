@@ -595,10 +595,17 @@ func unmount(srv *fuse.Server, mountpoint string) {
 		if runtime.GOOS == "linux" {
 			// MacOSX does not support lazy unmount
 			tlog.Info.Printf("Trying lazy unmount")
-			cmd := exec.Command("fusermount", "-u", "-z", mountpoint)
+			fusermountPath, err := getFusermountPath()
+			if err != nil {
+				tlog.Warn.Printf("lazy unmount failed: %v", err)
+				return
+			}
+			cmd := exec.Command(fusermountPath, "-u", "-z", mountpoint)
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
-			cmd.Run()
+			if err := cmd.Run(); err != nil {
+				tlog.Info.Printf("lazy unmount failed: %v", err)
+			}
 		}
 	}
 }
@@ -612,4 +619,18 @@ func loadConfig(args *argContainer) (cf *configfile.ConfFile, err error) {
 		return nil, err
 	}
 	return cf, nil
+}
+
+func getFusermountPath() (path string, err error) {
+	path, err = exec.LookPath("fusermount3")
+	if err == nil {
+		return path, nil
+	}
+
+	path, err = exec.LookPath("fusermount")
+	if err == nil {
+		return path, nil
+	}
+
+	return "", fmt.Errorf("fusermount binary not found: %v", err)
 }
