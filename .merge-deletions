@@ -1,0 +1,72 @@
+# Paths that exist in upstream gocryptfs but are intentionally absent from this
+# fork. check-deletions.bash fails if any of them comes back.
+#
+# WHY THIS FILE EXISTS
+#
+# When upstream ADDS a file underneath a path we deleted, git reports no
+# conflict: our side removed the parent, their side created something new, and
+# the three-way merge silently takes theirs. Only files we deleted AND upstream
+# MODIFIED show up as conflicts. The v2.6.1 merge picked up
+# tests/reverse/force_owner_test.go and .github/dependabot.yml exactly this way,
+# and nothing noticed.
+#
+# Both of those examples are listed below now, so that class is guarded. This
+# file only guards what it lists, though -- if you delete something during a
+# merge and do not add it here, the next merge quietly brings it back.
+#
+# FORMAT
+#
+# One repo-relative path per line. A directory entry covers everything beneath
+# it. Blank lines and '#' comments are ignored. Keep grouped by subsystem.
+# Paths may contain spaces; do not quote them.
+
+# OpenSSL / cgo crypto backends -- replaced by internal/cryptocore/tk_aead_*.go
+internal/stupidgcm
+
+# AES-SIV content encryption and its reverse-mode path IV derivation
+internal/siv_aead
+internal/pathiv
+
+# Reverse (encrypt-on-read) mode
+internal/fusefrontend_reverse
+tests/reverse
+benchmark-reverse.bash
+Documentation/performance-reverse.txt
+
+# Password-, masterkey- and FIDO2-based key management -- replaced by
+# internal/tkc (TrustedKeep KMS) and the CEK envelope-key flow
+internal/fido2
+internal/configfile/scrypt.go
+internal/configfile/scrypt_test.go
+masterkey.go
+tests/cli/zerokey_test.go
+
+# Nonce prefetch pool -- replaced by the channel generator in
+# internal/cryptocore/nonce.go
+internal/cryptocore/randprefetch.go
+internal/cryptocore/randprefetch_test.go
+
+# Offline ciphertext inspection tool (dumps masterkeys; no TK equivalent)
+gocryptfs-xray
+
+# Upstream test fixtures for on-disk formats this fork cannot read
+tests/example_filesystems
+
+# Upstream dependency bumps. Nothing here verifies them -- there is no CI by
+# design (see Documentation/tk-upstream-merge.md) -- so the PRs were noise.
+.github/dependabot.yml
+
+# Upstream CI: exercises reverse mode, openssl and scrypt, none of which exist
+# here. This fork verifies merges by hand (see Documentation/tk-upstream-merge.md),
+# so there is nothing to replace it with -- keep it deleted rather than
+# half-maintained.
+.github/workflows/ci.yml
+
+# Debugging scratch programs, not part of the shipped fork
+contrib/getdents-debug
+
+# --- Pending cleanup (see follow-on ticket) -----------------------------------
+# Dead in this fork but still present, so it cannot be listed yet.
+# Uncomment as the removal lands.
+#
+# internal/readpassword     -- zero importers since masterkey removal
