@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +21,7 @@ func isEmptyDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	entries, err := ioutil.ReadDir(dir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
@@ -46,10 +45,8 @@ func isDir(dir string) error {
 
 // initDir handles "gocryptfs -init". It prepares a directory for use as a
 // gocryptfs storage directory.
-// In forward mode, this means creating the gocryptfs.conf and gocryptfs.diriv
-// files in an empty directory.
-// In reverse mode, we create .gocryptfs.reverse.conf and the directory does
-// not need to be empty.
+// This means creating the gocryptfs.conf and gocryptfs.diriv files in an
+// empty directory.
 func initDir(args *argContainer) {
 	err := isEmptyDir(args.cipherdir)
 	if err != nil {

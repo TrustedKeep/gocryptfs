@@ -58,7 +58,7 @@ func Twice(extpass []string, passfile []string) ([]byte, error) {
 		return nil, err
 	}
 	if !bytes.Equal(p1, p2) {
-		return nil, fmt.Errorf("Passwords do not match")
+		return nil, fmt.Errorf("passwords do not match")
 	}
 	// Wipe the password duplicate from memory
 	for i := range p2 {
@@ -71,15 +71,15 @@ func Twice(extpass []string, passfile []string) ([]byte, error) {
 // Exits on read error or empty result.
 func readPasswordTerminal(prompt string) ([]byte, error) {
 	fd := int(os.Stdin.Fd())
-	fmt.Fprintf(os.Stderr, prompt)
+	fmt.Fprint(os.Stderr, prompt)
 	// term.ReadPassword removes the trailing newline
 	p, err := term.ReadPassword(fd)
 	if err != nil {
-		return nil, fmt.Errorf("Could not read password from terminal: %v\n", err)
+		return nil, fmt.Errorf("could not read password from terminal: %v", err)
 	}
 	fmt.Fprintf(os.Stderr, "\n")
 	if len(p) == 0 {
-		return nil, fmt.Errorf("Password is empty")
+		return nil, fmt.Errorf("password is empty")
 	}
 	return p, nil
 }
@@ -87,13 +87,20 @@ func readPasswordTerminal(prompt string) ([]byte, error) {
 // readPasswordStdin reads a line from stdin.
 // It exits with a fatal error on read error or empty result.
 func readPasswordStdin(prompt string) ([]byte, error) {
-	tlog.Info.Printf("Reading %s from stdin", prompt)
+	// This should make debugging situations like
+	// https://github.com/rfjakob/gocryptfs/issues/852
+	// easier. Only works on Linux, otherwise shows "?".
+	target, err := os.Readlink("/proc/self/fd/0")
+	if err != nil {
+		target = "?"
+	}
+	tlog.Info.Printf("Reading %s from stdin (connected to %q)", prompt, target)
 	p, err := readLineUnbuffered(os.Stdin)
 	if err != nil {
 		return nil, err
 	}
 	if len(p) == 0 {
-		return nil, fmt.Errorf("Got empty %s from stdin", prompt)
+		return nil, fmt.Errorf("got empty %s from stdin", prompt)
 	}
 	return p, nil
 }

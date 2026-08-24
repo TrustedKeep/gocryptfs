@@ -7,7 +7,6 @@ import (
 // Args is a container for arguments that are passed from main() to fusefrontend
 type Args struct {
 	// Cipherdir is the backing storage directory (absolute path).
-	// For reverse mode, Cipherdir actually contains *plaintext* files.
 	Cipherdir      string
 	PlaintextNames bool
 	LongNames      bool
@@ -21,13 +20,10 @@ type Args struct {
 	// enforces ownership itself.
 	ForceOwner *fuse.Owner
 	// ConfigCustom is true when the user select a non-default config file
-	// location. If it is false, reverse mode maps ".gocryptfs.reverse.conf"
-	// to "gocryptfs.conf" in the plaintext dir.
+	// location.
 	ConfigCustom bool
 	// NoPrealloc disables automatic preallocation before writing
 	NoPrealloc bool
-
-	//excludes dont seem to exist in tkfs
 	// Suid is true if the filesystem has been mounted with the "-suid" flag.
 	// If it is false, we can ignore the GETXATTR "security.capability" calls,
 	// which are a performance problem for writes. See
@@ -40,7 +36,8 @@ type Args struct {
 	SharedStorage bool
 	// OneFileSystem disables crossing filesystem boundaries,
 	// like rsync's `--one-file-system` does.
-	// Only applicable to reverse mode.
+	// Set from the "-one-file-system" flag, but not acted on: the only
+	// implementation lived in the removed reverse frontend.
 	OneFileSystem bool
 	// DeterministicNames disables gocryptfs.diriv files
 	DeterministicNames bool

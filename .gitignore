@@ -26,3 +26,6 @@ gocryptfs.1
 .idea
 gocryptfs-xray
 __debug_bin*
+
+# Ignore macos specific files
+.DS_Store

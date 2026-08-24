@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -44,7 +45,7 @@ type RootNode struct {
 	// (uint32 so that it can be reset with CompareAndSwapUint32).
 	// When -idle was used when mounting, idleMonitor() sets it to 1
 	// periodically.
-	IsIdle uint32
+	IsIdle atomic.Bool
 	// dirCache caches directory fds
 	dirCache dirCache
 	// inoMap translates inode numbers from different devices to unique inode
@@ -55,10 +56,12 @@ type RootNode struct {
 	// This makes each directory entry unique (even hard links),
 	// makes go-fuse hand out separate FUSE Node IDs for each, and prevents
 	// bizarre problems when inode numbers are reused behind our back.
-	gen uint64
+	gen atomic.Uint64
 	// quirks is a bitmap that enables workaround for quirks in the filesystem
 	// backing the cipherdir
 	quirks uint64
+	// rootIno is the inode number that we report for the root node on mount
+	rootIno uint64
 
 	//The things necessary for envelope encryption
 	rootEnvKeyID   string
@@ -68,8 +71,9 @@ type RootNode struct {
 func NewRootNode(args Args, c *contentenc.ContentEnc, n *nametransform.NameTransform, rootEnvKeyID string, rootWrappedKey []byte) *RootNode {
 	var rootDev uint64
 	var st syscall.Stat_t
-	if err := syscall.Stat(args.Cipherdir, &st); err != nil {
-		tlog.Warn.Printf("Could not stat backing directory %q: %v", args.Cipherdir, err)
+	var statErr error
+	if statErr = syscall.Stat(args.Cipherdir, &st); statErr != nil {
+		tlog.Warn.Printf("Could not stat backing directory %q: %v", args.Cipherdir, statErr)
 	} else {
 		rootDev = uint64(st.Dev)
 	}
@@ -88,6 +92,10 @@ func NewRootNode(args Args, c *contentenc.ContentEnc, n *nametransform.NameTrans
 		quirks:         syscallcompat.DetectQuirks(args.Cipherdir),
 		rootEnvKeyID:   rootEnvKeyID,
 		rootWrappedKey: rootWrappedKey,
+	}
+	if statErr == nil {
+		rn.inoMap.TranslateStat(&st)
+		rn.rootIno = st.Ino
 	}
 	return rn
 }
@@ -291,4 +299,8 @@ func (rn *RootNode) decryptXattrName(cAttr string) (attr string, err error) {
 		return "", err
 	}
 	return attr, nil
+}
+
+func (rn *RootNode) RootIno() uint64 {
+	return rn.rootIno
 }

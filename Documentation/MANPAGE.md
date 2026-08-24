@@ -101,13 +101,13 @@ Defaults are fine.
 
 #### -aessiv
 Use the AES-SIV encryption mode. This is slower than AES-GCM but is
-secure with deterministic nonces as used in "-reverse" mode.
+secure with deterministic nonces.
 
 Run `gocryptfs -speed` to find out if and how much slower.
 
 #### -deterministic-names
 Disable file name randomisation and creation of `gocryptfs.diriv` files.
-This can prevent sync conflicts conflicts when synchronising files, but
+This can prevent sync conflicts when synchronising files, but
 leaks information about identical file names across directories
 ("Identical names leak" in https://nuetzlich.net/gocryptfs/comparison/#file-names ).
 
@@ -152,10 +152,6 @@ Do not encrypt file names and symlink targets.
 Use unpadded base64 encoding for file names. This gets rid of the
 trailing "\\=\\=". A filesystem created with this option can only be
 mounted using gocryptfs v1.2 and higher. Default true.
-
-#### -reverse
-Reverse mode shows a read-only encrypted view of a plaintext
-directory. Implies "-aessiv".
 
 #### -xchacha
 Use XChaCha20-Poly1305 file content encryption. This should be much faster
@@ -205,6 +201,16 @@ Show all invalid filenames:
 
     -badname '*'
 
+#### -context string
+Set the SELinux context. See mount(8) for details.
+
+This option was added for compatibility with xfstests which sets
+this option via `-o context="system_u:object_r:root_t:s0"`.
+
+Only works when mounting as root, otherwise you get this error from fusermount3:
+
+    fusermount3: unknown option 'context="system_u:object_r:root_t:s0"'
+
 #### -ctlsock string
 Create a control socket at the specified location. The socket can be
 used to decrypt and encrypt paths inside the filesystem. When using
@@ -216,40 +222,6 @@ be suitable.
 Enable (`-dev`) or disable (`-nodev`) device files in a gocryptfs mount
 (default: `-nodev`). If both are specified, `-nodev` takes precedence.
 You need root permissions to use `-dev`.
-
-#### -e PATH, -exclude PATH
-Only for reverse mode: exclude relative plaintext path from the encrypted
-view, matching only from root of mounted filesystem. Can be passed multiple
-times.
-
-Example that excludes the directories "Music" and "Movies" from the root
-directory:
-
-    gocryptfs -reverse -exclude Music -exclude Movies /home/user /mnt/user.encrypted
-
-See also `-exclude-wildcard`, `-exclude-from` and the [EXCLUDING FILES](#excluding-files) section.
-
-#### -ew GITIGNORE-PATTERN, -exclude-wildcard GITIGNORE-PATTERN
-Only for reverse mode: exclude paths from the encrypted view in gitignore(5) syntax,
-wildcards supported. Pass multiple times for multiple patterns.
-
-Example to exclude all `.mp3` files in any directory:
-
-    gocryptfs -reverse -exclude-wildcard '*.mp3' /home/user /mnt/user.encrypted
-
-Example to to exclude everything but the directory 'important' in the root dir:
-
-    gocryptfs -reverse -exclude-wildcard '*' -exclude-wildcard '!/important' /home/user /mnt/user.encrypted
-
-See also `-exclude-from` and the [EXCLUDING FILES](#excluding-files) section.
-
-#### -exclude-from FILE
-Only for reverse mode: reads gitignore patterns
-from a file. Can be passed multiple times. Example:
-
-    gocryptfs -reverse -exclude-from ~/crypt-exclusions /home/user /mnt/user.encrypted
-
-See also `-exclude`, `-exclude-wildcard` and the [EXCLUDING FILES](#excluding-files) section.
 
 #### -exec, -noexec
 Enable (`-exec`) or disable (`-noexec`) executables in a gocryptfs mount
@@ -369,17 +341,11 @@ used internally for daemonization.
 Don't cross filesystem boundaries (like rsync's `--one-file-system`).
 Mountpoints will appear as empty directories.
 
-Only applicable to reverse mode.
-
 Limitation: Mounted single files (yes this is possible) are NOT hidden.
 
 #### -rw, -ro
 Mount the filesystem read-write (`-rw`, default) or read-only (`-ro`).
 If both are specified, `-ro` takes precedence.
-
-#### -reverse
-See the `-reverse` section in INIT FLAGS. You need to specify the
-`-reverse` option both at `-init` and at mount.
 
 #### -serialize_reads
 The kernel usually submits multiple concurrent reads to service
@@ -479,10 +445,31 @@ for details.
 
 #### -fido2 DEVICE_PATH
 Use a FIDO2 token to initialize and unlock the filesystem.
-Use "fido2-token -L" to obtain the FIDO2 token device path.
-For linux, "fido2-tools" package is needed.
+Use `fido2-token -L` to obtain the FIDO2 token device path.
+For linux, **fido2-tools** package is needed.
 
 Applies to: all actions that ask for a password.
+
+#### -fido2-assert-option OPTION
+Options passed to `fido2-assert` with `-t` option.
+This option may be specified multiple times, each time it will add two 
+arguments `-t` `OPTION` to `fido2-assert`.
+See `man fido2-assert` to check supported options.
+
+Examples:
+
+Creating a filesystem with no pin verification:
+
+    gocryptfs -init -fido2 DEVICE_PATH -fido2-assert-option pin=false CIPHERDIR
+
+Creating a filesystem with both user verification and pin verification:
+
+    gocryptfs -init -fido2 DEVICE_PATH -fido2-assert-option uv=true -fido2-assert-option pin=true CIPHERDIR
+
+Creating a filesystem with both user presence and user verification:
+
+    gocryptfs -init -fido2 DEVICE_PATH -fido2-assert-option up=true -fido2-assert-option uv=true CIPHERDIR
+
 
 #### -masterkey string
 Use an explicit master key specified on the command line or, if the special
@@ -497,14 +484,13 @@ The masterkey option is meant as a recovery option for emergencies, such as
 if you have forgotten the password or lost the config file.
 
 Even if a config file exists, it will not be used. All non-standard
-settings have to be passed on the command line: `-aessiv` when you
-mount a filesystem that was created using reverse mode, or
+settings have to be passed on the command line, for example
 `-plaintextnames` for a filesystem that was created with that option.
 
-Examples:
+Example: Mount a filesystem that was created using default options:
 
-    -masterkey=6f717d8b-6b5f8e8a-fd0aa206-778ec093-62c5669b-abd229cd-241e00cd-b4d6713d
-    -masterkey=stdin
+    gocryptfs -masterkey=6f717d8b-6b5f8e8a-fd0aa206-778ec093-62c5669b-abd229cd-241e00cd-b4d6713d cipher mnt
+    gocryptfs -masterkey=stdin cipher mnt
 
 Applies to: all actions that ask for a password.
 
@@ -552,7 +538,7 @@ files. They are concatenated for the effective password.
 Example:
 
     echo hello > hello.txt
-    echo word > world.txt
+    echo world > world.txt
     gocryptfs -passfile hello.txt -passfile world.txt
 
 The effective password will be "helloworld".
@@ -620,68 +606,6 @@ dash "-".
 
 Applies to: all actions.
 
-EXCLUDING FILES
-===============
-
-In reverse mode, it is possible to exclude files from the encrypted view, using
-the `-exclude`, `-exclude-wildcard` and `-exclude-from` options.
-
-`-exclude` matches complete paths, so `-exclude file.txt` only excludes a file
-named `file.txt` in the root of the mounted filesystem; files named `file.txt`
-in subdirectories are still visible. Wildcards are NOT supported.
-This option is kept for compatibility with the behavior up to version 1.6.x.
-New users should use `-exclude-wildcard` instead.
-
-`-exclude-wildcard` uses gitignore syntax and matches files anywhere, so `-exclude-wildcard file.txt`
-excludes files named `file.txt` in any directory. If you want to match complete
-paths, you can prefix the filename with a `/`: `-exclude-wildcard /file.txt`
-excludes only `file.txt` in the root of the mounted filesystem.
-
-If there are many exclusions, you can use `-exclude-from` to read gitignore
-patterns from a file. As with `-exclude-wildcard`, use a
-leading `/` to match complete paths.
-
-The rules for exclusion are that of [gitignore](https://git-scm.com/docs/gitignore#_pattern_format).
-In short:
-
-1. A blank line matches no files, so it can serve as a separator
-   for readability.
-2. A line starting with `#` serves as a comment. Put a backslash (`\`)
-   in front of the first hash for patterns that begin with a hash.
-3. Trailing spaces are ignored unless they are quoted with backslash (`\`).
-4. An optional prefix `!` negates the pattern; any matching file
-   excluded by a previous pattern will become included again. It is not
-   possible to re-include a file if a parent directory of that file is
-   excluded. Put a backslash (`\`) in front of the first `!` for
-   patterns that begin with a literal `!`, for example, `\!important!.txt`.
-5. If the pattern ends with a slash, it is removed for the purpose of the
-   following description, but it would only find a match with a directory.
-   In other words, `foo/` will match a directory foo and paths underneath it,
-   but will not match a regular file or a symbolic link foo.
-6. If the pattern does not contain a slash `/`, it is treated as a shell glob
-   pattern and checked for a match against the pathname relative to the
-   root of the mounted filesystem.
-7. Otherwise, the pattern is treated as a shell glob suitable for
-   consumption by fnmatch(3) with the FNM_PATHNAME flag: wildcards in the
-   pattern will not match a `/` in the pathname. For example,
-   `Documentation/*.html` matches `Documentation/git.html` but not
-   `Documentation/ppc/ppc.html` or `tools/perf/Documentation/perf.html`.
-8. A leading slash matches the beginning of the pathname. For example,
-   `/*.c` matches `cat-file.c` but not `mozilla-sha1/sha1.c`.
-9. Two consecutive asterisks (`**`) in patterns matched against full
-   pathname may have special meaning:
-    i.   A leading `**` followed by a slash means match in all directories.
-         For example, `**/foo` matches file or directory `foo` anywhere,
-         the same as pattern `foo`. `**/foo/bar` matches file or directory
-         `bar` anywhere that is directly under directory `foo`.
-    ii.  A trailing `/**` matches everything inside. For example, `abc/**`
-         matches all files inside directory `abc`, with infinite depth.
-    iii. A slash followed by two consecutive asterisks then a slash matches
-         zero or more directories. For example, `a/**/b` matches `a/b`,
-         `a/x/b`, `a/x/y/b` and so on.
-    iv.  Other consecutive asterisks are considered invalid.
-
-
 EXAMPLES
 ========
 
@@ -695,11 +619,10 @@ Create an encrypted filesystem in directory "mydir.crypt", mount it on "mydir":
 
 ### Mount
 
-Mount an encrypted view of joe's home directory using reverse mode:
+Mount the encrypted filesystem in "/home/joe.crypt" on "/home/joe.plain":
 
-	mkdir /home/joe.crypt
-	gocryptfs -init -reverse /home/joe
-	gocryptfs -reverse /home/joe /home/joe.crypt
+	mkdir /home/joe.plain
+	gocryptfs /home/joe.crypt /home/joe.plain
 
 ### fstab
 

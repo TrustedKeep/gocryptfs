@@ -187,7 +187,7 @@ func UnmountErr(dir string) (err error) {
 		err = cmd.Run()
 		if err == nil {
 			if len(fdsNow) > len(fds)+maxCacheFds {
-				return fmt.Errorf("fd leak in gocryptfs process? pid=%d dir=%q, fds:\nold=%v \nnew=%v\n", pid, dir, fds, fdsNow)
+				return fmt.Errorf("fd leak in gocryptfs process? pid=%d dir=%q, fds:\nold=%v \nnew=%v", pid, dir, fds, fdsNow)
 			}
 			return nil
 		}
@@ -242,11 +242,12 @@ func ListFds(pid int, prefix string) []string {
 			// fd was closed in the meantime
 			continue
 		}
-		if strings.HasPrefix(target, "pipe:") || strings.HasPrefix(target, "anon_inode:[eventpoll]") {
+		if strings.HasPrefix(target, "pipe:") || strings.HasPrefix(target, "anon_inode:[eventpoll]") ||
+			strings.HasPrefix(target, "anon_inode:[pidfd]") {
 			// The Go runtime creates pipes on demand for splice(), which
 			// creates spurious test failures. Ignore all pipes.
-			// Also get rid of the "eventpoll" fd that is always there and not
-			// interesting.
+			// Also get rid of the "eventpoll" and "pidfd" fds that are always there
+			// and not interesting.
 			filtered = append(filtered, target)
 			continue
 		}

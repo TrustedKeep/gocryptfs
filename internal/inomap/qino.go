@@ -8,9 +8,8 @@ type namespaceData struct {
 	// Stat_t.Dev is uint64 on 32- and 64-bit Linux
 	Dev uint64
 	// Tag acts like an extension of the Dev field.
-	// It is used by reverse mode for virtual files.
-	// Normal (forward) mode does not use it and it
-	// stays always zero there.
+	// It is reserved for virtual files and always
+	// stays zero here.
 	Tag uint8
 }
 

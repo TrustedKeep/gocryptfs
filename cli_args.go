@@ -35,8 +35,8 @@ type argContainer struct {
 	xchacha bool
 	// Mount options with opposites
 	dev, nodev, suid, nosuid, exec, noexec, rw, ro, kernel_cache, acl bool
-	masterkey, mountpoint, cipherdir, cpuprofile,
-	memprofile, ko, ctlsock, fsname, force_owner, trace string
+	mountpoint, cipherdir, cpuprofile,
+	memprofile, ko, ctlsock, fsname, force_owner, trace, context string
 	// -extpass, -badname, -passfile can be passed multiple times
 	extpass, badname, passfile []string
 	// Configuration file name override
@@ -206,7 +206,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVar(&args.kernel_cache, "kernel_cache", false, "Enable the FUSE kernel_cache option")
 	flagSet.BoolVar(&args.acl, "acl", false, "Enforce ACLs")
 
-	flagSet.StringVar(&args.masterkey, "masterkey", "", "Mount with explicit master key")
 	flagSet.StringVar(&args.cpuprofile, "cpuprofile", "", "Write cpu profile to specified file")
 	flagSet.StringVar(&args.memprofile, "memprofile", "", "Write memory profile to specified file")
 	flagSet.StringVar(&args.config, "config", "", "Use specified config file instead of CIPHERDIR/gocryptfs.conf")
@@ -215,11 +214,12 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.StringVar(&args.fsname, "fsname", "", "Override the filesystem name")
 	flagSet.StringVar(&args.force_owner, "force_owner", "", "uid:gid pair to coerce ownership")
 	flagSet.StringVar(&args.trace, "trace", "", "Write execution trace to file")
+	flagSet.StringVar(&args.context, "context", "", "Set SELinux context (see mount(8) for details)")
 
 	// multipleStrings options ([]string)
-	flagSet.StringSliceVar(&args.extpass, "extpass", nil, "Use external program for the password prompt")
-	flagSet.StringSliceVar(&args.badname, "badname", nil, "Glob pattern invalid file names that should be shown")
-	flagSet.StringSliceVar(&args.passfile, "passfile", nil, "Read password from file")
+	flagSet.StringArrayVar(&args.extpass, "extpass", nil, "Use external program for the password prompt")
+	flagSet.StringArrayVar(&args.badname, "badname", nil, "Glob pattern invalid file names that should be shown")
+	flagSet.StringArrayVar(&args.passfile, "passfile", nil, "Read password from file")
 
 	flagSet.Uint8Var(&args.longnamemax, "longnamemax", 255, "Hash encrypted names that are longer than this")
 
@@ -227,7 +227,7 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 		"successful mount - used internally for daemonization")
 
 	flagSet.DurationVar(&args.idle, "i", 0, "Alias for -idle")
-	flagSet.DurationVar(&args.idle, "idle", 0, "Auto-unmount after specified idle duration (ignored in reverse mode). "+
+	flagSet.DurationVar(&args.idle, "idle", 0, "Auto-unmount after specified idle duration. "+
 		"Durations are specified like \"500s\" or \"2h45m\". 0 means stay mounted indefinitely.")
 
 	var dummyString string
@@ -253,14 +253,6 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	}
 	if len(args.extpass) > 0 && len(args.passfile) != 0 {
 		tlog.Fatal.Printf("The options -extpass and -passfile cannot be used at the same time")
-		os.Exit(exitcodes.Usage)
-	}
-	if len(args.passfile) != 0 && args.masterkey != "" {
-		tlog.Fatal.Printf("The options -passfile and -masterkey cannot be used at the same time")
-		os.Exit(exitcodes.Usage)
-	}
-	if len(args.extpass) > 0 && args.masterkey != "" {
-		tlog.Fatal.Printf("The options -extpass and -masterkey cannot be used at the same time")
 		os.Exit(exitcodes.Usage)
 	}
 	if args.idle < 0 {

@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -49,44 +48,26 @@ func TestBrokenFsV14(t *testing.T) {
 	}
 }
 
-func TestExampleFses(t *testing.T) {
-	dirfd, err := os.Open("../example_filesystems")
-	if err != nil {
+func TestMalleableBase64(t *testing.T) {
+	// Evil filenames. Cannot have them in git, because if we do,
+	//  go install github.com/rfjakob/gocryptfs/v2@latest
+	// fails with
+	//  g: malformed file path "tests/fsck/malleable_base64/27AG8t-XZH7G9ou2OSD_z\rg": invalid char '\r'
+	//  g: malformed file path "tests/fsck/malleable_base64/27AG8t-XZH7G9ou2OSD_z\rg": invalid char '\r'
+	if err := os.WriteFile("malleable_base64/27AG8t-XZH7G9ou2OSD_z\ng", nil, 0644); err != nil {
 		t.Fatal(err)
 	}
-	var fsNames []string
-	entries, err := dirfd.Readdir(0)
-	if err != nil {
+	if err := os.WriteFile("malleable_base64/27AG8t-XZH7G9ou2OSD_z\rg", nil, 0644); err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		if strings.Contains(e.Name(), "reverse") {
-			continue
-		}
-		if e.Name() == "content" {
-			continue
-		}
-		fsNames = append(fsNames, e.Name())
+	cmd := exec.Command(test_helpers.GocryptfsBinary, "-fsck", "-extpass", "echo test", "malleable_base64")
+	outBin, err := cmd.CombinedOutput()
+	out := string(outBin)
+	t.Log(out)
+	code := test_helpers.ExtractCmdExitCode(err)
+	if code != exitcodes.FsckErrors {
+		t.Errorf("wrong exit code, have=%d want=%d", code, exitcodes.FsckErrors)
 	}
-	for _, n := range fsNames {
-		t.Logf("Checking %q", n)
-		path := "../example_filesystems/" + n
-		cmd := exec.Command(test_helpers.GocryptfsBinary, "-fsck", "-extpass", "echo test", path)
-		outBin, err := cmd.CombinedOutput()
-		out := string(outBin)
-		code := test_helpers.ExtractCmdExitCode(err)
-		if code == exitcodes.DeprecatedFS {
-			continue
-		}
-		if code != 0 {
-			t.Log(out)
-			t.Errorf("fsck returned code %d but fs should be clean", code)
-		}
-	}
-	dirfd.Close()
 }
 
 // TestTerabyteFile verifies that fsck does something intelligent when it hits
