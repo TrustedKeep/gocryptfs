@@ -3,8 +3,8 @@ module github.com/rfjakob/gocryptfs/v2
 go 1.24.0
 
 require (
-	github.com/TrustedKeep/boundary v1.2.8-0.20260601150909-c3f6e9ce9427
-	github.com/TrustedKeep/tkutils/v2 v2.13.15-0.20260529163343-d7307031709d
+	github.com/TrustedKeep/boundary v1.2.7
+	github.com/TrustedKeep/tkutils/v2 v2.16.1
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/google/uuid v1.6.0
 	github.com/hanwen/go-fuse/v2 v2.8.0
@@ -19,8 +19,8 @@ require (
 )
 
 require (
+	github.com/aws/aws-sdk-go v1.55.6 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.7 // indirect
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.4 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.31.12 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.16 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.23 // indirect
@@ -29,7 +29,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/ini v1.8.3 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.24 // indirect
 	github.com/aws/aws-sdk-go-v2/service/autoscaling v1.66.2 // indirect
-	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.55.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.302.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/elasticloadbalancing v1.33.25 // indirect
 	github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2 v1.54.12 // indirect
@@ -43,6 +42,7 @@ require (
 	github.com/fullsailor/pkcs7 v0.0.0-20190404230743-d7302db945fa // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
+	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
