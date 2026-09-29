@@ -498,8 +498,8 @@ type keySets struct {
 	// aeads and emeCiphers are indexed by ring index. A nil entry is a hole.
 	aeads      []cipher.AEAD
 	emeCiphers []*eme.EMECipher
-	// holes are the ring indices whose key the key service would not return (§0.8), in ring
-	// order. Fixed for the life of the mount — nothing retries an unwrap afterwards.
+	// holes are the ring indices whose key the key service would not return, in ring order. Fixed
+	// for the life of the mount: nothing retries an unwrap afterwards.
 	holes []uint16
 }
 

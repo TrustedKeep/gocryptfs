@@ -1,6 +1,8 @@
 package tkc
 
-// TrustedGateway data-key API contract; Documentation/phase-3-rotation-rekeying.md has the model.
+// TKFS data-key API. Every data key is wrapped under the instance's one KEK and comes back to TKFS
+// wrapped again to a per-call transport key; the search route serves the same calls under
+// /keepsvc/tenantdatakey.
 //
 //	generate   POST .../tkfsdatakey/generate   -> {KeyID, Ciphertext, TransitWrappedKey}
 //	unwrap     POST .../tkfsdatakey/unwrap     -> {TransitWrappedKey}

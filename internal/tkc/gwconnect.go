@@ -122,7 +122,7 @@ func (g *gwConnector) load() error {
 		return fmt.Errorf("reading gateway CA: %w", err)
 	}
 	// Fail closed: an empty CA makes NewTLSConfigWithCert set InsecureSkipVerify, which
-	// would leave the gateway's server cert unverified (plan §5). Require a real CA.
+	// would leave the gateway's server cert unverified.
 	if len(bytes.TrimSpace(caPEM)) == 0 {
 		return fmt.Errorf("gateway CA %s is empty", caPath)
 	}

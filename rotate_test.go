@@ -60,10 +60,8 @@ func (f *fakeConnector) UnwrapTKFSDataKey(keyID string, ct []byte) ([]byte, erro
 	return []byte("plaintext"), nil
 }
 
-// §0.8 contains an unavailable key to the files that need it, which is right for a key the service
-// has *decided* not to return. Applying it to a blip instead turns one slow round trip into a mount
-// that silently serves a truncated view of its own filesystem until someone remounts it — and a mount
-// makes one round trip per retained entry, so a long ring gets many chances to hit one.
+// A 403 is the key service's decision and is not retried; anything else is an outage and is, since a
+// blip would otherwise leave a hole until the next remount.
 func TestUnwrapDataKeyRetriesOutagesButNotRefusals(t *testing.T) {
 	defer func(d time.Duration) { unwrapRetryDelay = d }(unwrapRetryDelay)
 	unwrapRetryDelay = time.Microsecond
