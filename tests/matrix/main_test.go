@@ -66,11 +66,11 @@ func TestMain(m *testing.M) {
 			fmt.Printf("matrix: testcase = %#v\n", testcase)
 		}
 		ctlsockPath = fmt.Sprintf("%s/ctlsock.%d", test_helpers.TmpDir, i)
-		// -init writes the config and, unless names are plaintext or deterministic, the diriv.
-		// The name and content-cipher options are recorded in the config, so they have to be
-		// chosen here: passing them at mount time would be silently overridden by the config.
+		// -init writes the config; the root diriv comes from the first mount. The name and
+		// content-cipher options are recorded in the config, so they have to be chosen here:
+		// passing them at mount time would be silently overridden by the config.
 		// -sharedstorage is a genuine mount option and stays below.
-		test_helpers.ResetTmpDir(false)
+		test_helpers.ResetTmpDir()
 		initOpts := []string{
 			fmt.Sprintf("-plaintextnames=%v", testcase.plaintextnames),
 		}

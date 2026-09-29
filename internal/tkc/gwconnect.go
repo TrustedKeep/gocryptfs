@@ -3,6 +3,7 @@ package tkc
 import (
 	"bytes"
 	"crypto/rsa"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,8 +29,9 @@ const (
 // Gateway data-key routes (the gateway serves them under its /api/v1 version prefix). See
 // gateway.go for the contract these implement.
 const (
-	gatewayGeneratePath = "/api/v1/tkfsdatakey/generate"
-	gatewayUnwrapPath   = "/api/v1/tkfsdatakey/unwrap"
+	gatewayGeneratePath  = "/api/v1/tkfsdatakey/generate"
+	gatewayUnwrapPath    = "/api/v1/tkfsdatakey/unwrap"
+	gatewayHeartbeatPath = "/api/v1/tkfsdatakey/heartbeat"
 )
 
 // gwIdleConnTimeout bounds how long an idle keep-alive connection to the gateway is pooled.
@@ -43,17 +45,24 @@ const gwHTTPTimeout = 10 * time.Second
 // unbounded read.
 const maxGatewayResponseBytes = 1 << 20 // 1 MiB
 
-var _ DataKeyConnector = (*gwConnector)(nil)
+var (
+	_ DataKeyConnector = (*gwConnector)(nil)
+	_ Heartbeater      = (*gwConnector)(nil)
+)
 
 // gwConnector is the real client of the gateway data-key API. It presents an
 // operator-provisioned client cert over mTLS and speaks the generate/unwrap contract in
 // gateway.go. The cert/key/CA are read once at startup and the mTLS client is built once;
 // rotating the cert material requires remounting.
 type gwConnector struct {
-	host    string // gateway host:port
-	nodeID  string // travels in each request; the NodeID half of the DN+NodeID keyspace
-	certDir string
-	client  *http.Client
+	host   string // gateway host:port
+	nodeID string // travels in each request so the gateway can record and block by node
+	// identity travels in each request both so a blocklist entry naming one instance is enforceable
+	// on every call, not just on the heartbeat, and because it names the KEK to wrap under. It is
+	// empty until the first generate mints one; see instanceIdentity.
+	identity instanceIdentity
+	certDir  string
+	client   *http.Client
 	// mockAWS selects where the signed instance identity document attached to data-key
 	// requests comes from: a mock AWS session (true) or real AWS IMDS via tkutils/awssession
 	// (false). Threaded in now; the document is attached to requests in a later phase.
@@ -73,11 +82,14 @@ func newGatewayConnector(host, certDir, nodeID string, mockAWS bool) *gwConnecto
 		os.Exit(exitcodes.Usage)
 	}
 	if nodeID == "" {
-		// The gateway isolates filesystems by keyspace = DN + NodeID; an empty NodeID
-		// collapses that isolation. The mock connector rejects it for the same reason.
-		tlog.Fatal.Printf("gateway connector: NodeID is required; an empty NodeID defeats keyspace isolation")
+		// The gateway rejects a data-key call that omits it, and a blocklist entry naming a node
+		// cannot match a field never sent. The mock connector rejects it for its own reason: the
+		// NodeID names the mock's key store.
+		tlog.Fatal.Printf("gateway connector: NodeID is required")
 		os.Exit(exitcodes.Usage)
 	}
+	// The identity is not known yet: it lives in the key ring, which is loaded after the connector
+	// exists, and AdoptIdentity is how it arrives.
 	g := &gwConnector{
 		host:    host,
 		nodeID:  nodeID,
@@ -95,29 +107,9 @@ func newGatewayConnector(host, certDir, nodeID string, mockAWS bool) *gwConnecto
 // at construction and the client is never swapped afterward, so it needs no locking. All three
 // files (client cert, key, CA) must be present and the CA must be non-empty.
 func (g *gwConnector) load() error {
-	certPath := filepath.Join(g.certDir, gatewayCertFile)
-	keyPath := filepath.Join(g.certDir, gatewayKeyFile)
-	caPath := filepath.Join(g.certDir, gatewayCAFile)
-	certPEM, err := os.ReadFile(certPath)
+	tlsConfig, err := CertDirTLSConfig(g.certDir)
 	if err != nil {
-		return fmt.Errorf("reading gateway client cert: %w", err)
-	}
-	keyPEM, err := os.ReadFile(keyPath)
-	if err != nil {
-		return fmt.Errorf("reading gateway client key: %w", err)
-	}
-	caPEM, err := os.ReadFile(caPath)
-	if err != nil {
-		return fmt.Errorf("reading gateway CA: %w", err)
-	}
-	// Fail closed: an empty CA makes NewTLSConfigWithCert set InsecureSkipVerify, which
-	// would leave the gateway's server cert unverified (plan §5). Require a real CA.
-	if len(bytes.TrimSpace(caPEM)) == 0 {
-		return fmt.Errorf("gateway CA %s is empty", caPath)
-	}
-	tlsConfig, err := tlsutils.NewTLSConfigWithCert(keyPEM, certPEM, caPEM)
-	if err != nil {
-		return fmt.Errorf("building gateway TLS config: %w", err)
+		return err
 	}
 	g.client = &http.Client{
 		Timeout: gwHTTPTimeout,
@@ -132,6 +124,41 @@ func (g *gwConnector) load() error {
 	tlog.Debug.Printf("gateway connector: instance-identity source=%s",
 		map[bool]string{true: "mock", false: "AWS IMDS"}[g.mockAWS])
 	return nil
+}
+
+// CertDirTLSConfig builds the outbound mTLS config from the three files in -gateway-cert-dir:
+// tls.crt/tls.key is this instance's client certificate and ca.crt is RootCAs.
+//
+// An empty CA is refused: tlsutils reads an empty chain as "no trust configured" and sets
+// InsecureSkipVerify, which would leave the gateway unverified.
+func CertDirTLSConfig(certDir string) (*tls.Config, error) {
+	certPath := filepath.Join(certDir, gatewayCertFile)
+	keyPath := filepath.Join(certDir, gatewayKeyFile)
+	caPath := filepath.Join(certDir, gatewayCAFile)
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading TKFS cert: %w", err)
+	}
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading TKFS key: %w", err)
+	}
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading gateway CA: %w", err)
+	}
+	if len(bytes.TrimSpace(caPEM)) == 0 {
+		return nil, fmt.Errorf("gateway CA %s is empty", caPath)
+	}
+	cfg, err := tlsutils.NewTLSConfigWithCert(keyPEM, certPEM, caPEM)
+	if err != nil {
+		return nil, fmt.Errorf("building TLS config from %s: %w", certDir, err)
+	}
+	// Belt and braces against the above ever changing under us: neither role tolerates these.
+	if cfg.InsecureSkipVerify || cfg.ClientAuth != tls.RequireAndVerifyClientCert {
+		return nil, fmt.Errorf("TLS config from %s does not verify its peer", certDir)
+	}
+	return cfg, nil
 }
 
 // transportKemType identifies the transit-wrap algorithm sent on the wire as TransportAlg; the
@@ -169,8 +196,11 @@ func (g *gwConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	if err != nil {
 		return TKFSDataKey{}, fmt.Errorf("gateway generate: transport keygen: %w", err)
 	}
+	// An empty InstanceID asks the gateway to mint this filesystem's KEK; anything else asks for
+	// another data key under the KEK that id names.
 	req := model.TKFSDataKeyGenerateRequest{
 		NodeID:          g.nodeID,
+		InstanceID:      g.identity.get(),
 		TransportAlg:    uint16(transportKemType),
 		TransportPubKey: pubPEM,
 	}
@@ -183,6 +213,11 @@ func (g *gwConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	}
 	dek, err := unwrapTransit(k, out.TransitWrappedKey)
 	if err != nil {
+		return TKFSDataKey{}, fmt.Errorf("gateway generate: %w", err)
+	}
+	// On a mint this is where the filesystem learns who it is; on a rotation this is the check that
+	// the id we sent is the one that came back.
+	if err := g.identity.adopt(out.KeyID); err != nil {
 		return TKFSDataKey{}, fmt.Errorf("gateway generate: %w", err)
 	}
 	return TKFSDataKey{KeyID: out.KeyID, Plaintext: dek, Ciphertext: out.Ciphertext}, nil
@@ -214,6 +249,24 @@ func (g *gwConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]byte
 		return nil, fmt.Errorf("gateway unwrap: %w", err)
 	}
 	return dek, nil
+}
+
+func (g *gwConnector) Heartbeat(keyIdx uint16) (model.TKFSHeartbeatResponse, error) {
+	req := model.TKFSHeartbeatRequest{
+		NodeID:     g.nodeID,
+		InstanceID: g.identity.get(),
+		KeyIdx:     keyIdx,
+	}
+	var out model.TKFSHeartbeatResponse
+	if err := g.post(gatewayHeartbeatPath, req, &out); err != nil {
+		return model.TKFSHeartbeatResponse{}, err
+	}
+	return out, nil
+}
+
+// AdoptIdentity records the identity read out of this filesystem's key ring.
+func (g *gwConnector) AdoptIdentity(id string) error {
+	return g.identity.adopt(id)
 }
 
 // Close releases idle connections to the gateway.
@@ -250,8 +303,15 @@ func (g *gwConnector) post(path string, body, out any) error {
 		return fmt.Errorf("gateway %s: reading response: %w", path, err)
 	}
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return fmt.Errorf("gateway %s: not authorized (HTTP %d): cert DN is not in the ACL: %s", path, resp.StatusCode, bytes.TrimSpace(respBody))
+	case resp.StatusCode == http.StatusForbidden:
+		// A decision rather than an outage: the DN left the ACL, its CA was removed, or a
+		// blocklist entry names this instance. ErrDenied is what keeps the heartbeat from
+		// spending its failure budget retrying a refusal that will not change.
+		return fmt.Errorf("gateway %s: not authorized (HTTP 403): %w: %s", path, ErrDenied, bytes.TrimSpace(respBody))
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("gateway %s: not authorized (HTTP 401): %s", path, bytes.TrimSpace(respBody))
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotImplemented:
+		return fmt.Errorf("gateway %s: HTTP %d: %w: %s", path, resp.StatusCode, ErrNotImplemented, bytes.TrimSpace(respBody))
 	case resp.StatusCode < 200 || resp.StatusCode >= 300:
 		return fmt.Errorf("gateway %s: HTTP %d: %s", path, resp.StatusCode, bytes.TrimSpace(respBody))
 	}

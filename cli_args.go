@@ -57,6 +57,7 @@ type argContainer struct {
 	gatewayHost, gatewayCertDir string
 	nodeID                      string
 	mockAWS, mockKMS, isSearch  bool
+	rotateOpThreshold           int64
 }
 
 var flagSet *flag.FlagSet
@@ -191,6 +192,8 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.BoolVarP(&args.mockKMS, "mock-kms", "", false, "Use a mock gateway (bbolt-backed) for development, no key service required")
 	flagSet.BoolVarP(&args.isSearch, "search", "", false, "Use TrustedSearch as key provider")
 
+	flagSet.Int64Var(&args.rotateOpThreshold, "rotate-op-threshold", 0, "Encrypt operations under one data key before rotating to a fresh one. ")
+
 	// Mount options with opposites
 	flagSet.BoolVar(&args.dev, "dev", false, "Allow device files")
 	flagSet.BoolVar(&args.nodev, "nodev", false, "Deny device files")
@@ -254,6 +257,10 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	}
 	if args.idle < 0 {
 		tlog.Fatal.Printf("Idle timeout cannot be less than 0")
+		os.Exit(exitcodes.Usage)
+	}
+	if args.rotateOpThreshold < 0 {
+		tlog.Fatal.Printf("Rotate op threshold cannot be less than 0: automatic rotation cannot be disabled")
 		os.Exit(exitcodes.Usage)
 	}
 	// Make sure all badname patterns are valid

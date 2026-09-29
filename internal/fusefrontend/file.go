@@ -113,7 +113,7 @@ func (f *File) readFileID() ([]byte, uint16, error) {
 // Returns the new file ID and that key-ring index.
 // The caller must hold fileIDLock.Lock().
 func (f *File) createHeader() (fileID []byte, keyIdx uint16, err error) {
-	keyIdx = contentenc.WriteKeyIdx
+	keyIdx = f.rootNode.contentEnc.WriteKeyIdx()
 	h := contentenc.RandomHeader(keyIdx)
 	buf := h.Pack()
 	// Prevent partially written (=corrupt) header by preallocating the space beforehand

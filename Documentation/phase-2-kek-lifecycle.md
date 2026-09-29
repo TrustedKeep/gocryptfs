@@ -106,7 +106,8 @@ resolve the §13 open questions:
      flag are the same statement and must not mean different things (`resolveHealthCheckPort`).
      Round 4 corrected this — 0 initially meant "disable".
   9. **`Keyspace` DRY'd across repos** — the length-prefixed composition now has one definition,
-     `model.TKFSKeyspace(dn, nodeID)` in tkutils. gatehouse's local `tkfsKeyspace` and the client's
+     `model.TKFSKeyspace(dn, nodeID)` in tkutils (Phase 3 deleted the function; see phase-3 §12.7).
+     gatehouse's local `tkfsKeyspace` and the client's
      `tkc.Keyspace` (which nothing called) are gone. A drift between the two would have silently
      put a filesystem's KEK in a different keyspace than its unwraps were scoped to.
   10. **Dead code confirmed gone**: `tk_aead_{aes,cha,keys}.go` (per-block KMS key fetch keyed off
@@ -137,6 +138,8 @@ resolve the §13 open questions:
   the one file guaranteed to exist for the life of the filesystem; note that `flock` is advisory and
   conflicts only with another `flock()` on the same inode, so it blocks no ordinary I/O anywhere in
   the cipherdir, and it does **not** carry across hosts sharing storage (`-sharedstorage`).
+  *Superseded in Phase 3:* the flock and the adopt-the-winner re-load are gone; a mount holds a lock
+  for its whole life instead, and a second mount of the filesystem is refused (phase-3 §15.1).
 - **gocryptfs client — DONE, unit + integration green.** Envelope ripped, unified KEK crypto,
   `DataKeyConnector` rename, KeyRing init/startup, version bump 2→3, `Validate` gating. Key hygiene
   as built: the master key is zeroized immediately after `cryptocore.New` (`initFuseFrontend`), and
@@ -164,7 +167,10 @@ resolve the §13 open questions:
   directly; unwrap calls the **new** `TenantManager.KekUnwrapScoped(tenantID, keyspace, kekID, ct)`,
   which stands in for the bypassed MCSE ownership check by requiring the requested `KeyID` to be the
   KEK the claimed keyspace *currently owns* (and failing closed when it owns none) — no MCSE either
-  way. Also added `ServiceTKFS` to the `tcv/object_keywrap.go` MCSE bypass guard (both KekWrap +
+  way. (Superseded in Phase 3: a keyspace's ring retains every entry it has generated, so "currently
+  owns" would refuse all but one of them. `KekUnwrapScoped` now authorizes off a per-KEK ownership
+  record, and both were ultimately deleted: an instance's identity became the id of its KEK, so there is
+  nothing to resolve and nothing to own — see phase-3 §12.7.) Also added `ServiceTKFS` to the `tcv/object_keywrap.go` MCSE bypass guard (both KekWrap +
   KekUnwrap) for the default gateway path, and routed `ServiceTKFS` unwrap there to `KekUnwrapScoped`
   as well, so both the gateway and search paths get the scoping.
   **What the scoping does and does not buy** (recorded in `KekUnwrapScoped`'s SCOPE note and covered
@@ -172,10 +178,12 @@ resolve the §13 open questions:
   the keyspace — the tenant on the keep/search route, the DN on the gateway route. The `NodeID` half
   is self-asserted and lives in the same `gocryptfs.conf` as the `KeyID` and `Ciphertext`, so a
   caller holding a stolen config can replay the whole triple faithfully. This is **not**
-  per-filesystem isolation.
+  per-filesystem isolation. (Superseded in Phase 3: the DN left the keyspace entirely, so the tenant is
+  the only cert-derived boundary on either route — see phase-3 §12.7.)
 - **gatehouse — DONE.** `management/tkfsdatakey.go` handlers un-stubbed: DN via
   `tcutils.CertificatesToClientDN(r.TLS)`, keyspace via the shared length-prefixed
-  `model.TKFSKeyspace(dn, nodeID)` (see round 3 item 9) into `KekWrapRequest.Mount` /
+  `model.TKFSKeyspace(dn, nodeID)` (see round 3 item 9; Phase 3 deleted the function — `Mount` now carries
+  the id of the KEK to wrap under, empty to mint one) into `KekWrapRequest.Mount` /
   `KekUnwrapRequest.Mount`;
   `Service: ServiceTKFS`, `Creds: nil` (bypasses keep MCSE); tenantID = `config.Get().TenantID`
   (resolves open-Q2). It calls `oec.Get().KekWrap`/`KekUnwrap`, and keep routes the `ServiceTKFS`
@@ -335,7 +343,8 @@ stdlib cipher refs; see §5.
 
 Schema (as built, `internal/configfile/keyring.go` — the design put this in `config_file.go` and
 §0 round 2 moved it out): `KeyRing{Keys []KeyRingEntry}` in the `KR` file, with
-`KeyRingEntry{KeyID string, Ciphertext []byte, CreatedAt time.Time, OpCount uint64}`. `FlagGatewayKEK`
+`KeyRingEntry{KeyID string, Ciphertext []byte, CreatedAt time.Time, OpCount uint64}` (Phase 3 made an
+entry's ring index its position in `Keys`, and credits `OpCount` only on the active entry). `FlagGatewayKEK`
 was dropped (§0 round 3 item 3). The ring's read API is a single `Active()`, returning the **newest**
 entry and erroring only on an empty ring; writes always use the newest key, so it is also the only
 entry a new file header can name. An index-based accessor was tried and removed as unused — the read
@@ -480,7 +489,8 @@ key-store zeroize). `security.Memlock()` (`doMount`) already keeps the key out o
 (they were 501 stubs); no `StatusNotImplemented` remains in the file. The design below is what they do:
 - Parse the `model.TKFSDataKey*Request`; DN from the verified client cert (`auth.ParseCredentials`),
   `NodeID` from the body; keyspace = **DN + NodeID** (`tkc.Keyspace(dn, nodeID)` equivalent — mirror
-  gocryptfs `internal/tkc/gateway.go` `Keyspace`).
+  gocryptfs `internal/tkc/gateway.go` `Keyspace`). (Phase 3 removed the keyspace concept: `Mount` carries
+  the id of the KEK, which is the instance's identity; see phase-3 §12.7.)
 - generate: `resp := oec.Get().KekWrap(tenantID, &model.KekWrapRequest{... keyspace ...})` →
   `KekWrapResponse{Key, WrappedKey, WrapperID}` (Key = plaintext, WrappedKey = KEK-ciphertext,
   WrapperID = kek id). Transit-wrap `Key` to the request `TransportPubKey` → respond
@@ -494,7 +504,9 @@ key-store zeroize). `security.Memlock()` (`doMount`) already keeps the key out o
 - unwrap: `oec.Get().KekUnwrap(...)` → plaintext → transit-wrap → `TKFSDataKeyUnwrapResponse{TransitWrappedKey}`.
   The `Mount` (keyspace) sent here is load-bearing: keep routes `ServiceTKFS` unwrap on to
   `KekUnwrapScoped`, which only recovers the key if the requested `KeyID` is the KEK that keyspace
-  currently owns. That binds the cert-derived DN half; the `NodeID` half is self-asserted.
+  currently owns. That binds the cert-derived DN half; the `NodeID` half is self-asserted. (Phase 3
+  replaced "currently owns" with a per-KEK ownership record, then deleted that too once the identity became
+  the KEK's own id; what is enforced now is that the KEK is a TKFS one — see phase-3 §12.7.)
 - Zeroize plaintext after wrapping. Add real handler tests (round-trip via the mock oec/keep if one
   exists; else httptest against a fake oec).
 

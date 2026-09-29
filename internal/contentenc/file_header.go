@@ -35,14 +35,10 @@ const (
 // FileHeader represents the header stored on each non-empty file.
 type FileHeader struct {
 	Version uint16
-	// KeyIdx selects the key-ring entry this file's content is encrypted under. Phase 2 has a
-	// single-entry ring so it is always 0; Phase-3 rotation appends entries and stamps the
-	// index of the then-active key into each new file's header, which is what lets old files
-	// stay readable under the key they were written with.
-	//
-	// It is deliberately outside the AAD: the AEAD tag already binds the key that was used, so
-	// authenticating the selector would add nothing — a flipped KeyIdx fails authentication
-	// either way, exactly like a flipped Version.
+	// KeyIdx selects the key-ring entry this file's content is encrypted under. Rotation
+	// appends entries and stamps the index of the then-active key into each new file's
+	// header, which is what lets old files stay readable under the key they were written
+	// with.
 	KeyIdx uint16
 	ID     []byte
 }

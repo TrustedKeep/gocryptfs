@@ -2,52 +2,57 @@ package configfile
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 )
 
-// KeyRingFileName is the name of the file that holds the key ring, next to gocryptfs.conf.
-//
-// The key material lives here rather than in gocryptfs.conf so that the config stays a
-// static, human-editable description of the filesystem that no mount ever rewrites, and the
-// one file that does get rewritten (on first mount, and on rotation in Phase 3) holds nothing
-// but ciphertext.
+// KeyRingFileName is the key ring's file, next to gocryptfs.conf.
 const KeyRingFileName = "KR"
 
-// KeyRingEntry is one gateway-wrapped master key.
+// KeyRingTmpFileName is the staging file renamed over the ring on every write. Anything that lists
+// the ring's directory has to know it.
+const KeyRingTmpFileName = KeyRingFileName + ".tmp"
+
+// KeyRingEntry is one gateway-wrapped master key. Its ring index, stamped into everything encrypted
+// under it, is its position in KeyRing.Keys.
 type KeyRingEntry struct {
-	// KeyID identifies the gateway wrapping-key generation, passed back on unwrap.
+	// KeyID is the gateway KEK the Ciphertext is wrapped under, the same on every entry. It is also
+	// the filesystem's InstanceID, so editing it names a different KEK or none.
 	KeyID string
-	// Ciphertext is the gateway-wrapped master key (base64-encoded in JSON).
+	// Ciphertext is the gateway-wrapped master key.
 	Ciphertext []byte
 	// CreatedAt records when this key was appended to the ring.
 	CreatedAt time.Time
-	// OpCount is the persisted per-key encrypt-op counter that drives auto-rotation.
+	// OpCount is the persisted encrypt-op count that drives auto-rotation. Only the active entry's grows.
 	OpCount uint64 `json:",omitempty"`
 }
 
-// KeyRing is the on-disk key ring. Ciphertext only — the plaintext keys are unwrapped at
-// mount and held in memory. Ordered; the newest entry is the active write key.
+// KeyRing is the on-disk key ring, ciphertext only. The newest entry is the active write key.
 type KeyRing struct {
-	Keys []KeyRingEntry
-	// filename is the path this ring was loaded from / will be written to. Not exported to JSON.
+	Keys     []KeyRingEntry
 	filename string
 }
 
-// keyRingPath derives the key-ring path from the config path. There is exactly one possible
-// location — next to gocryptfs.conf — so callers pass the config path they already have and
-// cannot name a ring belonging to some other filesystem.
+// InstanceID is the filesystem's identity: the KEK id its entries share, or "" before the first generate.
+func (kr *KeyRing) InstanceID() string {
+	if len(kr.Keys) == 0 {
+		return ""
+	}
+	return kr.Keys[len(kr.Keys)-1].KeyID
+}
+
 func keyRingPath(confPath string) string {
 	return filepath.Join(filepath.Dir(confPath), KeyRingFileName)
 }
 
-// LoadKeyRing loads the key ring belonging to the config file at "confPath". A missing ring is
-// not an error: it is the freshly-initialized state, and yields an empty ring the first mount
-// will populate.
+// LoadKeyRing loads the key ring beside the config at "confPath". A missing ring is a fresh
+// filesystem and loads empty.
 func LoadKeyRing(confPath string) (*KeyRing, error) {
 	filename := keyRingPath(confPath)
 	kr := &KeyRing{filename: filename}
@@ -59,25 +64,21 @@ func LoadKeyRing(confPath string) (*KeyRing, error) {
 		return nil, exitcodes.NewErr(err.Error(), exitcodes.OpenConf)
 	}
 	if len(js) == 0 {
-		// Distinct from "absent": a zero-length ring is a truncated write, not a fresh
-		// filesystem, and treating it as fresh would regenerate over existing data.
+		// A truncated write, not a fresh filesystem: treating it as fresh would generate over existing data.
 		return nil, exitcodes.NewErr(fmt.Sprintf("key ring file %q is empty", filename), exitcodes.LoadConf)
 	}
 	if err := json.Unmarshal(js, kr); err != nil {
 		return nil, exitcodes.NewErr(fmt.Sprintf("failed to parse key ring %q: %v", filename, err), exitcodes.LoadConf)
 	}
 	if err := kr.Validate(); err != nil {
-		// Attach the code here rather than inside Validate: this is the path where the ring came
-		// off disk, so a bad entry is a malformed file. Without the wrap, exitcodes.Exit sees a
-		// plain error and falls back to Other, which tells the operator nothing.
+		// Off disk, a bad entry is a malformed file.
 		return nil, exitcodes.NewErr(err.Error(), exitcodes.LoadConf)
 	}
 	return kr, nil
 }
 
-// Validate checks that every entry carries the material needed to recover its key. It stays a plain
-// predicate: the caller knows whether a bad entry means a malformed file on disk (LoadKeyRing) or a
-// ring this process built wrong (WriteFile), and attaches the exit code accordingly.
+// Validate checks that every entry can be recovered and that the ring names one KEK. The caller
+// attaches the exit code.
 func (kr *KeyRing) Validate() error {
 	for i, e := range kr.Keys {
 		if e.KeyID == "" {
@@ -86,34 +87,92 @@ func (kr *KeyRing) Validate() error {
 		if len(e.Ciphertext) == 0 {
 			return fmt.Errorf("key ring entry %d has an empty Ciphertext", i)
 		}
+		if e.KeyID != kr.Keys[0].KeyID {
+			return fmt.Errorf("key ring entry %d is wrapped under KEK %q but entry 0 is under %q; a ring names one KEK",
+				i, e.KeyID, kr.Keys[0].KeyID)
+		}
 	}
 	return nil
 }
 
-// Active returns the newest entry, which is the one new content is encrypted under. Reads will
-// need to reach the older entries once Phase-3 rotation retains them; until then the ring holds a
-// single key and this is the whole of its read API.
+// Active returns the newest entry, the one new content is written under.
 func (kr *KeyRing) Active() (KeyRingEntry, error) {
-	if len(kr.Keys) == 0 {
-		return KeyRingEntry{}, fmt.Errorf("key ring is empty (no data key has been generated yet)")
+	idx, err := kr.ActiveIdx()
+	if err != nil {
+		return KeyRingEntry{}, err
 	}
-	return kr.Keys[len(kr.Keys)-1], nil
+	return kr.Keys[idx], nil
 }
 
-// WriteFile atomically replaces the key-ring file. The first mount encrypts data under this key
-// immediately afterwards, so a partial or lost write would leave that data unrecoverable.
+// ActiveIdx returns the index new data is stamped with.
+func (kr *KeyRing) ActiveIdx() (uint16, error) {
+	if len(kr.Keys) == 0 {
+		return 0, fmt.Errorf("key ring is empty (no data key has been generated yet)")
+	}
+	return uint16(len(kr.Keys) - 1), nil
+}
+
+// All returns every entry, oldest first.
+func (kr *KeyRing) All() []KeyRingEntry {
+	return kr.Keys
+}
+
+// Append adds e as the active entry and returns its ring index. Indices are positions stamped on
+// disk, so entries are never removed or reordered.
+func (kr *KeyRing) Append(e KeyRingEntry) uint16 {
+	kr.Keys = append(kr.Keys, e)
+	return uint16(len(kr.Keys) - 1)
+}
+
+// AddOpCount credits delta to the active entry and reports whether anything changed.
+func (kr *KeyRing) AddOpCount(delta uint64) bool {
+	if delta == 0 || len(kr.Keys) == 0 {
+		return false
+	}
+	kr.Keys[len(kr.Keys)-1].OpCount += delta
+	return true
+}
+
+// WriteFile atomically replaces the key-ring file. A tmp file left by a killed write is cleared
+// first, or it would fail the exclusive create forever.
 func (kr *KeyRing) WriteFile() error {
 	if err := kr.Validate(); err != nil {
 		return err
 	}
+	os.Remove(filepath.Join(filepath.Dir(kr.filename), KeyRingTmpFileName))
 	return writeJSONAtomic(kr.filename, kr)
 }
 
-// WriteFileUnderLock is WriteFile for a caller holding the filesystem's exclusive lock (see
-// generateInitialDataKey). It first clears a tmp file left behind by a crashed earlier attempt,
-// which would otherwise fail the exclusive create forever. That is only safe because the lock
-// means nobody else can be mid-write — do not call it without one.
-func (kr *KeyRing) WriteFileUnderLock() error {
-	os.Remove(kr.filename + ".tmp")
-	return kr.WriteFile()
+// ErrKeyRingInUse means another process holds the key-ring lock.
+var ErrKeyRingInUse = errors.New("the key ring is in use by another process")
+
+// LockKeyRing makes this process the key ring's only user for as long as the returned file stays open,
+// waiting up to "wait" for a holder that has unmounted but not yet exited. The lock is on the ring's
+// directory because the ring itself is replaced by rename.
+func LockKeyRing(confPath string, wait time.Duration) (*os.File, error) {
+	f, err := os.Open(filepath.Dir(keyRingPath(confPath)))
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if !errors.Is(err, syscall.EWOULDBLOCK) || !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err == nil {
+		return f, nil
+	}
+	f.Close()
+	if errors.Is(err, syscall.EWOULDBLOCK) {
+		return nil, ErrKeyRingInUse
+	}
+	return nil, err
+}
+
+// Remove deletes the key-ring file, for a first mount undoing itself before anything is encrypted.
+func (kr *KeyRing) Remove() error {
+	return os.Remove(kr.filename)
 }

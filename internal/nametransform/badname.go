@@ -20,10 +20,10 @@ const (
 // EncryptAndHashBadName tries to find the "name" substring, which (encrypted and hashed)
 // leads to an unique existing file
 // Returns ENOENT if cipher file does not exist or is not unique
-func (be *NameTransform) EncryptAndHashBadName(name string, iv []byte, dirfd int) (cName string, err error) {
+func (be *NameTransform) EncryptAndHashBadName(name string, iv []byte, keyIdx uint16, dirfd int) (cName string, err error) {
 	var st unix.Stat_t
 	var filesFound int
-	lastFoundName, err := be.EncryptAndHashName(name, iv)
+	lastFoundName, err := be.EncryptAndHashName(name, iv, keyIdx)
 	if !strings.HasSuffix(name, BadnameSuffix) || err != nil {
 		//Default mode: same behaviour on error or no BadNameFlag on "name"
 		return lastFoundName, err
@@ -43,7 +43,7 @@ func (be *NameTransform) EncryptAndHashBadName(name string, iv []byte, dirfd int
 	// search for the longest badname pattern match
 	for charpos := len(name) - len(BadnameSuffix); charpos > 0; charpos-- {
 		//only use original cipher name and append assumed suffix (without badname flag)
-		cNamePart, err := be.EncryptName(name[:charpos], iv)
+		cNamePart, err := be.EncryptName(name[:charpos], iv, keyIdx)
 		if err != nil {
 			//expand suffix on error
 			continue
@@ -65,7 +65,7 @@ func (be *NameTransform) EncryptAndHashBadName(name string, iv []byte, dirfd int
 	return "", syscall.ENOENT
 }
 
-func (n *NameTransform) decryptBadname(cipherName string, iv []byte) (string, error) {
+func (n *NameTransform) decryptBadname(cipherName string, iv []byte, keyIdx uint16) (string, error) {
 	for _, pattern := range n.badnamePatterns {
 		match, err := filepath.Match(pattern, cipherName)
 		// Pattern should have been validated already
@@ -74,7 +74,7 @@ func (n *NameTransform) decryptBadname(cipherName string, iv []byte) (string, er
 			// At least 16 bytes due to AES --> at least 22 characters in base64
 			nameMin := n.B64.EncodedLen(aes.BlockSize)
 			for charpos := len(cipherName) - 1; charpos >= nameMin; charpos-- {
-				res, err := n.decryptName(cipherName[:charpos], iv)
+				res, err := n.decryptName(cipherName[:charpos], iv, keyIdx)
 				if err == nil {
 					return res + cipherName[charpos:] + BadnameSuffix, nil
 				}

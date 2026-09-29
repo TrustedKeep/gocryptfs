@@ -1,6 +1,6 @@
-// Package tkfs_kek holds end-to-end integration tests for the TKFS Phase-2 KEK data-key
-// lifecycle, driven through the real gocryptfs binary and real FUSE mounts. They use the
-// in-process mock gateway (-mock-kms) so no live key service is required.
+// Package tkfs_kek holds end-to-end integration tests for the TKFS KEK data-key lifecycle and key
+// rotation, driven through the real gocryptfs binary and real FUSE mounts. They use the in-process
+// mock gateway (-mock-kms) so no live key service is required.
 package tkfs_kek
 
 import (
@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
+	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
 
@@ -125,6 +126,7 @@ type parsedKeyRing struct {
 	Keys []struct {
 		KeyID      string
 		Ciphertext []byte
+		OpCount    uint64
 	}
 }
 
@@ -212,7 +214,8 @@ func TestKeyRingFileHiddenFromMount(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if e.Name() == configfile.KeyRingFileName || e.Name() == configfile.ConfDefaultName {
+		switch e.Name() {
+		case configfile.KeyRingFileName, configfile.KeyRingTmpFileName, configfile.ConfDefaultName:
 			t.Errorf("%q is visible inside the mount", e.Name())
 		}
 	}
@@ -282,4 +285,26 @@ func TestKEKRefusesGenerateOverExistingData(t *testing.T) {
 	}
 	test_helpers.MountOrFatal(t, cDir, pDir, "-mock-kms", "-extpass=echo test")
 	test_helpers.UnmountPanic(pDir)
+}
+
+// A second mount of a mounted filesystem is refused, whether it is a first mount racing to generate
+// or a later one.
+func TestSecondMountIsRefused(t *testing.T) {
+	cDir := test_helpers.InitFS(t, "-mock-kms")
+	pDir := cDir + ".mnt"
+	pDir2 := cDir + ".mnt2"
+	if err := os.Mkdir(pDir2, 0700); err != nil {
+		t.Fatal(err)
+	}
+	test_helpers.MountOrFatal(t, cDir, pDir, "-mock-kms", "-extpass=echo test")
+	defer test_helpers.UnmountPanic(pDir)
+
+	err := test_helpers.Mount(cDir, pDir2, false, "-mock-kms", "-extpass=echo test")
+	if err == nil {
+		test_helpers.UnmountPanic(pDir2)
+		t.Fatal("second mount of a mounted filesystem must be refused")
+	}
+	if code := test_helpers.ExtractCmdExitCode(err); code != exitcodes.AlreadyMounted {
+		t.Errorf("exit code = %d, want %d", code, exitcodes.AlreadyMounted)
+	}
 }

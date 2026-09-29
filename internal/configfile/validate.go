@@ -25,6 +25,13 @@ func (cf *ConfFile) Validate() error {
 				cf.Version, contentenc.CurrentVersion),
 			exitcodes.DeprecatedFS)
 	}
+	// NodeID is minted at -init and has no defensible default: it is reported on every data-key call
+	// and heartbeat, and a blocklist entry naming a node cannot match a field that is never sent. The
+	// InstanceID is deliberately NOT checked here — it is not a config field at all, but the KeyID the
+	// key ring carries, so a filesystem that has never mounted legitimately has none yet.
+	if cf.NodeID == "" {
+		return badConf("NodeID is missing")
+	}
 	// All feature flags that are in the config file are known?
 	for _, flag := range cf.FeatureFlags {
 		if !isFeatureFlagKnown(flag) {

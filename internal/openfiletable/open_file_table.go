@@ -50,7 +50,7 @@ type Entry struct {
 	IDLock sync.Mutex
 	// KeyIdx is the key-ring index from this file's header, cached alongside ID so the
 	// content path does not re-read the header per request. Covered by IDLock, and only
-	// meaningful once ID is non-nil. Always 0 until Phase-3 rotation.
+	// meaningful once ID is non-nil.
 	KeyIdx uint16
 }
 

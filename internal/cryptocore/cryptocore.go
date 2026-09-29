@@ -147,17 +147,8 @@ func New(key []byte, aeadType AEADTypeEnum, IVBitLen int) *CryptoCore {
 	}
 }
 
-type wiper interface {
-	Wipe()
-}
-
-// Wipe tries to wipe secret keys from memory by overwriting them with zeros
-// and/or setting references to nil.
-//
-// This is not bulletproof due to possible GC copies, but
-// still raises to bar for extracting the key.
+// Wipe drops the references to the ciphers and forces a GC.
 func (c *CryptoCore) Wipe() {
-	//this is probs just gonna be current change
 	tlog.Debug.Printf("CryptoCore.Wipe: Only nil'ing stdlib refs")
 	// We have no access to the keys (or key-equivalents) stored inside the
 	// Go stdlib. Best we can is to nil the references and force a GC.

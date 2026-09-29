@@ -1,6 +1,7 @@
 package contentenc
 
 import (
+	"crypto/cipher"
 	"testing"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
@@ -29,7 +30,7 @@ func TestSplitRange(t *testing.T) {
 		testRange{6654, 8945})
 
 	cc := newTestCore()
-	f := New(cc, DefaultBS)
+	f := New(cc, []cipher.AEAD{cc.AEADCipher}, DefaultBS)
 
 	for _, r := range ranges {
 		parts := f.ExplodePlainRange(r.offset, r.length)
@@ -56,7 +57,7 @@ func TestCiphertextRange(t *testing.T) {
 		testRange{6654, 8945})
 
 	cc := newTestCore()
-	f := New(cc, DefaultBS)
+	f := New(cc, []cipher.AEAD{cc.AEADCipher}, DefaultBS)
 
 	for _, r := range ranges {
 
@@ -78,7 +79,7 @@ func TestCiphertextRange(t *testing.T) {
 
 func TestBlockNo(t *testing.T) {
 	cc := newTestCore()
-	f := New(cc, DefaultBS)
+	f := New(cc, []cipher.AEAD{cc.AEADCipher}, DefaultBS)
 
 	b := f.CipherOffToBlockNo(788)
 	if b != 0 {

@@ -106,12 +106,19 @@ secure with deterministic nonces as used in "-reverse" mode.
 Run `gocryptfs -speed` to find out if and how much slower.
 
 #### -deterministic-names
-Disable file name randomisation and creation of `gocryptfs.diriv` files.
-This can prevent sync conflicts when synchronising files, but
-leaks information about identical file names across directories
+Disable file name randomisation. This can prevent sync conflicts when
+synchronising files, but leaks information about identical file names across
+directories
 ("Identical names leak" in https://nuetzlich.net/gocryptfs/comparison/#file-names ).
 
-The resulting `gocryptfs.conf` has "DirIV" missing from "FeatureFlags".
+`gocryptfs.diriv` files are still created, with an all-zero IV instead of a random one.
+The file also carries the key-ring index of the key that directory's names are encrypted
+under, which is what lets key rotation apply to filenames, so it cannot be omitted. As a
+consequence the leak is bounded by the key: after a rotation, the same plaintext name in
+two directories created under different keys encrypts to two different ciphertext names.
+
+The resulting `gocryptfs.conf` has "DirIV" missing from "FeatureFlags", which now means
+"the IV is fixed-zero" rather than "no diriv files exist".
 
 #### -devrandom
 Obsolete and ignored on gocryptfs v2.2 and later.
@@ -221,7 +228,11 @@ Only works when mounting as root, otherwise you get this error from fusermount3:
 
 #### -ctlsock string
 Create a control socket at the specified location. The socket can be
-used to decrypt and encrypt paths inside the filesystem. When using
+used to decrypt and encrypt paths inside the filesystem, and to trigger
+a key rotation (send `{"Rotate": true}`; the reply carries the new
+`KeyIdx`; refused on a "-ro" mount), and to ask which key-ring indices this mount could not unwrap
+(send `{"Status": true}`; the reply carries `KeyHoles`, and everything
+written under one of those indices fails with EIO until a remount). When using
 this option, make sure that the directory you place the socket in is
 not world-accessible. For example, `/run/user/UID/my.socket` would
 be suitable.
@@ -305,7 +316,7 @@ Enable fuse library debug output.
 Serve an HTTP liveness endpoint on this port (default 8000); any request gets
 200 OK once the filesystem is mounted and ready. **The mount fails if the port
 cannot be bound**, because a mount nobody can probe is invisible to whatever is
-supervising it, and the usual cause is a second mount colliding with the first.
+supervising it, and the usual cause is another mount on the same host holding it.
 
 0 means unset and uses the default, exactly as if the flag were absent. Pass a
 **negative** value to disable the endpoint, which is what you want when stacking
@@ -397,6 +408,29 @@ Only applicable to reverse mode.
 
 Limitation: Mounted single files (yes this is possible) are NOT hidden.
 
+#### -rotate-op-threshold int
+Encrypt operations under one data key before the mount rotates to a fresh one
+(default 1073741824, i.e. 2^30, which is roughly 4.4 TB at the default 4 KiB
+block size). The count is persisted in the key ring against the active entry, so
+it spans mounts rather than restarting with each one. It is checked on the
+heartbeat timer, and flushed once more at unmount so a mount shorter than one
+interval still contributes what it spent; that final flush never rotates.
+
+Only writes under the *current* key are counted. Rotation is additive — a new
+key is appended to the ring, subsequent writes use it, and nothing already
+written is re-encrypted — so a file created before a rotation keeps writing under
+its original key, which no later rotation can bound.
+
+0 means unset and uses the default; there is no value that disables automatic
+rotation, and a negative one is a usage error. `-ro` suppresses it, because a
+read-only mount performs no encrypt operations and may not write the cipherdir.
+
+**Failing to keep the count ends the mount** (**exit code 34**) rather than
+carrying on under a key whose budget nothing can account for: either the counter
+could not be persisted, or the threshold was crossed and the rotation failed. The
+usual causes are an unreachable gateway — which the heartbeat would end the mount
+over in any case — and an unwritable cipherdir.
+
 #### -rw, -ro
 Mount the filesystem read-write (`-rw`, default) or read-only (`-ro`).
 If both are specified, `-ro` takes precedence.
@@ -444,6 +478,9 @@ Even with this flag set, you may hit occasional problems. Running
 gocryptfs on shared storage does not receive as much testing as the
 usual (exclusive) use-case. Please test your workload in advance
 and report any problems you may hit.
+
+It does not permit a second mount of a mounted filesystem: its key ring has one
+writer, so a second mount on the same host is refused (exit code 32).
 
 More info: https://github.com/rfjakob/gocryptfs/issues/156
 
@@ -763,6 +800,50 @@ ENVIRONMENT VARIABLES
 
 If `NO_COLOR` is set (regardless of value), colored output is disabled (see https://no-color.org/).
 
+KEY-SERVICE HEARTBEAT
+=====================
+
+A mount reports itself to its key service every five minutes — the
+TrustedGateway by default, keep directly under `-search`. The heartbeat
+registers the instance and the key-ring index it is writing under, carries back
+any rekey an operator has asked for, is how the key service tells it that its
+authorization is gone, and is what paces the `-rotate-op-threshold` counter
+flush. The interval is not configurable: it sets the window a revoked instance
+can keep serving for, and that is not a knob.
+
+**Rekeying is pulled, not pushed.** An operator asks the gateway; the gateway
+records the request against the index the instance last reported; the instance
+collects it on its next heartbeat, rotates, and reports the new index. That
+higher index is the acknowledgement — there is no separate one, and nothing
+dials the mount, which therefore listens on no inbound port for this. A rekey
+that arrives while the instance is down is collected when it returns. A rotation
+that fails ends the mount (**exit code 34**) rather than leaving it writing under
+a key it was told to stop using. `-ro` suppresses the rotation, as it does the
+op counter's, and the request stays pending for a writable mount.
+
+**The first heartbeat is sent before anything is mounted.** A key service that
+refuses it, cannot be reached, asks the instance to shut down, or does not
+implement the route at all fails the mount outright (**exit code 33**), with no
+mountpoint ever attached. A key service that cannot answer a heartbeat cannot
+revoke this instance either, so it does not get to serve one.
+
+Once mounted, a refusal — the DN removed from the ACL, its CA removed, a
+blocklist entry naming it, an explicit shutdown directive, or the route
+disappearing under a running mount — ends the mount on the heartbeat that
+carries it. Merely *failing to reach* the key service is survivable twice, and
+the third consecutive failure ends it too. A heartbeat the key service answers
+but cannot record counts as one of those failures, not as a success: revocation
+acts through that record, so a mount missing from it is one nobody can stop.
+
+Either way the mount ends the same way, and it is not abortable: a clean
+unmount is attempted, a busy mountpoint gets ten seconds and one more try, and
+the process then exits (**exit code 33**) regardless, at worst leaving a dead
+mountpoint. Whether a filesystem outlives its key service does not depend on
+whether someone has a file open in it.
+
+`-mock-kms` is the one mount with no heartbeat, and so neither revocation nor
+rekeying.
+
 EXIT CODES
 ==========
 
@@ -774,6 +855,10 @@ EXIT CODES
 23: could not read gocryptfs.conf  
 24: could not write gocryptfs.conf (on "-init" or "-password")  
 26: fsck found errors  
+31: the health-check port could not be bound  
+32: the filesystem is already mounted by another gocryptfs process  
+33: the key service withdrew this instance's authorization, told it to shut down, or would not answer a heartbeat  
+34: the key operation counter could not be persisted, or a rotation failed — the op threshold's or a rekey's  
 other: please check the error message
 
 See also: https://github.com/rfjakob/gocryptfs/blob/master/internal/exitcodes/exitcodes.go

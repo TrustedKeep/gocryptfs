@@ -22,7 +22,7 @@ import (
 var testPw = []byte("test")
 
 func TestMain(m *testing.M) {
-	test_helpers.ResetTmpDir(false)
+	test_helpers.ResetTmpDir()
 	before := test_helpers.ListFds(0, "")
 	r := m.Run()
 	after := test_helpers.ListFds(0, "")

@@ -5,13 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/google/uuid"
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
-	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
-	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
@@ -45,9 +42,10 @@ func isDir(dir string) error {
 }
 
 // initDir handles "gocryptfs -init". It prepares a directory for use as a gocryptfs storage
-// directory: the cipherdir must be empty, and it creates gocryptfs.conf plus gocryptfs.diriv.
-// It does not contact the key service and writes no key ring: the first mount generates the
-// data key and creates the key-ring file (mount.go).
+// directory: the cipherdir must be empty, and it creates gocryptfs.conf. It does not contact the
+// key service and writes no key ring: the first mount generates the data key, creates the
+// key-ring file and — because the root gocryptfs.diriv has to name the key its filenames use —
+// writes that too (mount.go).
 func initDir(args *argContainer) {
 	err := isEmptyDir(args.cipherdir)
 	if err != nil {
@@ -55,8 +53,7 @@ func initDir(args *argContainer) {
 		os.Exit(exitcodes.CipherDir)
 	}
 
-	// Resolve the NodeID once and persist it: every mount reads it back from the config, so
-	// the first mount's generate and all later unwraps happen in the same keyspace. Minting
+	// Resolve the NodeID once and persist it: every mount reads it back from the config, Minting
 	// it here — not inside configfile.Create — keeps the value visible to initDir.
 	nodeID := args.nodeID
 	if nodeID == "" {
@@ -78,20 +75,6 @@ func initDir(args *argContainer) {
 	if err != nil {
 		tlog.Fatal.Println(err)
 		os.Exit(exitcodes.WriteConf)
-	}
-	// Forward mode with filename encryption enabled needs a gocryptfs.diriv file
-	// in the root dir
-	if !args.plaintextnames && !args.deterministic_names {
-		// Open cipherdir (following symlinks)
-		dirfd, err := syscall.Open(args.cipherdir, syscall.O_DIRECTORY|syscallcompat.O_PATH, 0)
-		if err == nil {
-			err = nametransform.WriteDirIVAt(dirfd)
-			syscall.Close(dirfd)
-		}
-		if err != nil {
-			tlog.Fatal.Println(err)
-			os.Exit(exitcodes.Init)
-		}
 	}
 	mountArgs := ""
 	fsName := "gocryptfs"
