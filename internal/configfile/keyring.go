@@ -27,7 +27,7 @@ type KeyRingEntry struct {
 	KeyID string
 	// Ciphertext is the gateway-wrapped master key.
 	Ciphertext []byte
-	// CreatedAt records when this key was appended to the ring.
+	// CreatedAt is the key service's time for this key, which the heartbeat reports for the active entry.
 	CreatedAt time.Time
 	// OpCount is the persisted encrypt-op count that drives auto-rotation. Only the active entry's grows.
 	OpCount uint64 `json:",omitempty"`

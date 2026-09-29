@@ -344,7 +344,8 @@ stdlib cipher refs; see §5.
 Schema (as built, `internal/configfile/keyring.go` — the design put this in `config_file.go` and
 §0 round 2 moved it out): `KeyRing{Keys []KeyRingEntry}` in the `KR` file, with
 `KeyRingEntry{KeyID string, Ciphertext []byte, CreatedAt time.Time, OpCount uint64}` (Phase 3 made an
-entry's ring index its position in `Keys`, and credits `OpCount` only on the active entry). `FlagGatewayKEK`
+entry's ring index its position in `Keys`, credits `OpCount` only on the active entry, and takes
+`CreatedAt` from the key service's generate response rather than the local clock). `FlagGatewayKEK`
 was dropped (§0 round 3 item 3). The ring's read API is a single `Active()`, returning the **newest**
 entry and erroring only on an empty ring; writes always use the newest key, so it is also the only
 entry a new file header can name. An index-based accessor was tried and removed as unused — the read
@@ -447,6 +448,8 @@ key-store zeroize). `security.Memlock()` (`doMount`) already keeps the key out o
   (`NodeID`, `TransportAlg`, `TransportPubKey`) + header `kmsclient.HeaderTenantToken: token` → decode
   `TKFSDataKeyGenerateResponse` → `unwrapTransit(TransitWrappedKey)` → `TKFSDataKey{KeyID, Plaintext,
   Ciphertext}`. Retry across `kmsHosts` (mirror the old `fetchKey` host-shuffle loop).
+  *Phase 3 adds keep's `CreatedAt` stamp to the generate response and to `TKFSDataKey`, here and on
+  the gateway route below (phase-3 §12.4).*
 - `UnwrapTKFSDataKey`: POST `.../tenantdatakey/unwrap` with `TKFSDataKeyUnwrapRequest` →
   `unwrapTransit`. `Close()`: `CloseIdleConnections()`.
 - The keyspace for search: keep derives the **tenant** from the client-cert `StreetAddress`; the

@@ -12,9 +12,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/TrustedKeep/tkutils/v2/model"
 )
+
+// testCreatedAt is a key service's stamp no local clock would produce.
+var testCreatedAt = time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
 
 // wrapForTransport is the gateway side of the transit wrap in this test's fake server. It delegates to
 // the shared model.TransitWrap so the test drives the exact production transit path (RSA-OAEP, the
@@ -51,7 +55,7 @@ func TestGatewayConnectorGenerateUnwrap(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(model.TKFSDataKeyGenerateResponse{KeyID: "key-1", Ciphertext: ciphertext, TransitWrappedKey: wrapped})
+			_ = json.NewEncoder(w).Encode(model.TKFSDataKeyGenerateResponse{KeyID: "key-1", Ciphertext: ciphertext, TransitWrappedKey: wrapped, CreatedAt: testCreatedAt})
 		case gatewayUnwrapPath:
 			_ = json.NewDecoder(r.Body).Decode(&unwReq)
 			wrapped, err := wrapForTransport(unwReq.TransportAlg, unwReq.TransportPubKey, master)
@@ -74,6 +78,9 @@ func TestGatewayConnectorGenerateUnwrap(t *testing.T) {
 	}
 	if dk.KeyID != "key-1" || !bytes.Equal(dk.Plaintext, master) || !bytes.Equal(dk.Ciphertext, ciphertext) {
 		t.Fatalf("unexpected data key: %+v", dk)
+	}
+	if !dk.CreatedAt.Equal(testCreatedAt) {
+		t.Errorf("CreatedAt = %v, want the key service's %v", dk.CreatedAt, testCreatedAt)
 	}
 	if genReq.NodeID != "node-1" {
 		t.Errorf("generate request NodeID = %q, want node-1", genReq.NodeID)
@@ -119,7 +126,7 @@ func TestGatewayConnectorNoPlaintextOnWire(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		respBody, _ = json.Marshal(model.TKFSDataKeyGenerateResponse{KeyID: "key-1", Ciphertext: ciphertext, TransitWrappedKey: wrapped})
+		respBody, _ = json.Marshal(model.TKFSDataKeyGenerateResponse{KeyID: "key-1", Ciphertext: ciphertext, TransitWrappedKey: wrapped, CreatedAt: testCreatedAt})
 		_, _ = w.Write(respBody)
 	}))
 	defer ts.Close()
@@ -236,23 +243,23 @@ func TestGatewayConnectorHeartbeat(t *testing.T) {
 	g := newTestGWConnector(ts, "node-1")
 	g.identity.adopt("instance-1")
 
-	resp, err := g.Heartbeat(7)
+	resp, err := g.Heartbeat(7, testCreatedAt)
 	if err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
-	if got.NodeID != "node-1" || got.InstanceID != "instance-1" || got.KeyIdx != 7 {
-		t.Errorf("request = %+v, want the node, instance and key-ring index", got)
+	if got.NodeID != "node-1" || got.InstanceID != "instance-1" || got.KeyIdx != 7 || !got.KeyCreatedAt.Equal(testCreatedAt) {
+		t.Errorf("request = %+v, want the node, instance, key-ring index and key stamp", got)
 	}
 	if resp.Command != model.TKFSCommandRekey {
 		t.Errorf("response = %+v, want the command passed through", resp)
 	}
 
 	status = http.StatusForbidden
-	if _, err := g.Heartbeat(0); !errors.Is(err, ErrDenied) {
+	if _, err := g.Heartbeat(0, testCreatedAt); !errors.Is(err, ErrDenied) {
 		t.Errorf("403 error = %v, want one wrapping ErrDenied", err)
 	}
 	status = http.StatusServiceUnavailable
-	if _, err := g.Heartbeat(0); err == nil {
+	if _, err := g.Heartbeat(0, testCreatedAt); err == nil {
 		t.Error("503 must be an error")
 	} else if errors.Is(err, ErrDenied) || errors.Is(err, ErrNotImplemented) {
 		t.Errorf("503 must read as a plain outage: %v", err)
@@ -261,7 +268,7 @@ func TestGatewayConnectorHeartbeat(t *testing.T) {
 	// rather than counting it as an outage, since a missing route never comes back.
 	for _, code := range []int{http.StatusNotFound, http.StatusNotImplemented} {
 		status = code
-		_, err := g.Heartbeat(0)
+		_, err := g.Heartbeat(0, testCreatedAt)
 		if !errors.Is(err, ErrNotImplemented) {
 			t.Errorf("%d error = %v, want one wrapping ErrNotImplemented", code, err)
 		}
@@ -339,6 +346,7 @@ func TestGatewayConnectorAdoptsTheMintedIdentity(t *testing.T) {
 				KeyID:             "kek-minted",
 				Ciphertext:        []byte("ct"),
 				TransitWrappedKey: wrapped,
+				CreatedAt:         testCreatedAt,
 			})
 		case gatewayHeartbeatPath:
 			_ = json.NewDecoder(r.Body).Decode(&beat)
@@ -355,7 +363,7 @@ func TestGatewayConnectorAdoptsTheMintedIdentity(t *testing.T) {
 	if got := g.identity.get(); got != "kek-minted" {
 		t.Fatalf("identity after mint = %q, want kek-minted", got)
 	}
-	if _, err := g.Heartbeat(1); err != nil {
+	if _, err := g.Heartbeat(1, testCreatedAt); err != nil {
 		t.Fatal(err)
 	}
 	if beat.InstanceID != "kek-minted" {
@@ -366,5 +374,29 @@ func TestGatewayConnectorAdoptsTheMintedIdentity(t *testing.T) {
 	_, _ = g.GenerateTKFSDataKey()
 	if gen.InstanceID != "kek-minted" {
 		t.Errorf("rotation sent InstanceID = %q, want the adopted identity", gen.InstanceID)
+	}
+}
+
+// A key the key service did not stamp is refused, and a mint that returns one adopts no identity: a
+// zero stamp in the ring would keep any rekey outstanding for as long as that key is active.
+func TestGatewayConnectorRejectsAnUnstampedKey(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req model.TKFSDataKeyGenerateRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		wrapped, err := wrapForTransport(req.TransportAlg, req.TransportPubKey, make([]byte, tkfsDataKeyLength))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(model.TKFSDataKeyGenerateResponse{KeyID: "kek-minted", Ciphertext: []byte("ct"), TransitWrappedKey: wrapped})
+	}))
+	defer ts.Close()
+
+	g := newTestGWConnector(ts, "node-1")
+	if _, err := g.GenerateTKFSDataKey(); err == nil {
+		t.Fatal("a generate with no CreatedAt must fail")
+	}
+	if got := g.identity.get(); got != "" {
+		t.Errorf("identity = %q after a refused mint, want none", got)
 	}
 }

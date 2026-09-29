@@ -38,9 +38,15 @@ var mockGatewayBucket = []byte("kek")
 // mockGatewayConnector emulates the gateway data-key API in-process with tkutils/kek, keeping the KEKs
 // keep would hold in bbolt. As in keep, a generate without an identity mints a KEK and one with an
 // identity wraps under that KEK; unwrap selects the KEK by key ID alone.
+// mockKeyEpoch starts the mock's key stamps far from any real clock, so a test can tell the key
+// service's stamp from this host's.
+var mockKeyEpoch = time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+
 type mockGatewayConnector struct {
 	db       *bbolt.DB
 	identity instanceIdentity
+	// generates counts this connector's generates; bbolt's single writer serializes it.
+	generates int
 }
 
 func newMockGatewayConnector(nodeID, dbPath string) *mockGatewayConnector {
@@ -99,7 +105,9 @@ func (m *mockGatewayConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 		if err != nil {
 			return err
 		}
-		dk = TKFSDataKey{KeyID: keyID, Plaintext: pt, Ciphertext: ct}
+		m.generates++
+		dk = TKFSDataKey{KeyID: keyID, Plaintext: pt, Ciphertext: ct,
+			CreatedAt: mockKeyEpoch.Add(time.Duration(m.generates) * time.Second)}
 		return nil
 	})
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func newTestGateway(t *testing.T, nodeID string) *mockGatewayConnector {
@@ -16,12 +17,22 @@ func newTestGateway(t *testing.T, nodeID string) *mockGatewayConnector {
 func TestMockGatewayGenerateUnwrap(t *testing.T) {
 	gw := newTestGateway(t, "node-A")
 
+	start := time.Now()
 	dk, err := gw.GenerateTKFSDataKey()
 	if err != nil {
 		t.Fatalf("GenerateTKFSDataKey: %v", err)
 	}
 	if dk.KeyID == "" {
 		t.Error("empty KeyID")
+	}
+	// As keep does, the mock stamps every key, each later than the last, but from its own past epoch
+	// so tests can tell its stamp from this host's clock.
+	again, err := gw.GenerateTKFSDataKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dk.CreatedAt.After(mockKeyEpoch) || !again.CreatedAt.After(dk.CreatedAt) || !again.CreatedAt.Before(start) {
+		t.Errorf("stamps %v then %v, want increasing stamps after %v and before the test", dk.CreatedAt, again.CreatedAt, mockKeyEpoch)
 	}
 	if len(dk.Plaintext) != tkfsDataKeyLength {
 		t.Errorf("plaintext length = %d, want %d", len(dk.Plaintext), tkfsDataKeyLength)

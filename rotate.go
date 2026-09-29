@@ -29,6 +29,26 @@ type keyRotator struct {
 	nameTransform *nametransform.NameTransform
 	// flushed is the write key's op count already credited to the ring. Guarded by lock.
 	flushed uint64
+	// writeCreatedAt is the key service's stamp on the write key. Guarded by lock.
+	writeCreatedAt time.Time
+}
+
+// newKeyRotator returns the rotator for a mount whose key ring is kr, writing under its newest entry.
+func newKeyRotator(configPath string, kr *configfile.KeyRing, backend cryptocore.AEADTypeEnum, ivBits int,
+	cEnc *contentenc.ContentEnc, nameTransform *nametransform.NameTransform) (*keyRotator, error) {
+	active, err := kr.Active()
+	if err != nil {
+		return nil, err
+	}
+	return &keyRotator{configPath: configPath, backend: backend, ivBits: ivBits, cEnc: cEnc,
+		nameTransform: nameTransform, writeCreatedAt: active.CreatedAt}, nil
+}
+
+// writeKey returns the ring index this mount writes under and the key service's stamp on its key.
+func (r *keyRotator) writeKey() (uint16, time.Time) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	return r.cEnc.WriteKeyIdx(), r.writeCreatedAt
 }
 
 // rotate appends a freshly generated data key to the ring and makes it the key new content, names
@@ -64,7 +84,7 @@ func (r *keyRotator) rotate() (uint16, error) {
 	idx := keyRing.Append(configfile.KeyRingEntry{
 		KeyID:      dk.KeyID,
 		Ciphertext: dk.Ciphertext,
-		CreatedAt:  time.Now().UTC(),
+		CreatedAt:  dk.CreatedAt,
 	})
 	// Persist before use: anything encrypted under a key that is not recoverable from disk is
 	// lost at unmount.
@@ -83,6 +103,7 @@ func (r *keyRotator) rotate() (uint16, error) {
 	}
 	// AddKey published a fresh zeroed counter, so nothing is outstanding against it.
 	r.flushed = 0
+	r.writeCreatedAt = dk.CreatedAt
 	tlog.Info.Printf("Rotated to key-ring index %d", idx)
 	return idx, nil
 }

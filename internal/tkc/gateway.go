@@ -4,7 +4,7 @@ package tkc
 // wrapped again to a per-call transport key; the search route serves the same calls under
 // /keepsvc/tenantdatakey.
 //
-//	generate   POST .../tkfsdatakey/generate   -> {KeyID, Ciphertext, TransitWrappedKey}
+//	generate   POST .../tkfsdatakey/generate   -> {KeyID, Ciphertext, TransitWrappedKey, CreatedAt}
 //	unwrap     POST .../tkfsdatakey/unwrap     -> {TransitWrappedKey}
 //	heartbeat  POST .../tkfsdatakey/heartbeat  -> {Command}
 
@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/TrustedKeep/tkutils/v2/model"
 )
@@ -30,6 +31,9 @@ type TKFSDataKey struct {
 	Plaintext []byte
 	// Ciphertext is the wrapped master key. This is what the on-disk key ring stores.
 	Ciphertext []byte
+	// CreatedAt is the key service's time for this key, never zero. The ring stores it and the
+	// heartbeat reports it, so a rekey is judged on the key service's clock.
+	CreatedAt time.Time
 }
 
 // instanceIdentity is a connector's TKFS identity: the id of the KEK that wraps this filesystem's data
@@ -87,9 +91,9 @@ type DataKeyConnector interface {
 // Heartbeater is the liveness-and-registration half of the key-service contract. Only the real
 // connectors implement it; the mock has no route to beat to.
 type Heartbeater interface {
-	// Heartbeat reports this instance as alive and writing under key-ring index keyIdx, which is
-	// what clears a rekey the key service asked for.
-	Heartbeat(keyIdx uint16) (model.TKFSHeartbeatResponse, error)
+	// Heartbeat reports this instance as alive and writing under key-ring index keyIdx, whose key the
+	// key service created at keyCreatedAt. Together they are what satisfy a rekey it asked for.
+	Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error)
 }
 
 // ErrDenied wraps every HTTP 403 from the gateway: the DN left the ACL or a blocklist entry names

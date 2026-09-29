@@ -21,6 +21,9 @@ the `-ctlsock` `Rotate` command, by a rekey the heartbeat carries back from the 
 entry's `OpCount` — a persisted count of the encrypt operations performed under the current key,
 which the mount accumulates and flushes on the heartbeat timer and once more at unmount. The count is
 also checked before a mount serves anything, so a count inherited at or past the threshold rotates first.
+An entry's `CreatedAt` is the key service's time for its key, returned by the generate that produced it
+and never taken from the local clock. The heartbeat reports the active entry's, and the key service
+judges a pending rekey against it: any key created after the request satisfies it, and none before does.
 
 `KR.tmp` is reserved alongside `KR` and `gocryptfs.conf`: the ring is replaced atomically, so it exists
 in the cipherdir root for the length of every write. Anything that enumerates that directory has to skip

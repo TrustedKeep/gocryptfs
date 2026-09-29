@@ -80,7 +80,7 @@ func (m *keyServiceMonitor) verifyKeyService() {
 	if m.hb == nil {
 		return
 	}
-	resp, err := m.hb.Heartbeat(m.keyIdx())
+	resp, err := m.hb.Heartbeat(m.rotator.writeKey())
 	switch {
 	case errors.Is(err, tkc.ErrNotImplemented):
 		tlog.Fatal.Printf("The key service does not implement the heartbeat route, so this mount would run with " +
@@ -96,12 +96,6 @@ func (m *keyServiceMonitor) verifyKeyService() {
 		// A short mount never reaches the first scheduled beat.
 		m.rekey()
 	}
-}
-
-// keyIdx is the key-ring index this mount writes under. Reporting it is what makes a rotation
-// observable to an operator and what clears a rekey the key service has asked for.
-func (m *keyServiceMonitor) keyIdx() uint16 {
-	return m.rotator.cEnc.WriteKeyIdx()
 }
 
 // startKeyServiceMonitor runs the monitor in the background, once the filesystem is serving.
@@ -124,7 +118,7 @@ func (m *keyServiceMonitor) run() {
 
 // beat sends one heartbeat and acts on the answer, including any rekey it brings back.
 func (m *keyServiceMonitor) beat() {
-	resp, err := m.hb.Heartbeat(m.keyIdx())
+	resp, err := m.hb.Heartbeat(m.rotator.writeKey())
 	if die, reason := m.classify(err); die {
 		m.shutdownNow("Heartbeat: "+reason, exitcodes.Revoked)
 		return
@@ -159,7 +153,7 @@ func (m *keyServiceMonitor) rekey() {
 	tlog.Info.Printf("Heartbeat: rekey requested; rotated to key-ring index %d", idx)
 	// A report, not a liveness check: a failure here must not spend the three-strike budget, and the
 	// next scheduled beat carries the index again anyway.
-	if _, err := m.hb.Heartbeat(idx); err != nil {
+	if _, err := m.hb.Heartbeat(m.rotator.writeKey()); err != nil {
 		tlog.Info.Printf("Heartbeat: reporting key-ring index %d failed: %v.", idx, err)
 	}
 }

@@ -807,18 +807,20 @@ KEY-SERVICE HEARTBEAT
 
 A mount reports itself to its key service every five minutes — the
 TrustedGateway by default, keep directly under `-search`. The heartbeat
-registers the instance and the key-ring index it is writing under, carries back
+registers the instance, the key-ring index it is writing under and the key
+service's creation time for that key, carries back
 any rekey an operator has asked for, is how the key service tells it that its
 authorization is gone, and is what paces the `-rotate-op-threshold` counter
 flush. The interval is not configurable: it sets the window a revoked instance
 can keep serving for, and that is not a knob.
 
-**Rekeying is pulled, not pushed.** An operator asks the gateway; the gateway
-records the request against the index the instance last reported; the instance
-collects it on its next heartbeat, rotates, and reports the new index. That
-higher index is the acknowledgement — there is no separate one, and nothing
-dials the mount, which therefore listens on no inbound port for this. A rekey
-that arrives while the instance is down is collected when it returns. A rotation
+**Rekeying is pulled, not pushed.** An operator asks the gateway, and the
+instance collects the request on its next heartbeat and rotates. The request is
+complete once the instance reports a newer key than it had when the request was
+made; a rotation it makes after the request for another reason, such as the
+`-ctlsock` `Rotate` command or the op counter, completes it too. Nothing dials
+the mount, so it listens on no inbound port for this. A rekey that arrives
+while the instance is down is collected when it returns. A rotation
 that fails ends the mount (**exit code 34**) rather than leaving it writing under
 a key it was told to stop using. `-ro` suppresses the rotation, as it does the
 op counter's, and the request stays pending for a writable mount.

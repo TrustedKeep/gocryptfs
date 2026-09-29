@@ -159,6 +159,9 @@ func (s *searchConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	if out.KeyID == "" || len(out.Ciphertext) == 0 {
 		return TKFSDataKey{}, fmt.Errorf("search generate: incomplete response (keyID=%q, ciphertext=%dB)", out.KeyID, len(out.Ciphertext))
 	}
+	if out.CreatedAt.IsZero() {
+		return TKFSDataKey{}, fmt.Errorf("search generate: the key service did not stamp the data key's creation time")
+	}
 	dek, err := unwrapTransit(k, out.TransitWrappedKey)
 	if err != nil {
 		return TKFSDataKey{}, fmt.Errorf("search generate: %w", err)
@@ -167,7 +170,7 @@ func (s *searchConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	if err := s.identity.adopt(out.KeyID); err != nil {
 		return TKFSDataKey{}, fmt.Errorf("search generate: %w", err)
 	}
-	return TKFSDataKey{KeyID: out.KeyID, Plaintext: dek, Ciphertext: out.Ciphertext}, nil
+	return TKFSDataKey{KeyID: out.KeyID, Plaintext: dek, Ciphertext: out.Ciphertext, CreatedAt: out.CreatedAt}, nil
 }
 
 // UnwrapTKFSDataKey recovers the plaintext master key for a key-ring entry.
@@ -197,11 +200,12 @@ func (s *searchConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]
 	return dek, nil
 }
 
-func (s *searchConnector) Heartbeat(keyIdx uint16) (model.TKFSHeartbeatResponse, error) {
+func (s *searchConnector) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
 	req := model.TKFSHeartbeatRequest{
-		NodeID:     s.nodeID,
-		InstanceID: s.identity.get(),
-		KeyIdx:     keyIdx,
+		NodeID:       s.nodeID,
+		InstanceID:   s.identity.get(),
+		KeyIdx:       keyIdx,
+		KeyCreatedAt: keyCreatedAt,
 	}
 	var out model.TKFSHeartbeatResponse
 	if err := s.post(searchHeartbeatPath, req, &out); err != nil {

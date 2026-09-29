@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/cipher"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
+	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
+	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
 	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 )
 
@@ -38,6 +41,71 @@ func TestAutoRotateThreshold(t *testing.T) {
 				t.Errorf("autoRotateThreshold = %d, want %d", got, c.want)
 			}
 		})
+	}
+}
+
+// A new ring entry carries the key service's stamp, not this host's clock, and becomes the key the
+// heartbeat reports.
+func TestRotateStoresTheKeyServicesStamp(t *testing.T) {
+	r := newTestRotator(t, "")
+	_, previous := r.writeKey()
+	start := time.Now()
+	idx, err := r.rotate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The mock key service stamps from a fixed past epoch, so a stamp from this host's clock is
+	// never older than start.
+	got := loadRing(t, r).Keys[idx].CreatedAt
+	if !got.Before(start) || !got.After(previous) {
+		t.Errorf("rotated entry CreatedAt = %v, want the key service's stamp, newer than %v", got, previous)
+	}
+	if gotIdx, gotAt := r.writeKey(); gotIdx != idx || !gotAt.Equal(got) {
+		t.Errorf("write key = (%d, %v), want (%d, %v)", gotIdx, gotAt, idx, got)
+	}
+}
+
+// A mount writes under, and reports, the ring's newest entry.
+func TestNewKeyRotatorWritesUnderTheNewestEntry(t *testing.T) {
+	kr := &configfile.KeyRing{}
+	var aeads []cipher.AEAD
+	var core *cryptocore.CryptoCore
+	for n := range 3 {
+		e := entry("dek")
+		e.CreatedAt = time.Date(2001, 1, 1, n, 0, 0, 0, time.UTC)
+		kr.Append(e)
+		core = cryptocore.New(make([]byte, cryptocore.KeyLen), cryptocore.BackendGoGCM, contentenc.DefaultIVBits)
+		aeads = append(aeads, core.AEADCipher)
+	}
+	cEnc := contentenc.New(core, aeads, contentenc.DefaultBS)
+	r, err := newKeyRotator("", kr, cryptocore.BackendGoGCM, contentenc.DefaultIVBits, cEnc, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idx, at := r.writeKey(); idx != 2 || !at.Equal(kr.Keys[2].CreatedAt) {
+		t.Errorf("write key = (%d, %v), want (2, %v)", idx, at, kr.Keys[2].CreatedAt)
+	}
+	if _, err := newKeyRotator("", &configfile.KeyRing{}, cryptocore.BackendGoGCM, contentenc.DefaultIVBits, cEnc, nil); err == nil {
+		t.Error("an empty ring has no key to write under")
+	}
+}
+
+// So does the first mount's entry.
+func TestGenerateInitialDataKeyStoresTheKeyServicesStamp(t *testing.T) {
+	connectOnce.Do(func() { tkc.Connect("", "", testNodeID, true, false, false) })
+	dir := t.TempDir()
+	kr, err := configfile.LoadKeyRing(filepath.Join(dir, configfile.ConfDefaultName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	generateInitialDataKey(&argContainer{cipherdir: dir}, kr, false, false)
+	kr, err = configfile.LoadKeyRing(filepath.Join(dir, configfile.ConfDefaultName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := kr.Keys[0].CreatedAt; got.IsZero() || !got.Before(start) {
+		t.Errorf("first entry CreatedAt = %v, want the key service's stamp", got)
 	}
 }
 

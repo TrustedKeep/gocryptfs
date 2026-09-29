@@ -512,9 +512,11 @@ The root diriv is the exception: every path resolves through it.
 ### 12.1 Mechanics (settled, shared by every trigger)
 
 Under the rotator's mutex: generate a new data key, check it names the ring's KEK, credit the
-outgoing key's operation count, append `{KeyID, Ciphertext}`, persist, build a core, `contentenc.AddKey`,
-and add the EME cipher to the name set. New files and new directories then get the new index; existing
-files, directories and open handles keep theirs.
+outgoing key's operation count, append `{KeyID, Ciphertext, CreatedAt}`, persist, build a core,
+`contentenc.AddKey`, and add the EME cipher to the name set. New files and new directories then get the
+new index; existing files, directories and open handles keep theirs. `CreatedAt` is keep's stamp on the
+new key, returned by the generate, never the TKFS host's clock; a generate that comes back without one
+fails. The first mount's entry is stamped the same way.
 
 ### 12.2 Local — op counter
 
@@ -568,10 +570,10 @@ At 2³⁰ that is ~4.4 TB under one key at the 4 KiB default block size, and rin
 random) and needs no separate threshold. The counter is consumed by everything in the process, not just one
 key, so a per-entry `OpCount` *undercounts* consumption — which errs safe.
 
-**This depends on a tkutils invariant that is not enforced anywhere.** If `nonceCounter` is ever reseeded
-from zero or any fixed value, every process starts at the same counter, mounts of one filesystem overlap
-completely and always, and the guarantee collapses to the bare 2⁻⁶⁴ random tail — at which point the
-birthday bound *does* apply and 2³⁰ is far too high. A comment recording this now sits at the seeding site.
+**This depends on a tkutils invariant that is not enforced anywhere, and is recorded only here.** If
+`nonceCounter` is ever reseeded from zero or any fixed value, every process starts at the same counter,
+mounts of one filesystem overlap completely and always, and the guarantee collapses to the bare 2⁻⁶⁴
+random tail — at which point the birthday bound *does* apply and 2³⁰ is far too high.
 
 ### 12.3 Local — manual
 
@@ -591,18 +593,32 @@ The answer is one `Command` enum, `""` (carry on) or `rekey`, rather than a bool
 instance does not recognize means carry on, since the unambiguous "stop" is a 403. A `shutdown` command
 for decommissioning was defined and dropped: nothing produced it, and decommissioning is what a blocklist
 entry is for (§12.9). The request gains `KeyIdx`, the ring index the instance writes under, and
-that one field does the acknowledging: keep holds a `TKFSRekeyDirective{PastIdx}` naming the index the
-request was made against, answers `rekey` on every heartbeat until the instance reports a higher index,
-and then deletes the directive. Self-clearing, idempotent under a repeated request, and right across a
-remount — an instance that never rotated reports the same index and collects the directive again. A
-rotation from any other trigger clears it too, which is correct: the operator wanted a fresh key, and a
-fresh key is what there is.
+`KeyCreatedAt`, the active entry's `CreatedAt` — keep's own stamp on that key (§12.1). Together they do
+the acknowledging. keep holds a `TKFSRekeyDirective{PastIdx, RequestedAt}`: the index the instance's
+record showed when the rekey was asked for, and keep's time then. It answers `rekey` on every heartbeat
+while `OutstandingFor(KeyIdx, KeyCreatedAt)` holds, which is until the instance reports an index past
+`PastIdx` **and** a key keep created after `RequestedAt`. Every time in the rule is keep's, so the TKFS
+host's clock decides nothing.
+
+Any rotation after the request satisfies it, whatever triggered it — the rekey, ctlsock or the op
+counter — which is correct: the operator wanted a key newer than the request, and that is what there is.
+No rotation from before the request does, and each half of the rule closes a gap the other leaves. The
+stamp covers a record that lags the instance: a ctlsock or op-count rotation is reported only on the next
+beat, so a rekey filed in between gets a `PastIdx` below that rotation's index, and the index alone would
+let it through. The index covers skew between keep nodes: the rekey may be filed on one and the generate
+served by another, whose clock can put a rotation from just before the request just after it. That
+rotation's index was already on the record unless the record lagged too, and missing both at once takes a
+skew wider than the time between that rotation and the request. A rotation that fails after its generate never
+becomes the active entry, so it is never reported. The rule is idempotent under a repeated request and
+right across a remount: an instance that never rotated reports the same index and stamp, and collects
+the directive again.
 
 **The directive is its own keep object, not a field on the registry record**, because every heartbeat
 overwrites that record with a blind `Put` (§12.6) and would take a directive written between two beats
-with it. Clearing is the one read-then-write left: a heartbeat deletes only the directive it read, before
-recording the new index, but with no conditional delete in the KVS a directive filed in the instant
-between its re-read and the delete is still lost.
+with it. **keep never deletes a directive on a heartbeat.** Key creation times only move forward, so a
+satisfied directive cannot become outstanding again; it stays inert until the next rekey overwrites it or
+deleting the instance removes it. A heartbeat therefore only reads the directive, and there is no
+read-then-write for a new rekey to race.
 
 **Failure is the rule the op counter already set.** A rotation the key service asked for either succeeds
 or ends the mount (exit 34, with no mountpoint ever attached when it came on the first heartbeat): a
@@ -628,7 +644,8 @@ to carry the host it advertises, because it advertises nothing.
 
 `PUT <versionPrefix>/tkfsdatakey/rekey/:instanceID` with `RequireAdmin`, registered from
 `registerTKFSDataKeyAdminAPI`, posts to keep and answers **202** with the stored `TKFSRekeyDirective` —
-whose `PastIdx` tells the operator which index has to move. keep's 404 (no such instance) is answered
+whose `PastIdx` and `RequestedAt` tell the operator which index has to move and what the new key must
+postdate. keep's 404 (no such instance) is answered
 404; any other failure is answered 500. It
 carries the audit action (`NewAction(r, "...").Start()` + `defer action.CompleteEx()`), as every TKFS
 admin mutation does.
@@ -666,11 +683,11 @@ the gateway where to reach an instance even once it exists.
 **Instead TKFS heartbeats to the gateway, which forwards to keep.**
 
 - TKFS sends `POST …/tkfsdatakey/heartbeat` on the existing mTLS data-key listener — the same client,
-  cert and connection it already uses — carrying `{NodeID, InstanceID, KeyIdx}`. The DN comes from the
+  cert and connection it already uses — carrying `{NodeID, InstanceID, KeyIdx, KeyCreatedAt}`. The DN comes from the
   verified client cert, never the body, matching how the data-key handlers already derive it
   (`tcutils.SanitizeDN(tcutils.CertificatesToClientDN(r.TLS))`). Adding the route costs one line in
   gatehouse's `registerTKFSDataKeyAPI`, one handler, and one assertion in the existing route test.
-- keep records `InstanceID -> {DN, NodeID, KeyIdx, LastSeen}`.
+- keep records `InstanceID -> {DN, NodeID, KeyIdx, KeyCreatedAt, LastSeen}`.
 
 **`InstanceID` is a third, unique field** — the id of the KEK keep mints on the filesystem's first
 generate, recorded as the `KeyID` of its first key-ring entry and read back from `KR` on every mount. It
@@ -695,8 +712,9 @@ rather than accumulating an entry per mount, and its ring keeps unwrapping. The 
 `cp -a` of a cipherdir copies `KR`, so a copy shares the original's identity and therefore its keys;
 distinguishing copies is not something a value stored in the copied directory can do. A copy taken
 *before* the first mount is the one case that now separates cleanly: it has no identity to copy, so each
-side mints its own. A rekey aimed at a shared identity therefore reaches every copy; each rotates its own
-ring, and the first to report a higher index clears the directive for all of them.
+side mints its own. A rekey aimed at a shared identity therefore reaches every copy. keep judges each
+heartbeat on its own report, so every copy rotates its own ring until it is past the directive, and a copy
+behind the one whose index the rekey was filed against rotates once a beat until it catches up.
 - The first heartbeat fires before anything is mounted (§12.10), so registration is prompt rather than
   waiting out an interval; after that it is periodic. The epic already calls for a 5-minute op-counter
   flush, so one timer serves both.
@@ -704,8 +722,8 @@ ring, and the first to report a higher index clears the directive for all of the
   gateway route, nothing blocked. The CA is checked by the listener's TLS handshake; the rest by keep, on
   the same call that records the instance (§12.7). The gateway forwards and classifies the answer.
 
-The reported field is `KeyIdx`, not a rekey-specific one — it is what this instance is doing, and a rekey
-is only one of the things that make it change (§12.4).
+The reported fields are `KeyIdx` and `KeyCreatedAt`, not rekey-specific ones — they are what this instance
+is doing, and a rekey is only one of the things that make them change (§12.4).
 
 Four things fall out of this:
 
@@ -752,9 +770,9 @@ stating rather than discovering:
 - It **restarts the listener whenever the CA set changes**, dropping in-flight connections. A
   heartbeat is cheap to retry; the client should not treat one failure as significant.
 
-**Trust boundary.** The DN is cert-proven; `NodeID`, `InstanceID` and `KeyIdx` are self-asserted, the same
-caveat the data-key handlers already carry. An authorized instance can
-therefore report an index it is not on, and so clear a rekey it never performed. That is bounded by what it
+**Trust boundary.** The DN is cert-proven; `NodeID`, `InstanceID`, `KeyIdx` and `KeyCreatedAt` are
+self-asserted, the same caveat the data-key handlers already carry. An authorized instance can
+therefore report a key it is not on, and so satisfy a rekey it never performed. That is bounded by what it
 buys: the instance already decides whether to rotate at all, so a liar gains nothing it could not have by
 ignoring the directive outright.
 
@@ -867,7 +885,7 @@ strikes.
 registry failure, reasoning that "cannot authorize" and "cannot persist" are different claims and only
 the first should unmount anything (§15.1). The distinction is real but the conclusion was wrong: the
 record *is* how the instance is reachable by revocation — an admin blocking it acts on a registry the
-mount no longer appears live in, and a rekey directive cannot be cleared by an index that never landed.
+mount no longer appears live in, and a rekey directive cannot be satisfied by a report that never landed.
 A mount serving on an unrecorded heartbeat is a mount nobody can stop. So keep returns the error, the
 gateway forwards it as **502**, and the three-strike budget absorbs the transient case. The cost is
 stated below: a keep outage past the window now unmounts the tenant, which is the third fleet-wide path
@@ -1126,8 +1144,11 @@ name side, which had no coverage at all.
 The heartbeat monitor runs against a fake heartbeater, server and exit (`heartbeat_test.go`): a refusal
 unmounts and exits 33, a `rekey` rotates and reports the new index at once, a failed one exits 34, `-ro`
 leaves the directive pending, an unknown command carries on, and the pre-mount heartbeat refuses on
-anything but an answer and carries out a `rekey` before there is a mount. `flushOpCounts` rotates at the
-threshold and on a count inherited from disk (`rotate_test.go`).
+anything but an answer and carries out a `rekey` before there is a mount. Every beat reports the active
+entry's index with keep's stamp for it, and a rotation by any trigger moves both. The rotation's and the
+first mount's ring entries store keep's stamp rather than the local clock, and both connectors refuse a
+generate that carries none. `flushOpCounts` rotates at the threshold and on a count inherited from disk
+(`rotate_test.go`).
 
 **Integration** in `tests/tkfs_kek`: write, rotate, write; old and new files both read; symlinks and
 xattrs written before the rotation still resolve; an inode's first xattr after a rotation takes the new
@@ -1219,8 +1240,8 @@ were decided on reasoning that is not recoverable from the code.
   filesystem but not to create or rotate a key. Accepted.
 - **tkutils changes — done.** `TKFSHeartbeatRequest`/`Response`, the rekey types in `model/tkfscontrol.go`,
   `TKFSBlockEntry` + `Blocklist` with a single `Allows`, `ACL` as `map[string]struct{}`,
-  `TKFSInstance` gaining `InstanceID`/`KeyIdx`, and `InstanceID` on the generate request, empty only on
-  the minting call. Unwrap names the instance by its `KeyID` (§15.1).
+  `TKFSInstance` gaining `InstanceID`/`KeyIdx`/`KeyCreatedAt`, `InstanceID` on the generate request, empty
+  only on the minting call, and keep's `CreatedAt` on the generate response. Unwrap names the instance by its `KeyID` (§15.1).
   All three consumers pin the tkutils Phase-3 branch by pseudo-version until it merges and is tagged.
 - **`InstanceID` in `configfile` — reversed.** It was a config field `Create` minted and `Validate`
   required; it is now the `KeyID` in `KR`, and `ConfFile.Validate` deliberately does *not* require one
@@ -1305,6 +1326,14 @@ Things that were not visible from code reading and change the picture rather tha
   a block to name (§12.7). The heartbeat requires it, rejected before authorization like `NodeID`. The
   general rule: a self-asserted field a blocklist can name must be present wherever there is an instance
   for it to name.
+- **The index alone could not tell a rotation after a rekey from one before it.** `PastIdx` is whatever
+  the instance's record showed when the rekey was filed, and after a ctlsock or op-count rotation the
+  record lags the instance until the next beat. A rekey filed in that window was satisfied by the
+  rotation it followed. keep now stamps every data key it generates, the ring stores the stamp as
+  `CreatedAt`, the heartbeat reports it as `KeyCreatedAt`, and a directive stays outstanding until both
+  the index and the stamp are past it (§12.4). With a satisfied directive unable to become outstanding
+  again, keep stopped deleting it on the heartbeat, which also removed the race between that delete and a
+  new rekey.
 - **keep's test suite is not race-clean at baseline** — 84 data-race warnings at `b5406793`, in packages
   this phase never touches. `-race` is not currently a usable signal there.
 

@@ -34,8 +34,8 @@ func TestMain(m *testing.M) {
 	os.Exit(r)
 }
 
-// newTestRotator returns a rotator over a one-entry ring in a temp dir, backed by the mock key
-// service. A non-empty keyID overrides the entry's KEK, which makes every rotation fail.
+// newTestRotator returns a rotator over a one-entry ring in a temp dir, backed by the mock key service.
+// A non-empty keyID overrides the entry's KEK, which makes every rotation fail.
 func newTestRotator(t *testing.T, keyID string) *keyRotator {
 	t.Helper()
 	connectOnce.Do(func() { tkc.Connect("", "", testNodeID, true, false, false) })
@@ -51,18 +51,18 @@ func newTestRotator(t *testing.T, keyID string) *keyRotator {
 	if err != nil {
 		t.Fatal(err)
 	}
-	kr.Append(configfile.KeyRingEntry{KeyID: keyID, Ciphertext: dk.Ciphertext, CreatedAt: time.Now()})
+	kr.Append(configfile.KeyRingEntry{KeyID: keyID, Ciphertext: dk.Ciphertext, CreatedAt: dk.CreatedAt})
 	if err := kr.WriteFile(); err != nil {
 		t.Fatal(err)
 	}
 	core := cryptocore.New(dk.Plaintext, cryptocore.BackendGoGCM, contentenc.DefaultIVBits)
-	return &keyRotator{
-		configPath:    conf,
-		backend:       cryptocore.BackendGoGCM,
-		ivBits:        contentenc.DefaultIVBits,
-		cEnc:          contentenc.New(core, []cipher.AEAD{core.AEADCipher}, contentenc.DefaultBS),
-		nameTransform: nametransform.New([]*eme.EMECipher{core.EMECipher}, false, 0, false, nil, false),
+	r, err := newKeyRotator(conf, kr, cryptocore.BackendGoGCM, contentenc.DefaultIVBits,
+		contentenc.New(core, []cipher.AEAD{core.AEADCipher}, contentenc.DefaultBS),
+		nametransform.New([]*eme.EMECipher{core.EMECipher}, false, 0, false, nil, false))
+	if err != nil {
+		t.Fatal(err)
 	}
+	return r
 }
 
 // loadRing reads back the rotator's ring from disk.
@@ -75,16 +75,33 @@ func loadRing(t *testing.T, r *keyRotator) *configfile.KeyRing {
 	return kr
 }
 
-// fakeHeartbeater answers every beat with answer, or err, and records the index each beat reported.
+// fakeHeartbeater answers every beat with answer, or err, and records the index and stamp each beat
+// reported.
 type fakeHeartbeater struct {
 	answer   model.TKFSHeartbeatResponse
 	err      error
 	reported []uint16
+	stamps   []time.Time
 }
 
-func (f *fakeHeartbeater) Heartbeat(keyIdx uint16) (model.TKFSHeartbeatResponse, error) {
+func (f *fakeHeartbeater) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
 	f.reported = append(f.reported, keyIdx)
+	f.stamps = append(f.stamps, keyCreatedAt)
 	return f.answer, f.err
+}
+
+// assertReported checks the indices the beats reported, and that each came with its ring entry's stamp.
+func assertReported(t *testing.T, r *keyRotator, hb *fakeHeartbeater, want []uint16) {
+	t.Helper()
+	if !slices.Equal(hb.reported, want) {
+		t.Errorf("reported indices = %v, want %v", hb.reported, want)
+	}
+	kr := loadRing(t, r)
+	for i, idx := range hb.reported {
+		if want := kr.Keys[idx].CreatedAt; !hb.stamps[i].Equal(want) {
+			t.Errorf("beat %d reported index %d with stamp %v, want %v", i, idx, hb.stamps[i], want)
+		}
+	}
 }
 
 type fakeServer struct{ unmounts int }
@@ -196,12 +213,24 @@ func TestHeartbeatRekeyRotatesAndReports(t *testing.T) {
 	}
 	hb.answer = model.TKFSHeartbeatResponse{}
 	m.beat()
-	if want := []uint16{0, 1, 1}; !slices.Equal(hb.reported, want) {
-		t.Errorf("reported indices = %v, want %v", hb.reported, want)
-	}
+	assertReported(t, r, hb, []uint16{0, 1, 1})
 	if *code != -1 || srv.unmounts != 0 {
 		t.Errorf("exit code %d, %d unmounts; a rekey must not end the mount", *code, srv.unmounts)
 	}
+}
+
+// Every beat reports the active entry's stamp from the key service, and a rotation by any trigger
+// moves it with the index.
+func TestHeartbeatReportsTheActiveKeysStamp(t *testing.T) {
+	r := newTestRotator(t, "")
+	hb := &fakeHeartbeater{}
+	m, _, _ := newTestMonitor(t, r, hb)
+	m.beat()
+	if _, err := r.rotate(); err != nil {
+		t.Fatal(err)
+	}
+	m.beat()
+	assertReported(t, r, hb, []uint16{0, 1})
 }
 
 // A rekey that cannot rotate ends the mount with 34.
@@ -283,9 +312,7 @@ func TestVerifyKeyService(t *testing.T) {
 			if n := len(loadRing(t, r).Keys); n != c.wantKeys {
 				t.Errorf("ring has %d entries, want %d", n, c.wantKeys)
 			}
-			if !slices.Equal(c.hb.reported, c.wantReported) {
-				t.Errorf("reported indices = %v, want %v", c.hb.reported, c.wantReported)
-			}
+			assertReported(t, r, &c.hb, c.wantReported)
 		})
 	}
 }

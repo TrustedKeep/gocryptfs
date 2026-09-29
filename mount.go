@@ -460,12 +460,9 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, rotator *k
 	tlog.Debug.Printf("frontendArgs: %s", tlog.JSONDump(frontendArgs))
 	rootNode = fusefrontend.NewRootNode(frontendArgs, cEnc, nameTransform)
 
-	rotator = &keyRotator{
-		configPath:    args.config,
-		backend:       cryptoBackend,
-		ivBits:        IVBits,
-		cEnc:          cEnc,
-		nameTransform: nameTransform,
+	if rotator, err = newKeyRotator(args.config, keyRing, cryptoBackend, IVBits, cEnc, nameTransform); err != nil {
+		tlog.Fatal.Printf("%v", err)
+		os.Exit(exitcodes.Other)
 	}
 
 	// We have opened the socket early so that we cannot fail here after
@@ -585,7 +582,7 @@ func generateInitialDataKey(args *argContainer, keyRing *configfile.KeyRing, pla
 	idx := keyRing.Append(configfile.KeyRingEntry{
 		KeyID:      dk.KeyID,
 		Ciphertext: dk.Ciphertext,
-		CreatedAt:  time.Now().UTC(),
+		CreatedAt:  dk.CreatedAt,
 	})
 	// Before the ring: once a ring is on disk, no later mount comes back here to write it.
 	if !plaintextNames {
