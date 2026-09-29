@@ -208,6 +208,7 @@ func (g *gwConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	// On a mint this is where the filesystem learns who it is; on a rotation this is the check that
 	// the id we sent is the one that came back.
 	if err := g.identity.adopt(out.KeyID); err != nil {
+		clear(dek)
 		return TKFSDataKey{}, fmt.Errorf("gateway generate: %w", err)
 	}
 	return TKFSDataKey{KeyID: out.KeyID, Plaintext: dek, Ciphertext: out.Ciphertext, CreatedAt: out.CreatedAt}, nil

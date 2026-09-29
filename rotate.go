@@ -70,6 +70,7 @@ func (r *keyRotator) rotate() (uint16, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to generate a data key: %w", err)
 	}
+	defer clear(dk.Plaintext)
 	// One KEK serves an instance for life, so a generate that answers with a different one means
 	// the key service minted a second master — the state that would make the ring name two.
 	if dk.KeyID != active.KeyID {
@@ -92,9 +93,6 @@ func (r *keyRotator) rotate() (uint16, error) {
 		return 0, fmt.Errorf("failed to persist the new key-ring entry: %w", err)
 	}
 	core := cryptocore.New(dk.Plaintext, r.backend, r.ivBits)
-	for i := range dk.Plaintext {
-		dk.Plaintext[i] = 0
-	}
 	if got := r.cEnc.AddKey(core.AEADCipher); got != idx {
 		log.Panicf("rotate: content key landed at index %d, the ring assigned %d", got, idx)
 	}

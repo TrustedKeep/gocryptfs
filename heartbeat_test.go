@@ -78,8 +78,10 @@ func loadRing(t *testing.T, r *keyRotator) *configfile.KeyRing {
 // fakeHeartbeater answers every beat with answer, or err, and records the index and stamp each beat
 // reported.
 type fakeHeartbeater struct {
-	answer   model.TKFSHeartbeatResponse
-	err      error
+	answer model.TKFSHeartbeatResponse
+	err    error
+	// laterErr, if set, answers every beat after the first.
+	laterErr error
 	reported []uint16
 	stamps   []time.Time
 }
@@ -87,6 +89,9 @@ type fakeHeartbeater struct {
 func (f *fakeHeartbeater) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
 	f.reported = append(f.reported, keyIdx)
 	f.stamps = append(f.stamps, keyCreatedAt)
+	if f.laterErr != nil && len(f.reported) > 1 {
+		return model.TKFSHeartbeatResponse{}, f.laterErr
+	}
 	return f.answer, f.err
 }
 
@@ -231,6 +236,31 @@ func TestHeartbeatReportsTheActiveKeysStamp(t *testing.T) {
 	}
 	m.beat()
 	assertReported(t, r, hb, []uint16{0, 1})
+}
+
+// The report after a rekey is still a heartbeat: a refusal ends the mount, an outage does not.
+func TestHeartbeatRekeyReportRefusalExits(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		err      error
+		wantCode int
+	}{
+		{"403", fmt.Errorf("gateway: %w", tkc.ErrDenied), exitcodes.Revoked},
+		{"missing route", fmt.Errorf("gateway: %w", tkc.ErrNotImplemented), exitcodes.Revoked},
+		{"outage", errors.New("connection refused"), -1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			hb := &fakeHeartbeater{answer: model.TKFSHeartbeatResponse{Command: model.TKFSCommandRekey}, laterErr: c.err}
+			m, _, code := newTestMonitor(t, newTestRotator(t, ""), hb)
+			m.beat()
+			if *code != c.wantCode {
+				t.Errorf("exit code = %d, want %d", *code, c.wantCode)
+			}
+			if m.failures != 0 {
+				t.Errorf("failures = %d; a report must not spend the three-strike budget", m.failures)
+			}
+		})
+	}
 }
 
 // A rekey that cannot rotate ends the mount with 34.

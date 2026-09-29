@@ -1142,7 +1142,7 @@ refusing an empty ring; and `Wipe` under `-race` with concurrent readers, on bot
 name side, which had no coverage at all.
 
 The heartbeat monitor runs against a fake heartbeater, server and exit (`heartbeat_test.go`): a refusal
-unmounts and exits 33, a `rekey` rotates and reports the new index at once, a failed one exits 34, `-ro`
+unmounts and exits 33, a `rekey` rotates and reports the new index at once (a refusal on that report still exits 33), a failed one exits 34, `-ro`
 leaves the directive pending, an unknown command carries on, and the pre-mount heartbeat refuses on
 anything but an answer and carries out a `rekey` before there is a mount. Every beat reports the active
 entry's index with keep's stamp for it, and a rotation by any trigger moves both. The rotation's and the

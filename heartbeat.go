@@ -151,9 +151,14 @@ func (m *keyServiceMonitor) rekey() {
 		return
 	}
 	tlog.Info.Printf("Heartbeat: rekey requested; rotated to key-ring index %d", idx)
-	// A report, not a liveness check: a failure here must not spend the three-strike budget, and the
-	// next scheduled beat carries the index again anyway.
-	if _, err := m.hb.Heartbeat(m.rotator.writeKey()); err != nil {
+	// A report, not a liveness check: an outage here spends none of the three-strike budget, but a
+	// refusal still ends the mount.
+	_, err = m.hb.Heartbeat(m.rotator.writeKey())
+	switch {
+	case errors.Is(err, tkc.ErrDenied), errors.Is(err, tkc.ErrNotImplemented):
+		_, reason := m.classify(err)
+		m.shutdownNow("Heartbeat: "+reason, exitcodes.Revoked)
+	case err != nil:
 		tlog.Info.Printf("Heartbeat: reporting key-ring index %d failed: %v.", idx, err)
 	}
 }

@@ -168,6 +168,7 @@ func (s *searchConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	}
 	// On a mint this is where the filesystem learns who it is; on a rotation the id is the one we sent.
 	if err := s.identity.adopt(out.KeyID); err != nil {
+		clear(dek)
 		return TKFSDataKey{}, fmt.Errorf("search generate: %w", err)
 	}
 	return TKFSDataKey{KeyID: out.KeyID, Plaintext: dek, Ciphertext: out.Ciphertext, CreatedAt: out.CreatedAt}, nil
