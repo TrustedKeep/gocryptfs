@@ -1,6 +1,7 @@
 package contentenc
 
 import (
+	"crypto/cipher"
 	"fmt"
 	"testing"
 )
@@ -8,7 +9,7 @@ import (
 // TestSizeToSize tests CipherSizeToPlainSize and PlainSizeToCipherSize
 func TestSizeToSize(t *testing.T) {
 	cc := newTestCore()
-	ce := New(cc, DefaultBS)
+	ce := New(cc, []cipher.AEAD{cc.AEADCipher}, DefaultBS)
 
 	const rangeMax = 10000
 

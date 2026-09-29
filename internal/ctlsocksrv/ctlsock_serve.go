@@ -23,14 +23,20 @@ type Interface interface {
 
 type ctlSockHandler struct {
 	fs     Interface
+	rotate func() (uint16, error)
+	holes  []uint16
 	socket *net.UnixListener
 }
 
 // Serve serves incoming connections on "sock". This call blocks so you
 // probably want to run it in a new goroutine.
-func Serve(sock net.Listener, fs Interface) {
+//
+// "rotate" is nil on a read-only mount; "holes" are the indices that failed to unwrap at mount.
+func Serve(sock net.Listener, fs Interface, rotate func() (uint16, error), holes []uint16) {
 	handler := ctlSockHandler{
 		fs:     fs,
+		rotate: rotate,
+		holes:  holes,
 		socket: sock.(*net.UnixListener),
 	}
 	handler.acceptLoop()
@@ -93,6 +99,18 @@ func (ch *ctlSockHandler) handleConnection(conn *net.UnixConn) {
 func (ch *ctlSockHandler) handleRequest(in *ctlsock.RequestStruct, conn *net.UnixConn) {
 	var err error
 	var inPath, outPath, clean, warnText string
+	if in.Rotate || in.Status {
+		if (in.Rotate && in.Status) || in.DecryptPath != "" || in.EncryptPath != "" {
+			sendResponse(conn, errors.New("Ambiguous"), "", "")
+			return
+		}
+		if in.Rotate {
+			ch.handleRotate(conn)
+		} else {
+			writeResponse(conn, ctlsock.ResponseStruct{KeyHoles: ch.holes})
+		}
+		return
+	}
 	// You cannot perform both decryption and encryption in one request
 	if in.DecryptPath != "" && in.EncryptPath != "" {
 		err = errors.New("Ambiguous")
@@ -131,6 +149,20 @@ func (ch *ctlSockHandler) handleRequest(in *ctlsock.RequestStruct, conn *net.Uni
 	sendResponse(conn, err, outPath, warnText)
 }
 
+func (ch *ctlSockHandler) handleRotate(conn *net.UnixConn) {
+	if ch.rotate == nil {
+		sendResponse(conn, errors.New("a read-only mount cannot rotate"), "", "")
+		return
+	}
+	keyIdx, err := ch.rotate()
+	if err != nil {
+		tlog.Warn.Printf("ctlsock: rotate failed: %v", err)
+		sendResponse(conn, err, "", "")
+		return
+	}
+	writeResponse(conn, ctlsock.ResponseStruct{KeyIdx: keyIdx})
+}
+
 // sendResponse sends a JSON response message
 func sendResponse(conn *net.UnixConn, err error, result string, warnText string) {
 	msg := ctlsock.ResponseStruct{
@@ -149,6 +181,10 @@ func sendResponse(conn *net.UnixConn, err error, result string, warnText string)
 			msg.ErrNo = int32(syscall.ENOENT)
 		}
 	}
+	writeResponse(conn, msg)
+}
+
+func writeResponse(conn *net.UnixConn, msg ctlsock.ResponseStruct) {
 	jsonMsg, err := json.Marshal(msg)
 	if err != nil {
 		tlog.Warn.Printf("ctlsock: Marshal failed: %v", err)

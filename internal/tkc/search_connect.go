@@ -19,10 +19,13 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
-var _ DataKeyConnector = (*searchConnector)(nil)
+var (
+	_ DataKeyConnector = (*searchConnector)(nil)
+	_ Heartbeater      = (*searchConnector)(nil)
+)
 
 // TrustedSearch ramdisk file names. lizard's connector writes these to a tmpfs before launching
-// gocryptfs; the search connector reads them here. Same contract as the envelope-era connector.
+// gocryptfs; the search connector reads them here.
 const (
 	searchRamdiskDefault = "/usr/local/trustedsearch/ramdisk"
 	searchCertFile       = "gw.cert.pem"
@@ -35,20 +38,24 @@ const (
 // TrustedSearch KMS data-key routes. keep serves them under its /keepsvc prefix on the
 // management port; the client authenticates with the ramdisk mTLS cert plus a tenant token.
 const (
-	searchKMSPort      = 7070
-	searchGeneratePath = "/keepsvc/tenantdatakey/generate"
-	searchUnwrapPath   = "/keepsvc/tenantdatakey/unwrap"
+	searchKMSPort       = 7070
+	searchGeneratePath  = "/keepsvc/tenantdatakey/generate"
+	searchUnwrapPath    = "/keepsvc/tenantdatakey/unwrap"
+	searchHeartbeatPath = "/keepsvc/tenantdatakey/heartbeat"
 )
 
 const searchHTTPTimeout = 10 * time.Second
 
-// searchConnector is the -search client of the KEK data-key API. Unlike the gateway connector it
-// talks to the TrustedSearch KMS (keep) directly and authenticates with a tenant token in
-// addition to its mTLS client cert, reading that material from the TrustedSearch tmpfs ramdisk.
-// It speaks the same generate/unwrap contract (model.TKFSDataKey*) with the same per-call
-// transit-wrap (newTransport/unwrapTransit, shared with the gateway connector).
+// searchConnector is the -search client of the KEK data-key API. It talks to the TrustedSearch KMS
+// (keep) directly, authenticating with a tenant token as well as its mTLS client cert, both read from
+// the TrustedSearch ramdisk. Same generate/unwrap/heartbeat contract and per-call transit wrap as the
+// gateway connector.
+//
+// keep scopes the KEK to the instance's identity on this route exactly as on the gateway's, and applies
+// the same TKFS policy, so a filesystem reaches the same KEK whichever route it mounts through.
 type searchConnector struct {
 	nodeID   string
+	identity instanceIdentity
 	token    string
 	kmsHosts []string
 	client   *http.Client
@@ -141,6 +148,7 @@ func (s *searchConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	}
 	req := model.TKFSDataKeyGenerateRequest{
 		NodeID:          s.nodeID,
+		InstanceID:      s.identity.get(),
 		TransportAlg:    uint16(transportKemType),
 		TransportPubKey: pubPEM,
 	}
@@ -151,11 +159,19 @@ func (s *searchConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	if out.KeyID == "" || len(out.Ciphertext) == 0 {
 		return TKFSDataKey{}, fmt.Errorf("search generate: incomplete response (keyID=%q, ciphertext=%dB)", out.KeyID, len(out.Ciphertext))
 	}
+	if out.CreatedAt.IsZero() {
+		return TKFSDataKey{}, fmt.Errorf("search generate: the key service did not stamp the data key's creation time")
+	}
 	dek, err := unwrapTransit(k, out.TransitWrappedKey)
 	if err != nil {
 		return TKFSDataKey{}, fmt.Errorf("search generate: %w", err)
 	}
-	return TKFSDataKey{KeyID: out.KeyID, Plaintext: dek, Ciphertext: out.Ciphertext}, nil
+	// On a mint this is where the filesystem learns who it is; on a rotation the id is the one we sent.
+	if err := s.identity.adopt(out.KeyID); err != nil {
+		clear(dek)
+		return TKFSDataKey{}, fmt.Errorf("search generate: %w", err)
+	}
+	return TKFSDataKey{KeyID: out.KeyID, Plaintext: dek, Ciphertext: out.Ciphertext, CreatedAt: out.CreatedAt}, nil
 }
 
 // UnwrapTKFSDataKey recovers the plaintext master key for a key-ring entry.
@@ -185,6 +201,25 @@ func (s *searchConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]
 	return dek, nil
 }
 
+func (s *searchConnector) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
+	req := model.TKFSHeartbeatRequest{
+		NodeID:       s.nodeID,
+		InstanceID:   s.identity.get(),
+		KeyIdx:       keyIdx,
+		KeyCreatedAt: keyCreatedAt,
+	}
+	var out model.TKFSHeartbeatResponse
+	if err := s.post(searchHeartbeatPath, req, &out); err != nil {
+		return model.TKFSHeartbeatResponse{}, err
+	}
+	return out, nil
+}
+
+// AdoptIdentity records the identity read out of this filesystem's key ring.
+func (s *searchConnector) AdoptIdentity(id string) error {
+	return s.identity.adopt(id)
+}
+
 // Close releases idle connections to the KMS.
 func (s *searchConnector) Close() error {
 	if s.client != nil {
@@ -195,8 +230,8 @@ func (s *searchConnector) Close() error {
 
 // post sends body as JSON to a KMS data-key route, trying the configured hosts in random order
 // until one answers. Each request carries the tenant token in addition to the mTLS client cert.
-// A 401/403 is returned immediately (retrying other hosts will not fix an authorization failure);
-// transport and 5xx errors fall through to the next host.
+// A 401/403/404 is returned immediately (retrying other hosts will not fix an authorization failure
+// or a route this build does not serve); transport and 5xx errors fall through to the next host.
 func (s *searchConnector) post(path string, body, out any) error {
 	if s.client == nil {
 		return fmt.Errorf("search client not initialized")
@@ -227,8 +262,15 @@ func (s *searchConnector) post(path string, body, out any) error {
 			continue
 		}
 		switch {
-		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-			return fmt.Errorf("search %s: not authorized (HTTP %d): tenant token or cert DN rejected: %s", path, resp.StatusCode, bytes.TrimSpace(respBody))
+		case resp.StatusCode == http.StatusForbidden:
+			// A decision rather than an outage, same as the gateway: the caller must not
+			// spend a retry budget on it.
+			return fmt.Errorf("search %s: not authorized (HTTP 403): %w: %s", path, ErrDenied, bytes.TrimSpace(respBody))
+		case resp.StatusCode == http.StatusUnauthorized:
+			return fmt.Errorf("search %s: not authorized (HTTP 401): tenant token rejected: %s", path, bytes.TrimSpace(respBody))
+		case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotImplemented:
+			// A route this keep does not serve
+			return fmt.Errorf("search %s: HTTP %d: %w: %s", path, resp.StatusCode, ErrNotImplemented, bytes.TrimSpace(respBody))
 		case resp.StatusCode < 200 || resp.StatusCode >= 300:
 			lastErr = fmt.Errorf("search %s @ %s: HTTP %d: %s", path, host, resp.StatusCode, bytes.TrimSpace(respBody))
 			continue

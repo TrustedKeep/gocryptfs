@@ -2,6 +2,7 @@ package configfile
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
@@ -162,5 +163,50 @@ func TestValidateExitCodes(t *testing.T) {
 	unknown.FeatureFlags = append(unknown.FeatureFlags, "NoSuchFlag")
 	if got := codeOf(t, unknown.Validate()); got != exitcodes.LoadConf {
 		t.Errorf("unknown flag: exit code = %d, want LoadConf (%d)", got, exitcodes.LoadConf)
+	}
+}
+
+// A filesystem gets no identity at -init: its InstanceID is the KEK id the first mount records in the
+// key ring, so a freshly created config has none and must still validate.
+func TestCreateAssignsNoIdentity(t *testing.T) {
+	conf := filepath.Join(t.TempDir(), "gocryptfs.conf")
+	if err := Create(testCreateArgs(conf)); err != nil {
+		t.Fatal(err)
+	}
+	cf, err := Load(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cf.Validate(); err != nil {
+		t.Errorf("a config that has never mounted must validate: %v", err)
+	}
+	if cf.NodeID != "test-node" {
+		t.Errorf("NodeID = %q, want the one that was passed in", cf.NodeID)
+	}
+	// No ring, so no identity — "no keys yet" and "no identity yet" are the same fact.
+	kr, err := LoadKeyRing(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id := kr.InstanceID(); id != "" {
+		t.Errorf("identity = %q, want empty before the first generate", id)
+	}
+}
+
+// A config with no NodeID is refused at load: a blocklist entry naming a node cannot match a field
+// that is never sent.
+func TestValidateRequiresNodeID(t *testing.T) {
+	good := ConfFile{
+		Version:      contentenc.CurrentVersion,
+		FeatureFlags: []string{knownFlags[FlagGCMIV128]},
+		NodeID:       "node-1",
+	}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("baseline config should validate: %v", err)
+	}
+	noNode := good
+	noNode.NodeID = ""
+	if err := noNode.Validate(); err == nil {
+		t.Error("a config with no NodeID must be rejected")
 	}
 }

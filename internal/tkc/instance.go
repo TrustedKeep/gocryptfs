@@ -19,11 +19,12 @@ var (
 //   - mockKMS: an in-process bbolt-backed mock gateway (no live key service required)
 //   - default: TrustedGateway over mTLS (operator-provisioned certs)
 //
-// Only mount(-like) processes call Connect (-init writes the config without contacting the
-// key service); the id (NodeID) is read back from the config on every mount, so the first
-// mount's generate and all later unwraps share one keyspace. mockAWS selects the
-// instance-identity source for the real gateway connector (mock vs AWS IMDS); it is threaded
-// now and attached to requests in a later phase.
+// Only mount(-like) processes call Connect. The id (NodeID) comes from the config. The instance
+// identity does not: it lives in the key ring, which is not loaded yet, so the caller hands it over
+// with DataKey().AdoptIdentity once it has one.
+//
+// mockAWS selects the instance-identity source for the real gateway connector; it is threaded now and
+// attached to requests in a later phase.
 func Connect(gatewayHost, gatewayCertDir, id string, mockKMS, mockAWS, isSearch bool) {
 	initOnce.Do(func() {
 		switch {

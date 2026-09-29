@@ -22,7 +22,7 @@ import (
 var testPw = []byte("test")
 
 func TestMain(m *testing.M) {
-	test_helpers.ResetTmpDir(false)
+	test_helpers.ResetTmpDir()
 	before := test_helpers.ListFds(0, "")
 	r := m.Run()
 	after := test_helpers.ListFds(0, "")
@@ -43,7 +43,7 @@ func TestInit(t *testing.T) {
 }
 
 // Test that gocryptfs.conf and gocryptfs.diriv are there with the expected
-// permissions after -init
+// permissions after -init and the first mount
 func TestInitFilePerms(t *testing.T) {
 	dir := test_helpers.InitFS(t)
 	var st syscall.Stat_t
@@ -52,6 +52,10 @@ func TestInitFilePerms(t *testing.T) {
 	if perms != 0400 {
 		t.Errorf("Wrong permissions for gocryptfs.conf: %#o", perms)
 	}
+	// The root gocryptfs.diriv is written by the first mount.
+	mnt := dir + ".mnt"
+	test_helpers.MountOrFatal(t, dir, mnt, "-extpass=echo test")
+	test_helpers.UnmountPanic(mnt)
 	st = syscall.Stat_t{}
 	syscall.Stat(dir+"/gocryptfs.diriv", &st)
 	perms = st.Mode & 0777
@@ -69,135 +73,24 @@ func TestInitDevRandom(t *testing.T) {
 	test_helpers.InitFS(t, "-devrandom")
 }
 
-// testPasswd changes the password from "test" to "test" using
-// the -extpass method, then from "test" to "newpasswd" using the
-// stdin method.
-func testPasswd(t *testing.T, dir string, extraArgs ...string) {
-	// Change password #1: old passwd via "-extpass", new one via stdin
-	args := []string{"-q", "-passwd", "-extpass", "echo test"}
-	args = append(args, extraArgs...)
-	args = append(args, dir)
-	cmd := exec.Command(test_helpers.GocryptfsBinary, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	p, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = cmd.Start()
-	if err != nil {
-		t.Error(err)
-	}
-	// New password through stdin
-	p.Write([]byte("test\n"))
-	p.Close()
-	err = cmd.Wait()
-	if err != nil {
-		t.Error(err)
-	}
-
-	// Change password #2: using stdin
-	args = []string{"-q", "-passwd"}
-	args = append(args, extraArgs...)
-	args = append(args, dir)
-	cmd = exec.Command(test_helpers.GocryptfsBinary, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	p, err = cmd.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = cmd.Start()
-	if err != nil {
-		t.Error(err)
-	}
-	// Old password
-	p.Write([]byte("test\n"))
-	// New password
-	p.Write([]byte("newpasswd\n"))
-	p.Close()
-	err = cmd.Wait()
-	if err != nil {
-		t.Error(err)
-	}
-}
-
-// Test -passwd flag
-func TestPasswd(t *testing.T) {
-	// Create FS
-	dir := test_helpers.InitFS(t)
-	mnt := dir + ".mnt"
-	// Add content
-	test_helpers.MountOrFatal(t, dir, mnt, "-extpass", "echo test")
-	file1 := mnt + "/file1"
-	err := os.WriteFile(file1, []byte("somecontent"), 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = test_helpers.UnmountErr(mnt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Change password to "newpasswd"
-	testPasswd(t, dir)
-	// Mount and verify
-	test_helpers.MountOrFatal(t, dir, mnt, "-extpass", "echo newpasswd")
-	content, err := os.ReadFile(file1)
-	if err != nil {
-		t.Error(err)
-	} else if string(content) != "somecontent" {
-		t.Errorf("wrong content: %q", string(content))
-	}
-	err = test_helpers.UnmountErr(mnt)
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-// Test -passwd with -reverse
-func TestPasswdReverse(t *testing.T) {
-	// Create FS
-	dir := test_helpers.InitFS(t, "-reverse")
-	testPasswd(t, dir, "-reverse")
-}
-
 // Test -init & -config flag
 func TestInitConfig(t *testing.T) {
 	config := test_helpers.TmpDir + "/TestInitConfig.conf"
-	dir := test_helpers.InitFS(t, "-config="+config)
+	test_helpers.InitFS(t, "-config="+config)
 
 	_, err := os.Stat(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Test -passwd & -config
-	cmd2 := exec.Command(test_helpers.GocryptfsBinary, "-q", "-passwd", "-extpass", "echo test",
-		"-config", config, dir)
-	cmd2.Stdout = os.Stdout
-	cmd2.Stderr = os.Stderr
-	p, err := cmd2.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = cmd2.Start()
-	if err != nil {
-		t.Error(err)
-	}
-	// New password
-	p.Write([]byte("passwd\n"))
-	p.Close()
-	err = cmd2.Wait()
-	if err != nil {
-		t.Error(err)
-	}
-
 }
 
 // Test -ro
 func TestRo(t *testing.T) {
 	dir := test_helpers.InitFS(t)
 	mnt := dir + ".mnt"
+	// The first mount persists the filesystem's first data key, so it must be writable.
+	test_helpers.MountOrFatal(t, dir, mnt, "-extpass=echo test")
+	test_helpers.UnmountPanic(mnt)
 	test_helpers.MountOrFatal(t, dir, mnt, "-ro", "-extpass=echo test")
 	defer test_helpers.UnmountPanic(mnt)
 
@@ -265,69 +158,6 @@ func TestShadows(t *testing.T) {
 	}
 }
 
-// TestMountPasswordIncorrect makes sure the correct exit code is used when the password
-// was incorrect while mounting.
-// Also checks that we don't leave a socket file behind.
-func TestMountPasswordIncorrect(t *testing.T) {
-	cDir := test_helpers.InitFS(t) // Create filesystem with password "test"
-	ctlSock := cDir + ".sock"
-	pDir := cDir + ".mnt"
-	err := test_helpers.Mount(cDir, pDir, false, "-extpass", "echo WRONG", "-wpanic=false", "-ctlsock", ctlSock)
-	exitCode := test_helpers.ExtractCmdExitCode(err)
-	if exitCode != exitcodes.PasswordIncorrect {
-		t.Errorf("wrong exit code: want=%d, have=%d", exitcodes.PasswordIncorrect, exitCode)
-	}
-	if _, err := os.Stat(ctlSock); err == nil {
-		t.Errorf("socket file %q left behind", ctlSock)
-	}
-}
-
-// TestMountPasswordEmpty makes sure the correct exit code is used when the password
-// was empty while mounting.
-// Also checks that we don't leave a socket file behind (https://github.com/rfjakob/gocryptfs/issues/634).
-func TestMountPasswordEmpty(t *testing.T) {
-	cDir := test_helpers.InitFS(t) // Create filesystem with password "test"
-	ctlSock := cDir + ".sock"
-	pDir := cDir + ".mnt"
-	err := test_helpers.Mount(cDir, pDir, false, "-extpass", "true", "-wpanic=false", "-ctlsock", ctlSock)
-	exitCode := test_helpers.ExtractCmdExitCode(err)
-	if exitCode != exitcodes.ReadPassword {
-		t.Errorf("want=%d, got=%d", exitcodes.ReadPassword, exitCode)
-	}
-	if _, err := os.Stat(ctlSock); err == nil {
-		t.Errorf("socket file %q left behind", ctlSock)
-	}
-}
-
-// TestPasswdPasswordIncorrect makes sure the correct exit code is used when the password
-// was incorrect while changing the password
-func TestPasswdPasswordIncorrect(t *testing.T) {
-	cDir := test_helpers.InitFS(t) // Create filesystem with password "test"
-	// Change password
-	cmd := exec.Command(test_helpers.GocryptfsBinary, "-passwd", cDir)
-	childStdin, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = cmd.Start()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = childStdin.Write([]byte("WRONGPASSWORD\nNewPassword"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = childStdin.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = cmd.Wait()
-	exitCode := test_helpers.ExtractCmdExitCode(err)
-	if exitCode != exitcodes.PasswordIncorrect {
-		t.Errorf("want=%d, got=%d", exitcodes.PasswordIncorrect, exitCode)
-	}
-}
-
 // Check that we correctly background on mount and close stderr and stdout.
 // Something like
 //
@@ -385,7 +215,7 @@ func TestMountBackground(t *testing.T) {
 // user. Only one operation flag is allowed.
 func TestMultipleOperationFlags(t *testing.T) {
 	// Test all combinations
-	opFlags := []string{"-init", "-info", "-passwd", "-fsck"}
+	opFlags := []string{"-init", "-info", "-fsck"}
 	for _, flag1 := range opFlags {
 		var flag2 string
 		for _, flag2 = range opFlags {
@@ -435,40 +265,6 @@ func TestMissingOArg(t *testing.T) {
 		t.Fatalf("this should have failed with code %d, but returned %d",
 			exitcodes.Usage, exitCode)
 	}
-}
-
-// -exclude must return an error in forward mode
-func TestExcludeForward(t *testing.T) {
-	dir := test_helpers.InitFS(t)
-	mnt := dir + ".mnt"
-	err := test_helpers.Mount(dir, mnt, false, "-extpass", "echo test", "-exclude", "foo")
-	if err == nil {
-		t.Errorf("-exclude in forward mode should fail")
-	}
-	t.Log(err)
-}
-
-// Check that the config file can be read from a named pipe.
-// Make sure bug https://github.com/rfjakob/gocryptfs/issues/258 does not come
-// back.
-func TestConfigPipe(t *testing.T) {
-	dir := test_helpers.InitFS(t)
-	mnt := dir + ".mnt"
-	err := os.Mkdir(mnt, 0700)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bashLine := fmt.Sprintf("%s -q -extpass \"echo test\" -config <(cat %s/gocryptfs.conf) %s %s", test_helpers.GocryptfsBinary, dir, dir, mnt)
-	cmd := exec.Command("bash", "-c", bashLine)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stdout
-	err = cmd.Run()
-	exitCode := test_helpers.ExtractCmdExitCode(err)
-	if exitCode != 0 {
-		t.Errorf("bash command\n%q\nresulted in exit code %d", bashLine, exitCode)
-		return
-	}
-	test_helpers.UnmountPanic(mnt)
 }
 
 // Ciphertext dir and mountpoint contains a comma
@@ -629,7 +425,7 @@ func TestBadname(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ciphername := range ciphernames {
-		if ciphername != "gocryptfs.conf" && ciphername != "gocryptfs.diriv" {
+		if ciphername != "gocryptfs.conf" && ciphername != "gocryptfs.diriv" && ciphername != configfile.KeyRingFileName {
 			encryptedfilename = ciphername
 			// found cipher name of "file"
 			break
@@ -778,28 +574,6 @@ func TestBadname(t *testing.T) {
 	}
 }
 
-// TestPassfile tests the `-passfile` option
-func TestPassfile(t *testing.T) {
-	dir := test_helpers.InitFS(t)
-	mnt := dir + ".mnt"
-	passfile1 := mnt + ".1.txt"
-	os.WriteFile(passfile1, []byte("test"), 0600)
-	test_helpers.MountOrFatal(t, dir, mnt, "-passfile="+passfile1)
-	defer test_helpers.UnmountPanic(mnt)
-}
-
-// TestPassfileX2 tests that the `-passfile` option can be passed twice
-func TestPassfileX2(t *testing.T) {
-	dir := test_helpers.InitFS(t)
-	mnt := dir + ".mnt"
-	passfile1 := mnt + ".1.txt"
-	passfile2 := mnt + ".2.txt"
-	os.WriteFile(passfile1, []byte("te"), 0600)
-	os.WriteFile(passfile2, []byte("st"), 0600)
-	test_helpers.MountOrFatal(t, dir, mnt, "-passfile="+passfile1, "-passfile="+passfile2)
-	defer test_helpers.UnmountPanic(mnt)
-}
-
 // TestInitNotEmpty checks that `gocryptfs -init` returns the right error code
 // if CIPHERDIR is not empty. See https://github.com/rfjakob/gocryptfs/pull/503
 func TestInitNotEmpty(t *testing.T) {
@@ -894,8 +668,10 @@ func TestOrphanedSocket(t *testing.T) {
 	mnt := cDir + ".mnt"
 	test_helpers.MountOrFatal(t, cDir, mnt, "-extpass", "echo test", "-wpanic=false", "-ctlsock", ctlSock)
 
-	mnt2 := cDir + ".mnt2"
-	err := test_helpers.Mount(cDir, mnt2, false, "-extpass", "echo test", "-wpanic=false", "-ctlsock", ctlSock)
+	// A second mount of cDir would exit on the key-ring lock before it reaches the socket.
+	cDir2 := test_helpers.InitFS(t)
+	mnt2 := cDir2 + ".mnt"
+	err := test_helpers.Mount(cDir2, mnt2, false, "-extpass", "echo test", "-wpanic=false", "-ctlsock", ctlSock)
 	exitCode := test_helpers.ExtractCmdExitCode(err)
 	if exitCode != exitcodes.CtlSock {
 		t.Errorf("wrong exit code: want=%d, have=%d", exitcodes.CtlSock, exitCode)

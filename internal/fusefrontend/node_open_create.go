@@ -78,7 +78,7 @@ func (n *Node) Create(ctx context.Context, name string, flags uint32, mode uint3
 		// Create ".name"
 		err = rn.nameTransform.WriteLongNameAt(dirfd, cName, name)
 		if err != nil {
-			return nil, nil, 0, fs.ToErrno(err)
+			return nil, nil, 0, nameErrno(err)
 		}
 		// Create content
 		fd, err = syscallcompat.OpenatUser(dirfd, cName, newFlags|syscall.O_CREAT|syscall.O_EXCL, mode, ctx2)

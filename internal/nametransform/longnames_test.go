@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rfjakob/eme"
+
 	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
 )
@@ -35,7 +37,7 @@ func TestRemoveLongNameSuffix(t *testing.T) {
 
 func newLognamesTestInstance(longNameMax uint8) *NameTransform {
 	cCore := cryptocore.New(make([]byte, cryptocore.KeyLen), cryptocore.BackendGoGCM, contentenc.DefaultIVBits)
-	return New(cCore.EMECipher, true, longNameMax, true, nil, false)
+	return New([]*eme.EMECipher{cCore.EMECipher}, true, longNameMax, true, nil, false)
 }
 
 func TestLongNameMax(t *testing.T) {
@@ -48,14 +50,14 @@ func TestLongNameMax(t *testing.T) {
 		}
 		for l := 0; l <= NameMax+10; l++ {
 			name := strings.Repeat("x", l)
-			out, err := n.EncryptAndHashName(name, iv)
+			out, err := n.EncryptAndHashName(name, iv, 0)
 			if l == 0 || l > NameMax {
 				if err == nil {
 					t.Errorf("should have rejected a name of length %d, but did not", l)
 				}
 				continue
 			}
-			cName, _ := n.EncryptName(name, iv)
+			cName, _ := n.EncryptName(name, iv, 0)
 			rawLen := len(cName)
 			want := LongNameNone
 			if rawLen > max {

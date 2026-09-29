@@ -42,6 +42,7 @@ type Args struct {
 	// like rsync's `--one-file-system` does.
 	// Only applicable to reverse mode.
 	OneFileSystem bool
-	// DeterministicNames disables gocryptfs.diriv files
+	// DeterministicNames fixes every gocryptfs.diriv's IV to all-zero, so a name encrypts the
+	// same way in every directory. The file itself still exists: it carries the key-ring index.
 	DeterministicNames bool
 }

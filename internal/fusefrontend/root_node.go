@@ -1,6 +1,8 @@
 package fusefrontend
 
 import (
+	"encoding/binary"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -32,6 +34,9 @@ type RootNode struct {
 	// This lock is used by openWriteOnlyFile() to block concurrent opens while
 	// it relaxes the permissions on a file.
 	openWriteOnlyLock sync.RWMutex
+	// xattrKeyIdxLock serializes stamping an inode's xattr key-index marker on its first encrypted
+	// xattr, so two concurrent first sets cannot stamp two different indices.
+	xattrKeyIdxLock sync.Mutex
 	// MitigatedCorruptions is used to report data corruption that is internally
 	// mitigated by ignoring the corrupt item. For example, when OpenDir() finds
 	// a corrupt filename, we still return the other valid filenames.
@@ -148,10 +153,10 @@ func (rn *RootNode) isFiltered(child string) bool {
 	if !rn.args.PlaintextNames {
 		return false
 	}
-	// gocryptfs.conf in the root directory is forbidden
-	if child == configfile.ConfDefaultName {
-		tlog.Info.Printf("The name /%s is reserved when -plaintextnames is used\n",
-			configfile.ConfDefaultName)
+	// gocryptfs.conf and the key ring in the root directory are forbidden
+	switch child {
+	case configfile.ConfDefaultName, configfile.KeyRingFileName, configfile.KeyRingTmpFileName:
+		tlog.Info.Printf("The name /%s is reserved when -plaintextnames is used\n", child)
 		return true
 	}
 	// Note: gocryptfs.diriv is NOT forbidden because diriv and plaintextnames
@@ -159,26 +164,47 @@ func (rn *RootNode) isFiltered(child string) bool {
 	return false
 }
 
+// keyIdxPrefixLen is the length of the big-endian uint16 key-ring index that symlink targets and
+// xattr values carry in front of their ciphertext. They are encrypted like a content block but
+// have no file header, so without it decrypt would have to guess which key wrote them.
+const keyIdxPrefixLen = 2
+
+// prependKeyIdx returns keyIdx || cData.
+func prependKeyIdx(keyIdx uint16, cData []byte) []byte {
+	out := make([]byte, keyIdxPrefixLen+len(cData))
+	binary.BigEndian.PutUint16(out, keyIdx)
+	copy(out[keyIdxPrefixLen:], cData)
+	return out
+}
+
+// splitKeyIdx is the inverse of prependKeyIdx. Callers must have handled the empty case first:
+// an empty value carries no ciphertext and therefore no index. A prefix with nothing behind
+// it is corruption, not an empty value, so it has to fail rather than decrypt to nothing.
+func splitKeyIdx(blob []byte) (keyIdx uint16, cData []byte, err error) {
+	if len(blob) <= keyIdxPrefixLen {
+		return 0, nil, fmt.Errorf("too short to carry a key-ring index plus ciphertext: %d bytes", len(blob))
+	}
+	return binary.BigEndian.Uint16(blob), blob[keyIdxPrefixLen:], nil
+}
+
 // decryptSymlinkTarget: "cData64" is base64-decoded and decrypted
 // like file contents (GCM).
 // The empty string decrypts to the empty string.
 //
 // This function does not do any I/O and is hence symlink-safe.
-//
-// Symlink targets and xattr values are encrypted like a content block but have no file header, so
-// decrypt has to assume the write key rather than being told which one was used. Phase-3 rotation
-// therefore has to either re-encrypt them or record the index alongside the value — the envelope
-// model this replaced did the latter, in a plain unencrypted xattr, and the index is likewise not
-// secret.
 func (rn *RootNode) decryptSymlinkTarget(cData64 string) (string, error) {
 	if cData64 == "" {
 		return "", nil
 	}
-	cData, err := rn.nameTransform.B64DecodeString(cData64)
+	blob, err := rn.nameTransform.B64DecodeString(cData64)
 	if err != nil {
 		return "", err
 	}
-	data, err := rn.contentEnc.DecryptBlock([]byte(cData), 0, nil, contentenc.WriteKeyIdx)
+	keyIdx, cData, err := splitKeyIdx(blob)
+	if err != nil {
+		return "", err
+	}
+	data, err := rn.contentEnc.DecryptBlock(cData, 0, nil, keyIdx)
 	if err != nil {
 		return "", err
 	}
@@ -240,9 +266,11 @@ func (rn *RootNode) encryptSymlinkTarget(data string) (cData64 string) {
 		return ""
 	}
 
-	cData := rn.contentEnc.EncryptBlock([]byte(data), 0, nil, contentenc.WriteKeyIdx)
-	cData64 = rn.nameTransform.B64EncodeToString(cData)
-	return cData64
+	keyIdx := rn.contentEnc.WriteKeyIdx()
+	cData := rn.contentEnc.EncryptBlock([]byte(data), 0, nil, keyIdx)
+	// Inside the base64, so the stored target stays a single token with no separator to parse
+	// and the index sits at a fixed offset.
+	return rn.nameTransform.B64EncodeToString(prependKeyIdx(keyIdx, cData))
 }
 
 // encryptXattrValue encrypts the xattr value "data".
@@ -254,7 +282,8 @@ func (rn *RootNode) encryptXattrValue(data []byte) (cData []byte) {
 		return []byte{}
 	}
 
-	return rn.contentEnc.EncryptBlock(data, 0, nil, contentenc.WriteKeyIdx)
+	keyIdx := rn.contentEnc.WriteKeyIdx()
+	return prependKeyIdx(keyIdx, rn.contentEnc.EncryptBlock(data, 0, nil, keyIdx))
 }
 
 // decryptXattrValue decrypts the xattr value "cData".
@@ -262,39 +291,31 @@ func (rn *RootNode) decryptXattrValue(cData []byte) (data []byte, err error) {
 	if len(cData) == 0 {
 		return []byte{}, nil
 	}
-	data, err1 := rn.contentEnc.DecryptBlock([]byte(cData), 0, nil, contentenc.WriteKeyIdx)
-	if err1 == nil {
-		return data, nil
+	keyIdx, cData, err := splitKeyIdx(cData)
+	if err != nil {
+		return nil, err
 	}
-	// This backward compatibility is needed to support old
-	// file systems having xattr values base64-encoded.
-	cData, err2 := rn.nameTransform.B64DecodeString(string(cData))
-	if err2 != nil {
-		// Looks like the value was not base64-encoded, but just corrupt.
-		// Return the original decryption error: err1
-		return nil, err1
-	}
-	return rn.contentEnc.DecryptBlock([]byte(cData), 0, nil, contentenc.WriteKeyIdx)
+	return rn.contentEnc.DecryptBlock(cData, 0, nil, keyIdx)
 }
 
 // encryptXattrName transforms "user.foo" to "user.gocryptfs.a5sAd4XAa47f5as6dAf"
-func (rn *RootNode) encryptXattrName(attr string) (string, error) {
+func (rn *RootNode) encryptXattrName(attr string, keyIdx uint16) (string, error) {
 	// xattr names are encrypted like file names, but with a fixed IV.
-	cAttr, err := rn.nameTransform.EncryptXattrName(attr)
+	cAttr, err := rn.nameTransform.EncryptXattrName(attr, keyIdx)
 	if err != nil {
 		return "", err
 	}
 	return xattrStorePrefix + cAttr, nil
 }
 
-func (rn *RootNode) decryptXattrName(cAttr string) (attr string, err error) {
+func (rn *RootNode) decryptXattrName(cAttr string, keyIdx uint16) (attr string, err error) {
 	// Reject anything that does not start with "user.gocryptfs."
 	if !strings.HasPrefix(cAttr, xattrStorePrefix) {
 		return "", syscall.EINVAL
 	}
 	// Strip "user.gocryptfs." prefix
 	cAttr = cAttr[len(xattrStorePrefix):]
-	attr, err = rn.nameTransform.DecryptXattrName(cAttr)
+	attr, err = rn.nameTransform.DecryptXattrName(cAttr, keyIdx)
 	if err != nil {
 		return "", err
 	}

@@ -35,14 +35,18 @@ func mockGatewayDBPath(nodeID string) string {
 
 var mockGatewayBucket = []byte("kek")
 
-// mockGatewayConnector emulates the gateway data-key API in-process with tkutils/kek. It holds the
-// KEKs the real gateway would keep server-side — one per generated key ID — persisted in bbolt and
-// keyed by key ID. Unwrap selects the KEK by key ID alone. That is a mock simplification, NOT a mirror
-// of the server: keep's TKFS unwrap goes through KekUnwrapScoped, which additionally requires the key
-// ID to be the KEK the caller's keyspace currently owns. So mock-backed tests cannot catch a
-// keyspace-scoping regression — that behavior is covered by keep's own tests.
+// mockGatewayConnector emulates the gateway data-key API in-process with tkutils/kek, keeping the KEKs
+// keep would hold in bbolt. As in keep, a generate without an identity mints a KEK and one with an
+// identity wraps under that KEK; unwrap selects the KEK by key ID alone.
+// mockKeyEpoch starts the mock's key stamps far from any real clock, so a test can tell the key
+// service's stamp from this host's.
+var mockKeyEpoch = time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+
 type mockGatewayConnector struct {
-	db *bbolt.DB
+	db       *bbolt.DB
+	identity instanceIdentity
+	// generates counts this connector's generates; bbolt's single writer serializes it.
+	generates int
 }
 
 func newMockGatewayConnector(nodeID, dbPath string) *mockGatewayConnector {
@@ -69,25 +73,53 @@ func newMockGatewayConnector(nodeID, dbPath string) *mockGatewayConnector {
 	return &mockGatewayConnector{db: db}
 }
 
-// GenerateTKFSDataKey mints a fresh KEK, wraps a new master key under it, and persists the KEK
-// so the ciphertext can be unwrapped later.
+// GenerateTKFSDataKey wraps a new master key under the KEK the connector's identity names, minting
+// that KEK when there is no identity yet.
 func (m *mockGatewayConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
-	k, err := kek.Generate(kek.AES256_GCM)
+	var dk TKFSDataKey
+	keyID := m.identity.get()
+	err := m.db.Update(func(t *bbolt.Tx) error {
+		b := t.Bucket(mockGatewayBucket)
+		var k kek.Kek
+		var err error
+		if keyID != "" {
+			packed := b.Get(m.storeKey(keyID))
+			if packed == nil {
+				return fmt.Errorf("mock gateway: unknown KEK %q", keyID)
+			}
+			if k, err = kek.Unpack(packed); err != nil {
+				return fmt.Errorf("mock gateway: unpacking KEK %q: %w", keyID, err)
+			}
+		} else {
+			if k, err = kek.Generate(kek.AES256_GCM); err != nil {
+				return err
+			}
+			keyID = uuid.NewString()
+			if err = b.Put(m.storeKey(keyID), kek.Pack(k)); err != nil {
+				return err
+			}
+		}
+		// Inside the transaction: an unpacked KEK's key can point into the bbolt mmap, which is
+		// only valid while the transaction is open. Wrap's outputs are freshly allocated.
+		pt, ct, err := k.Wrap()
+		if err != nil {
+			return err
+		}
+		m.generates++
+		dk = TKFSDataKey{KeyID: keyID, Plaintext: pt, Ciphertext: ct,
+			CreatedAt: mockKeyEpoch.Add(time.Duration(m.generates) * time.Second)}
+		return nil
+	})
 	if err != nil {
 		return TKFSDataKey{}, err
 	}
-	pt, ct, err := k.Wrap()
-	if err != nil {
-		return TKFSDataKey{}, err
+	if err := m.identity.adopt(dk.KeyID); err != nil {
+		return TKFSDataKey{}, fmt.Errorf("mock gateway generate: %w", err)
 	}
-	keyID := uuid.NewString()
-	if err = m.put(keyID, kek.Pack(k)); err != nil {
-		return TKFSDataKey{}, err
-	}
-	return TKFSDataKey{KeyID: keyID, Plaintext: pt, Ciphertext: ct}, nil
+	return dk, nil
 }
 
-// UnwrapTKFSDataKey looks up the KEK for keyID within this keyspace and unwraps the ciphertext.
+// UnwrapTKFSDataKey looks up the KEK for keyID and unwraps the ciphertext.
 func (m *mockGatewayConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]byte, error) {
 	// keyID comes from the persisted key ring; reject values that would make the storeKey
 	// composition ambiguous before they reach the store.
@@ -108,21 +140,19 @@ func (m *mockGatewayConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte
 	return k.Unwrap(ciphertext)
 }
 
+// AdoptIdentity records the identity read out of this filesystem's key ring.
+func (m *mockGatewayConnector) AdoptIdentity(id string) error {
+	return m.identity.adopt(id)
+}
+
 // Close releases the bbolt file lock.
 func (m *mockGatewayConnector) Close() error {
 	return m.db.Close()
 }
 
-// storeKey is the bbolt key for a KEK: the key ID itself. Unwrap looks up by key ID alone, so no
-// keyspace prefix is applied (see the type doc — the real server also gates on the keyspace).
+// storeKey is the bbolt key for a KEK: its key ID.
 func (m *mockGatewayConnector) storeKey(keyID string) []byte {
 	return []byte(keyID)
-}
-
-func (m *mockGatewayConnector) put(keyID string, packed []byte) error {
-	return m.db.Update(func(t *bbolt.Tx) error {
-		return t.Bucket(mockGatewayBucket).Put(m.storeKey(keyID), packed)
-	})
 }
 
 func (m *mockGatewayConnector) get(keyID string) (packed []byte, err error) {

@@ -62,12 +62,13 @@ type CreateArgs struct {
 	LongNameMax        uint8
 }
 
-// Create - create a new config and write it to "Filename". No key ring is written: the first
-// mount generates the data key and creates the key-ring file (see keyring.go).
+// Create - create a new config and write it to "Filename". No key ring is written, and so no identity
+// is assigned: a filesystem's InstanceID is the id of the KEK keep mints on its first generate, which
+// the first mount records in the key ring (see keyring.go).
 func Create(args *CreateArgs) error {
 	if args.NodeID == "" {
-		// The NodeID scopes the keyspace for the first mount's generate and every later
-		// unwrap; initDir resolves it, Create must not mint a different one.
+		// The NodeID is reported on every data-key call and heartbeat, so a blocklist entry can
+		// name it; initDir resolves it, Create must not mint a different one.
 		return fmt.Errorf("NodeID is required")
 	}
 	cf := ConfFile{

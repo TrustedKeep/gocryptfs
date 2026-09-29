@@ -29,6 +29,8 @@ type dirCacheEntry struct {
 	fd int
 	// content of gocryptfs.diriv in this directory
 	iv []byte
+	// key-ring index from gocryptfs.diriv
+	keyIdx uint16
 }
 
 func (e *dirCacheEntry) Clear() {
@@ -76,7 +78,7 @@ func (d *dirCache) Clear() {
 
 // Store the entry in the cache. The passed "fd" will be Dup()ed, and the caller
 // can close their copy at will.
-func (d *dirCache) Store(node *Node, fd int, iv []byte) {
+func (d *dirCache) Store(node *Node, fd int, iv []byte, keyIdx uint16) {
 	// Note: package ensurefds012, imported from main, guarantees that dirCache
 	// can never get fds 0,1,2.
 	if fd <= 0 || len(iv) != d.ivLen {
@@ -94,10 +96,11 @@ func (d *dirCache) Store(node *Node, fd int, iv []byte) {
 		tlog.Warn.Printf("dirCache.Store: Dup failed: %v", err)
 		return
 	}
-	d.dbg("dirCache.Store  %p fd=%d iv=%x\n", node, fd2, iv)
+	d.dbg("dirCache.Store  %p fd=%d iv=%x keyIdx=%d\n", node, fd2, iv, keyIdx)
 	e.fd = fd2
 	e.node = node
 	e.iv = iv
+	e.keyIdx = keyIdx
 	// expireThread is started on the first Lookup()
 	if !d.expireThreadRunning {
 		d.expireThreadRunning = true
@@ -105,10 +108,10 @@ func (d *dirCache) Store(node *Node, fd int, iv []byte) {
 	}
 }
 
-// Lookup checks if relPath is in the cache, and returns an (fd, iv) pair.
-// It returns (-1, nil) if not found. The fd is internally Dup()ed and the
+// Lookup checks if relPath is in the cache, and returns an (fd, iv, keyIdx) tuple.
+// It returns (-1, nil, 0) if not found. The fd is internally Dup()ed and the
 // caller must close it when done.
-func (d *dirCache) Lookup(node *Node) (fd int, iv []byte) {
+func (d *dirCache) Lookup(node *Node) (fd int, iv []byte, keyIdx uint16) {
 	d.Lock()
 	defer d.Unlock()
 	if enableStats {
@@ -129,14 +132,15 @@ func (d *dirCache) Lookup(node *Node) (fd int, iv []byte) {
 		fd, err = syscall.Dup(e.fd)
 		if err != nil {
 			tlog.Warn.Printf("dirCache.Lookup: Dup failed: %v", err)
-			return -1, nil
+			return -1, nil, 0
 		}
 		iv = e.iv
+		keyIdx = e.keyIdx
 		break
 	}
 	if fd == 0 {
 		d.dbg("dirCache.Lookup %p miss\n", node)
-		return -1, nil
+		return -1, nil, 0
 	}
 	if enableStats {
 		d.hits++
@@ -144,8 +148,8 @@ func (d *dirCache) Lookup(node *Node) (fd int, iv []byte) {
 	if fd <= 0 || len(iv) != d.ivLen {
 		log.Panicf("Lookup sanity check failed: fd=%d len=%d", fd, len(iv))
 	}
-	d.dbg("dirCache.Lookup %p hit fd=%d dup=%d iv=%x\n", node, e.fd, fd, iv)
-	return fd, iv
+	d.dbg("dirCache.Lookup %p hit fd=%d dup=%d iv=%x keyIdx=%d\n", node, e.fd, fd, iv, keyIdx)
+	return fd, iv, keyIdx
 }
 
 // expireThread is started on the first Lookup()

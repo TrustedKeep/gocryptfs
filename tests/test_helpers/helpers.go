@@ -13,8 +13,6 @@ import (
 	"testing"
 
 	"github.com/rfjakob/gocryptfs/v2/ctlsock"
-	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
-	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
 )
 
 // TmpDir will be created inside this directory, set in init() to
@@ -69,8 +67,10 @@ func doInit() {
 //	TmpDir
 //	|-- DefaultPlainDir
 //	*-- DefaultCipherDir
-//	    *-- gocryptfs.diriv
-func ResetTmpDir(createDirIV bool) {
+//
+// The root gocryptfs.diriv is not created here: it carries the key-ring index of the key its
+// filenames use, so only the first mount — which is where the ring is minted — can write it.
+func ResetTmpDir() {
 	// Try to unmount and delete everything
 	entries, err := os.ReadDir(TmpDir)
 	if err == nil {
@@ -104,17 +104,6 @@ func ResetTmpDir(createDirIV bool) {
 	err = os.Mkdir(DefaultCipherDir, 0755)
 	if err != nil {
 		panic(err)
-	}
-	if createDirIV {
-		// Open cipherdir (following symlinks)
-		dirfd, err := syscall.Open(DefaultCipherDir, syscall.O_DIRECTORY|syscallcompat.O_PATH, 0)
-		if err == nil {
-			err = nametransform.WriteDirIVAt(dirfd)
-			syscall.Close(dirfd)
-		}
-		if err != nil {
-			panic(err)
-		}
 	}
 }
 
@@ -183,9 +172,10 @@ func InitFS(t *testing.T, extraArgs ...string) string {
 }
 
 // InitDefaultCipherDir runs "-init" on DefaultCipherDir, which the caller must have just
-// (re-)created empty via ResetTmpDir(false). Suites that mount DefaultCipherDir directly, rather
-// than a per-test InitFS temp dir, need this: every mount requires a config file naming a key
-// source, and -init is what writes it (along with gocryptfs.diriv).
+// (re-)created empty via ResetTmpDir. Suites that mount DefaultCipherDir directly, rather than a
+// per-test InitFS temp dir, need this: every mount requires a config file naming a key source, and
+// -init is what writes it. The root gocryptfs.diriv comes later, from the first mount, which is
+// where a key-ring index exists to stamp into it.
 //
 // extraArgs carries the options that are decided at init because they are recorded in the config
 // — -plaintextnames, -xchacha, -deterministic-names — not mount-time options.

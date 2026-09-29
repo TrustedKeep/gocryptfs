@@ -1,6 +1,6 @@
-// Package tkfs_kek holds end-to-end integration tests for the TKFS Phase-2 KEK data-key
-// lifecycle, driven through the real gocryptfs binary and real FUSE mounts. They use the
-// in-process mock gateway (-mock-kms) so no live key service is required.
+// Package tkfs_kek holds end-to-end integration tests for the TKFS KEK data-key lifecycle and key
+// rotation, driven through the real gocryptfs binary and real FUSE mounts. They use the in-process
+// mock gateway (-mock-kms) so no live key service is required.
 package tkfs_kek
 
 import (
@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
+	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
+	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
 
@@ -125,6 +127,7 @@ type parsedKeyRing struct {
 	Keys []struct {
 		KeyID      string
 		Ciphertext []byte
+		OpCount    uint64
 	}
 }
 
@@ -166,7 +169,7 @@ func TestKEKFirstMountPersistsOnlyCiphertext(t *testing.T) {
 		t.Fatal("no key-ring file after the first mount")
 	}
 	if len(kr.Keys) != 1 {
-		t.Fatalf("key ring has %d entries after the first mount, want exactly 1 (Phase-2 single-key invariant)", len(kr.Keys))
+		t.Fatalf("key ring has %d entries after the first mount, want exactly 1", len(kr.Keys))
 	}
 	entry := kr.Keys[0]
 	if entry.KeyID == "" {
@@ -207,12 +210,19 @@ func TestKeyRingFileHiddenFromMount(t *testing.T) {
 	if _, err := os.Stat(keyRingPath(cDir)); err != nil {
 		t.Fatalf("key ring missing in cipherdir: %v", err)
 	}
+	// KR.tmp only exists during a ring write, so stand one in for a listing that races it.
+	tmp := filepath.Join(cDir, configfile.KeyRingTmpFileName)
+	if err := os.WriteFile(tmp, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmp)
 	entries, err := os.ReadDir(pDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if e.Name() == configfile.KeyRingFileName || e.Name() == configfile.ConfDefaultName {
+		switch e.Name() {
+		case configfile.KeyRingFileName, configfile.KeyRingTmpFileName, configfile.ConfDefaultName:
 			t.Errorf("%q is visible inside the mount", e.Name())
 		}
 	}
@@ -221,26 +231,38 @@ func TestKeyRingFileHiddenFromMount(t *testing.T) {
 // TestKEKFirstMountFailsClosedWhenPersistFails asserts the data-safety core of the
 // first-mount generate: if the ciphertext cannot be persisted, the mount must fail instead of
 // serving I/O — anything encrypted under an unpersisted key would be lost forever at unmount.
-// An unwritable cipherdir makes the key ring's tmp-file create fail.
+// The root diriv is written first, so no ring can exist without one, and the retry replaces it.
 func TestKEKFirstMountFailsClosedWhenPersistFails(t *testing.T) {
 	cDir := test_helpers.InitFS(t, "-mock-kms")
 	pDir := cDir + ".mnt"
 
-	if err := os.Chmod(cDir, 0500); err != nil {
+	// A non-empty directory where the ring's staging file goes makes the ring write fail.
+	blocker := filepath.Join(cDir, configfile.KeyRingTmpFileName)
+	if err := os.MkdirAll(filepath.Join(blocker, "x"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(cDir, 0755)
-	if err := test_helpers.Mount(cDir, pDir, false, "-mock-kms", "-extpass=echo test"); err == nil {
+	err := test_helpers.Mount(cDir, pDir, false, "-mock-kms", "-extpass=echo test")
+	if err == nil {
 		test_helpers.UnmountPanic(pDir)
 		t.Fatal("first mount must fail when the key-ring entry cannot be persisted")
 	}
-	// The failed attempt must leave the filesystem mountable: still no ring, and no stale tmp
-	// file blocking the retry.
-	if err := os.Chmod(cDir, 0755); err != nil {
+	if code := test_helpers.ExtractCmdExitCode(err); code != exitcodes.WriteConf {
+		t.Errorf("exit code = %d, want %d", code, exitcodes.WriteConf)
+	}
+	if _, absent := readKeyRing(t, cDir); !absent {
+		t.Error("a key ring exists after its write failed")
+	}
+	if _, err := os.Stat(filepath.Join(cDir, nametransform.DirIVFilename)); err != nil {
+		t.Errorf("root diriv missing after the ring write failed: %v", err)
+	}
+	if err := os.RemoveAll(blocker); err != nil {
 		t.Fatal(err)
 	}
 	test_helpers.MountOrFatal(t, cDir, pDir, "-mock-kms", "-extpass=echo test")
-	test_helpers.UnmountPanic(pDir)
+	defer test_helpers.UnmountPanic(pDir)
+	if err := os.WriteFile(filepath.Join(pDir, "f"), []byte("x"), 0600); err != nil {
+		t.Errorf("write after the retry: %v", err)
+	}
 }
 
 // TestKEKFirstMountRefusesReadOnly: the first mount must persist the generated key into the
@@ -282,4 +304,25 @@ func TestKEKRefusesGenerateOverExistingData(t *testing.T) {
 	}
 	test_helpers.MountOrFatal(t, cDir, pDir, "-mock-kms", "-extpass=echo test")
 	test_helpers.UnmountPanic(pDir)
+}
+
+// A second mount of a mounted filesystem is refused.
+func TestSecondMountIsRefused(t *testing.T) {
+	cDir := test_helpers.InitFS(t, "-mock-kms")
+	pDir := cDir + ".mnt"
+	pDir2 := cDir + ".mnt2"
+	if err := os.Mkdir(pDir2, 0700); err != nil {
+		t.Fatal(err)
+	}
+	test_helpers.MountOrFatal(t, cDir, pDir, "-mock-kms", "-extpass=echo test")
+	defer test_helpers.UnmountPanic(pDir)
+
+	err := test_helpers.Mount(cDir, pDir2, false, "-mock-kms", "-extpass=echo test")
+	if err == nil {
+		test_helpers.UnmountPanic(pDir2)
+		t.Fatal("second mount of a mounted filesystem must be refused")
+	}
+	if code := test_helpers.ExtractCmdExitCode(err); code != exitcodes.AlreadyMounted {
+		t.Errorf("exit code = %d, want %d", code, exitcodes.AlreadyMounted)
+	}
 }

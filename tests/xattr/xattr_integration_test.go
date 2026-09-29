@@ -29,17 +29,8 @@ func TestMain(m *testing.M) {
 		fmt.Printf("xattrs not supported on %q\n", test_helpers.TmpDir)
 		os.Exit(1)
 	}
-	test_helpers.ResetTmpDir(false)
+	test_helpers.ResetTmpDir()
 	test_helpers.InitDefaultCipherDir()
-	// Replace the diriv -init wrote with a deterministic one, so encrypted filenames are
-	// deterministic.
-	os.Remove(test_helpers.DefaultCipherDir + "/gocryptfs.diriv")
-	diriv := []byte("1234567890123456")
-	err := os.WriteFile(test_helpers.DefaultCipherDir+"/gocryptfs.diriv", diriv, 0400)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
 	test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir)
 	r := m.Run()
 	test_helpers.UnmountPanic(test_helpers.DefaultPlainDir)
@@ -236,7 +227,8 @@ func lsCipherdir(t *testing.T, dir string) map[string]bool {
 	out := make(map[string]bool)
 	for _, e := range entries {
 		switch e.Name() {
-		case nametransform.DirIVFilename, configfile.ConfDefaultName, configfile.KeyRingFileName:
+		case nametransform.DirIVFilename, configfile.ConfDefaultName,
+			configfile.KeyRingFileName, configfile.KeyRingTmpFileName:
 			continue
 		}
 		out[e.Name()] = true
@@ -282,7 +274,10 @@ func findEncryptedXattrName(t *testing.T, cPath string) string {
 	return found[0]
 }
 
-func TestBase64XattrRead(t *testing.T) {
+// TestXattrValueRead checks that a stored xattr value is decrypted from exactly the bytes on
+// disk — a keyIdx prefix followed by the encrypted block — and that anything else, a base64-wrapped
+// value included, is EIO.
+func TestXattrValueRead(t *testing.T) {
 	attrName := "user.test"
 	attrName2 := "user.test2"
 	attrValue := fmt.Sprintf("test.%d", cryptocore.RandUint64())
@@ -334,14 +329,6 @@ func TestBase64XattrRead(t *testing.T) {
 		t.Fatalf("Attribute binary value decryption error: have=%q want=%q err=%v", string(plainValue), attrValue, err)
 	}
 
-	encryptedAttrValue64 := base64.RawURLEncoding.EncodeToString(encryptedAttrValue)
-	xattr.LSet(encryptedFn, encryptedAttrName2, []byte(encryptedAttrValue64))
-
-	plainValue, err = xattr.LGet(plainFn, attrName2)
-	if err != nil || string(plainValue) != attrValue {
-		t.Fatalf("Attribute base64-encoded value decryption error %s != %s %v", string(plainValue), attrValue, err)
-	}
-
 	// Remount with -wpanic=false so gocryptfs does not panics when it sees
 	// the broken xattrs
 	test_helpers.UnmountPanic(test_helpers.DefaultPlainDir)
@@ -352,6 +339,8 @@ func TestBase64XattrRead(t *testing.T) {
 		"raw-test-long-block123",
 		"raw-test-long-block123-xyz11111111111111111111111111111111111111",
 		"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$",
+		// A base64-wrapped value is corrupt like any other.
+		base64.RawURLEncoding.EncodeToString(encryptedAttrValue),
 	}
 	for _, val := range brokenVals {
 		xattr.LSet(encryptedFn, encryptedAttrName2, []byte(val))
