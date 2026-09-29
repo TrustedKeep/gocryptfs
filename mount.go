@@ -162,6 +162,7 @@ func doMount(args *argContainer) {
 		readOnly:    args.ro,
 		opThreshold: autoRotateThreshold(args),
 		mountpoint:  args.mountpoint,
+		exit:        os.Exit,
 	}
 	// Registered after the wipe so it runs before it: a mount that lived less than one interval
 	// would otherwise contribute nothing to the budget its writes spent.
@@ -169,6 +170,8 @@ func doMount(args *argContainer) {
 	// Before anything is mounted: a gateway that will not answer a heartbeat cannot revoke this
 	// instance either, and a fatal exit here leaves no mountpoint behind.
 	m.verifyKeyService()
+	// Also before mounting, so a count earlier mounts left past the threshold rotates now.
+	m.flushOpCounts()
 
 	// Initialize go-fuse FUSE server
 	srv := initGoFuse(fs, args)
@@ -420,11 +423,8 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, rotator *k
 	if args.allow_other && os.Getuid() == 0 && args._forceOwner == nil {
 		frontendArgs.PreserveOwner = true
 	}
-	// Obtain the 32-byte master keys through the data-key connector (established by
-	// tkc.Connect in doMount). First mount of a freshly initialized filesystem (no key-ring
-	// file): generate the data key now and persist its ciphertext. Later mounts: unwrap every
-	// retained key-ring entry, so data written under a superseded key stays readable. Either
-	// way the gateway holds the KEK and the plaintext never crosses the wire in the clear.
+	// The first mount of a filesystem generates its data key; later mounts unwrap every retained
+	// key-ring entry, so data written under a superseded key stays readable.
 	keyRing, err := configfile.LoadKeyRing(args.config)
 	if err != nil {
 		tlog.Fatal.Printf("Cannot read key ring: %v", err)
@@ -444,15 +444,14 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, rotator *k
 		}
 		freshKey = generateInitialDataKey(args, keyRing, frontendArgs.PlaintextNames, frontendArgs.DeterministicNames)
 	}
-	// The ring is where the identity lives, and this is the first moment it is in hand. A mint has
-	// already adopted it; what this covers is the mount that adopted another mount's ring instead of
-	// generating, whose next generate would otherwise arrive with no identity and mint a second KEK.
+	// A mint has already adopted the identity. Every later mount gets it here, or its next generate
+	// would mint a second KEK.
 	if err := tkc.DataKey().AdoptIdentity(keyRing.InstanceID()); err != nil {
 		tlog.Fatal.Printf("%v", err)
 		os.Exit(exitcodes.Other)
 	}
 	// freshKey is nil when the ring already had a key, which is the usual case.
-	ks := buildKeySets(keyRing, freshKey, cryptoBackend, IVBits)
+	ks := buildKeySets(keyRing, freshKey, cryptoBackend, IVBits, frontendArgs.PlaintextNames)
 
 	cEnc := contentenc.New(ks.core, ks.aeads, contentenc.DefaultBS)
 	nameTransform := nametransform.New(ks.emeCiphers, frontendArgs.LongNames, args.longnamemax,
@@ -504,22 +503,15 @@ type keySets struct {
 	holes []uint16
 }
 
-// unwrapAttempts is how many times a failed unwrap is tried before the entry becomes a hole, and
-// unwrapRetryDelay is the wait before the first retry, doubled after each one. Kept small: a mount
-// makes one round trip per retained entry, so the worst case is this budget times the ring length,
-// and a mount that cannot reach the key service at all should say so quickly.
+// unwrapAttempts is how many times a failed unwrap is tried before the entry becomes a hole. The
+// budget is paid per retained entry, so it is kept small.
 const unwrapAttempts = 3
 
-// unwrapRetryDelay is a variable rather than a const only so tests need not sleep for it.
+// unwrapRetryDelay is the wait before the first retry, doubled after each one. Tests shorten it.
 var unwrapRetryDelay = 500 * time.Millisecond
 
-// unwrapDataKey unwraps one ring entry, retrying what looks like an outage.
-//
-// A 403 is not an outage: it is the key service deciding this instance may not have that key, which
-// is what §0.8's containment is for, and asking again would only repeat the answer. Everything else
-// — a timeout, a 5xx, a dropped connection, a route a half-upgraded gateway does not serve yet — is
-// transient, and this is the only unwrap call site in the program: treat a blip as an answer and the
-// files under that key are unreadable until someone remounts.
+// unwrapDataKey unwraps one ring entry, retrying anything but a 403: that is the key service
+// deciding, and asking again would only repeat the answer.
 func unwrapDataKey(dk tkc.DataKeyConnector, idx uint16, e configfile.KeyRingEntry) (key []byte, err error) {
 	for attempt := 1; ; attempt++ {
 		key, err = dk.UnwrapTKFSDataKey(e.KeyID, e.Ciphertext)
@@ -533,11 +525,9 @@ func unwrapDataKey(dk tkc.DataKeyConnector, idx uint16, e configfile.KeyRingEntr
 	}
 }
 
-// buildKeySets unwraps every retained key-ring entry and derives the content AEAD and the EME name
-// cipher from it, both slices indexed by the entry's ring index. freshKey, if non-nil, is the plaintext
-// of the entry this mount just generated and saves a round trip.
-
-func buildKeySets(kr *configfile.KeyRing, freshKey []byte, backend cryptocore.AEADTypeEnum, ivBits int) *keySets {
+// buildKeySets unwraps every retained key-ring entry into the content AEAD and EME name cipher at its
+// ring index. freshKey, if non-nil, is the plaintext of the entry this mount just generated.
+func buildKeySets(kr *configfile.KeyRing, freshKey []byte, backend cryptocore.AEADTypeEnum, ivBits int, plaintextNames bool) *keySets {
 	activeIdx, err := kr.ActiveIdx()
 	if err != nil {
 		tlog.Fatal.Printf("%v", err)
@@ -552,13 +542,14 @@ func buildKeySets(kr *configfile.KeyRing, freshKey []byte, backend cryptocore.AE
 		key := freshKey
 		if idx != activeIdx || key == nil {
 			if key, err = unwrapDataKey(tkc.DataKey(), idx, e); err != nil {
-				if idx == activeIdx {
-					tlog.Fatal.Printf("Failed to unwrap the active gateway data key: %v", err)
+				// The root diriv is stamped with index 0, so with encrypted names no path
+				// resolves without it.
+				if idx == activeIdx || (idx == 0 && !plaintextNames) {
+					tlog.Fatal.Printf("Failed to unwrap key-ring index %d, which this mount cannot serve without: %v", idx, err)
 					os.Exit(exitcodes.Other)
 				}
-				// Fatal is the level, not the outcome. The mount goes on, but it goes
-				// on serving EIO for part of its tree, and -q must not be able to hide
-				// that; Warn would, under -wpanic, turn one absent key into a panic.
+				// Fatal is the level, not the outcome: the mount goes on, and -q must not
+				// hide that part of it is unreadable.
 				tlog.Fatal.Printf("Key-ring index %d could not be unwrapped (%v). Every file, directory, "+
 					"symlink and xattr value written under that key fails in this mount until it is "+
 					"remounted; the ctlsock Status command lists the affected indices.", idx, err)
@@ -581,12 +572,9 @@ func buildKeySets(kr *configfile.KeyRing, freshKey []byte, backend cryptocore.AE
 	return ks
 }
 
-// generateInitialDataKey mints the data key for a freshly initialized filesystem, appends it to
-// keyRing and persists it, and returns its plaintext. The ciphertext is persisted before the key is
-// used: nothing may be encrypted under a key that is not recoverable from disk.
-//
-// It also writes the root gocryptfs.diriv, which -init cannot — -init never contacts the key service, so
-// there is no ring index to stamp into the file, and writing 0 is the silent default the format forbids.
+// generateInitialDataKey mints the data key for a freshly initialized filesystem, persists it in
+// keyRing and returns its plaintext. It also writes the root gocryptfs.diriv, which needs the ring
+// index and so cannot be written by -init.
 func generateInitialDataKey(args *argContainer, keyRing *configfile.KeyRing, plaintextNames, deterministicNames bool) []byte {
 	ensureCipherdirFresh(args)
 	dk, err := tkc.DataKey().GenerateTKFSDataKey()
@@ -599,27 +587,23 @@ func generateInitialDataKey(args *argContainer, keyRing *configfile.KeyRing, pla
 		Ciphertext: dk.Ciphertext,
 		CreatedAt:  time.Now().UTC(),
 	})
-	if err := keyRing.WriteFile(); err != nil {
-		tlog.Fatal.Printf("Failed to persist the initial key-ring entry: %v", err)
-		os.Exit(exitcodes.WriteConf)
-	}
+	// Before the ring: once a ring is on disk, no later mount comes back here to write it.
 	if !plaintextNames {
 		if err := writeRootDirIV(args.cipherdir, idx, deterministicNames); err != nil {
-			// Roll the ring back: without a root diriv no path resolves, and leaving the
-			// ring behind would make the next mount take the unwrap path and never retry
-			// the diriv. Nothing has been encrypted under the key yet, so dropping it
-			// costs nothing.
-			keyRing.Remove()
 			tlog.Fatal.Printf("Failed to create the root %s: %v", nametransform.DirIVFilename, err)
 			os.Exit(exitcodes.Init)
 		}
 	}
+	// Persisted before use: nothing may be encrypted under a key that is not recoverable from disk.
+	if err := keyRing.WriteFile(); err != nil {
+		tlog.Fatal.Printf("Failed to persist the initial key-ring entry: %v", err)
+		os.Exit(exitcodes.WriteConf)
+	}
 	return dk.Plaintext
 }
 
-// writeRootDirIV creates gocryptfs.diriv in the cipherdir root, stamped with keyIdx. A leftover
-// one is discarded first: no ring existed, so no name on disk depends on the old IV, and the
-// exclusive create would otherwise fail forever after a first mount that got this far and died.
+// writeRootDirIV creates and syncs gocryptfs.diriv in the cipherdir root, stamped with keyIdx. A
+// leftover one is discarded first: no ring existed, so no name on disk depends on the old IV.
 func writeRootDirIV(cipherdir string, keyIdx uint16, deterministicNames bool) error {
 	// Open cipherdir (following symlinks)
 	dirfd, err := syscall.Open(cipherdir, syscall.O_DIRECTORY|syscallcompat.O_PATH, 0)
@@ -628,7 +612,15 @@ func writeRootDirIV(cipherdir string, keyIdx uint16, deterministicNames bool) er
 	}
 	defer syscall.Close(dirfd)
 	syscallcompat.Unlinkat(dirfd, nametransform.DirIVFilename, 0)
-	return nametransform.WriteDirIVAt(dirfd, keyIdx, deterministicNames)
+	if err := nametransform.WriteDirIVAt(dirfd, keyIdx, deterministicNames); err != nil {
+		return err
+	}
+	fd, err := syscallcompat.Openat(dirfd, nametransform.DirIVFilename, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(fd)
+	return syscall.Fsync(fd)
 }
 
 // ensureCipherdirFresh refuses to mint a new key over existing data: a missing key ring is only

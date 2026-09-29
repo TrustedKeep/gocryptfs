@@ -255,7 +255,7 @@ Concrete implementations (all implement `DataKeyConnector`):
 
 | Type | File | Target | Auth | Certs |
 |------|------|--------|------|-------|
-| `gwConnector` | `gwconnect.go` | gatehouse `:7083` `/api/v1/tkfsdatakey/*` | mTLS + per-op DN ACL | `-gateway-cert-dir` (`tls.crt`/`tls.key`/`ca.crt`) |
+| `gwConnector` | `gwconnect.go` | gatehouse `:7083` `/api/v1/tkfsdatakey/*` | mTLS + per-op DN ACL (Phase 3: DN membership + blocklist, checked by keep; phase-3 §12.9) | `-gateway-cert-dir` (`tls.crt`/`tls.key`/`ca.crt`) |
 | `searchConnector` | `search_connect.go` (rewritten) | keep `:7070` `/keepsvc/tenantdatakey/*` | mTLS + tenant token | ramdisk (`gw.cert.pem`/`gw.key.pem`/`gw.ca.pem`/`gw.token`/`gw.hosts.json`) |
 | `mockGatewayConnector` | `mock_gwconnect.go` | in-proc `tkutils/kek` + bbolt | none | none |
 
@@ -451,6 +451,7 @@ key-store zeroize). `security.Memlock()` (`doMount`) already keeps the key out o
   `unwrapTransit`. `Close()`: `CloseIdleConnections()`.
 - The keyspace for search: keep derives the **tenant** from the client-cert `StreetAddress`; the
   request `NodeID` scopes within it. (Search's NodeID is the gocryptfs `NodeID` from `gocryptfs.conf`.)
+  (Superseded in Phase 3: there is no keyspace; the `NodeID` is only a blocklist input — phase-3 §12.7.)
 
 **keep — new `web/tenantdatakey.go`** (as-built; mirrors `web/tenants_ek.go` route/manager/header pattern and
 `web/tenants_crypt.go`'s recipient-pubkey wrap):
@@ -465,6 +466,9 @@ key-store zeroize). `security.Memlock()` (`doMount`) already keeps the key out o
   with the request's `NodeID` and fails closed when there is no association at all. Then transit-wrap
   → respond `TKFSDataKeyUnwrapResponse{TransitWrappedKey}`. Zeroize `pt`. (The unscoped 3-argument
   `KekUnwrap` is deliberately *not* used on this route: it would unwrap any KEK in the tenant.)
+  (Superseded in Phase 3: `KekUnwrapScoped` is deleted. The route calls `tcv.TKFSKekUnwrap`, which runs
+  keep's TKFS policy check and then exactly that 3-argument `KekUnwrap`; the `KeyID` is the instance's
+  identity — phase-3 §12.7.)
 - **path/keyspace mapping:** `KekWrap`/`KekUnwrapScoped` take a `path`/`keyspace` string that derives
   the KEK association. As built it is the bare request `NodeID`, no prefix — stable across generate and
   unwrap for the same filesystem. Caveat carried from §0: `NodeID` is self-asserted and travels in the
@@ -506,7 +510,8 @@ key-store zeroize). `security.Memlock()` (`doMount`) already keeps the key out o
   `KekUnwrapScoped`, which only recovers the key if the requested `KeyID` is the KEK that keyspace
   currently owns. That binds the cert-derived DN half; the `NodeID` half is self-asserted. (Phase 3
   replaced "currently owns" with a per-KEK ownership record, then deleted that too once the identity became
-  the KEK's own id; what is enforced now is that the KEK is a TKFS one — see phase-3 §12.7.)
+  the KEK's own id; unwrap now selects the KEK by `KeyID` alone, behind keep's TKFS policy check — see
+  phase-3 §12.7.)
 - Zeroize plaintext after wrapping. Add real handler tests (round-trip via the mock oec/keep if one
   exists; else httptest against a fake oec).
 
@@ -555,12 +560,14 @@ tenant, matching the existing `WrapFor`/`Unwrap` path (open-Q2).
   squatter has to bind the **wildcard** address: Go sets `SO_REUSEADDR`, so a loopback-only listener
   does not conflict with the mount's wildcard bind and the mount comes up alongside it.
 - **Unit (keep):** `tenantdatakey` generate→unwrap round-trip via `TenantManager`; `KekUnwrapScoped`
-  rejects a KeyID the keyspace does not own and fails closed with no association at all; tenant-token
+  rejects a KeyID the keyspace does not own and fails closed with no association at all (deleted with
+  `KekUnwrapScoped` in Phase 3); tenant-token
   auth reject; no-plaintext-on-wire (assert the base64 wire form, not the decoded bytes). Both
   directions of the transit wrap now come from the one shared `model/transit.go` (covered by tkutils'
   `model/transit_test.go`), so there is no independent client implementation left to cross-check.
 - **Unit (gatehouse):** un-stubbed handler round-trip; DN-ACL still enforced; name-mapping correctness
-  (Ciphertext vs TransitWrappedKey).
+  (Ciphertext vs TransitWrappedKey). (Superseded in Phase 3: the gateway holds no ACL; the check is
+  keep's and tested there — phase-3 §12.7.)
 - **Integration / E2E (all four, the "all repos together" gate):** live `gocryptfs -init` →
   `-fg` mount → write/read → unmount → remount decrypts, against a real gatehouse+keep (default mode)
   **and** a keep `tenantdatakey` (search mode). This is the phase's definition of done.
@@ -623,6 +630,9 @@ prioritized for search.
    the config changed nothing here — both live in the cipherdir. Closing it needs an
    authenticated `NodeID` or a per-filesystem secret kept out of the config — no check over
    self-asserted values can do it. Tracked with the epic-level NodeID-isolation reassessment.
+   (Superseded in Phase 3: the keyspace and `KekUnwrapScoped` are gone and the identity is the KEK's id;
+   the same replay, now pinned by `TestTKFSKekUnwrapDefeatedByFaithfulReplay`, is the soft-isolation cost
+   recorded in phase-3 §12.7.)
 2. ~~**gatehouse `oec` tenant context**~~ **RESOLVED (§0):** the data-key listener uses
    `config.Get().TenantID` (the gateway's own tenant), matching the existing `WrapFor`/`Unwrap` path.
 3. ~~**Transit-wrap helper home**~~ **RESOLVED (§0):** one shared `model/transit.go` in tkutils owns
@@ -645,6 +655,7 @@ prioritized for search.
    They are encrypted like a content block, so on decrypt there is nothing to tell them which key was
    used and they assume the write key. That is exact while the ring holds one entry, and it is a
    **Phase-3 blocker**: rotation must either re-encrypt them or record the index beside the value.
+   (Resolved in Phase 3: both carry a 2-byte index prefix — phase-3 §3.2, §3.3.)
    The envelope model solved this by storing its per-file key id in a plain (unencrypted) xattr next
    to the value, so the precedent exists and the index is not secret. Noted in code on
    `decryptSymlinkTarget`.

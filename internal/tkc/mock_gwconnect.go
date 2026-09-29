@@ -35,19 +35,9 @@ func mockGatewayDBPath(nodeID string) string {
 
 var mockGatewayBucket = []byte("kek")
 
-// mockGatewayCurrentKey names this store's one KEK. Minting one on first use and reusing it is exactly
-// what keep does, and since an instance's identity IS its KEK's id, the mock hands back a usable
-// identity without having to model one. The gap is that the store is per-NodeID: two filesystems on one
-// node share the store, so they share the KEK and therefore the identity, where keep would give them
-// one each. A deliberate simplification, alongside the unwrap-by-key-ID-alone one below.
-var mockGatewayCurrentKey = []byte("__current__")
-
-// mockGatewayConnector emulates the gateway data-key API in-process with tkutils/kek. It holds the
-// KEK the real gateway would keep server-side — ONE per store, minted on the first generate and
-// reused by every later one, as keep does per instance — persisted in bbolt and keyed by key ID.
-// Unwrap selects the KEK by key ID alone; keep additionally refuses a key ID naming a general (MCSE)
-// KEK rather than a TKFS one, so mock-backed tests cannot catch a regression in that check, which is
-// covered by keep's own tests instead.
+// mockGatewayConnector emulates the gateway data-key API in-process with tkutils/kek, keeping the KEKs
+// keep would hold in bbolt. As in keep, a generate without an identity mints a KEK and one with an
+// identity wraps under that KEK; unwrap selects the KEK by key ID alone.
 type mockGatewayConnector struct {
 	db       *bbolt.DB
 	identity instanceIdentity
@@ -77,21 +67,22 @@ func newMockGatewayConnector(nodeID, dbPath string) *mockGatewayConnector {
 	return &mockGatewayConnector{db: db}
 }
 
-// GenerateTKFSDataKey wraps a new master key under this store's KEK, minting that KEK on the first
-// call. Every later generate — every rotation — returns the same KeyID with a different Ciphertext,
-//
-// The lookup, the mint and both writes happen inside one bbolt write transaction, so two callers
-// cannot each conclude the store has no KEK and mint one apiece.
+// GenerateTKFSDataKey wraps a new master key under the KEK the connector's identity names, minting
+// that KEK when there is no identity yet.
 func (m *mockGatewayConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	var dk TKFSDataKey
+	keyID := m.identity.get()
 	err := m.db.Update(func(t *bbolt.Tx) error {
 		b := t.Bucket(mockGatewayBucket)
 		var k kek.Kek
 		var err error
-		keyID := string(b.Get(mockGatewayCurrentKey))
 		if keyID != "" {
-			if k, err = kek.Unpack(b.Get(m.storeKey(keyID))); err != nil {
-				return fmt.Errorf("mock gateway: unpacking the store KEK %q: %w", keyID, err)
+			packed := b.Get(m.storeKey(keyID))
+			if packed == nil {
+				return fmt.Errorf("mock gateway: unknown KEK %q", keyID)
+			}
+			if k, err = kek.Unpack(packed); err != nil {
+				return fmt.Errorf("mock gateway: unpacking KEK %q: %w", keyID, err)
 			}
 		} else {
 			if k, err = kek.Generate(kek.AES256_GCM); err != nil {
@@ -99,10 +90,6 @@ func (m *mockGatewayConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 			}
 			keyID = uuid.NewString()
 			if err = b.Put(m.storeKey(keyID), kek.Pack(k)); err != nil {
-				return err
-			}
-			// After the KEK itself, so the pointer never names a KEK the store does not hold.
-			if err = b.Put(mockGatewayCurrentKey, []byte(keyID)); err != nil {
 				return err
 			}
 		}
@@ -155,8 +142,7 @@ func (m *mockGatewayConnector) Close() error {
 	return m.db.Close()
 }
 
-// storeKey is the bbolt key for a KEK: the key ID itself, with no prefix, because unwrap looks up by
-// key ID alone (see the type doc for the check keep makes that this does not).
+// storeKey is the bbolt key for a KEK: its key ID.
 func (m *mockGatewayConnector) storeKey(keyID string) []byte {
 	return []byte(keyID)
 }

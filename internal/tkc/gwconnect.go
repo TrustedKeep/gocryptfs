@@ -3,7 +3,6 @@ package tkc
 import (
 	"bytes"
 	"crypto/rsa"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -107,9 +106,32 @@ func newGatewayConnector(host, certDir, nodeID string, mockAWS bool) *gwConnecto
 // at construction and the client is never swapped afterward, so it needs no locking. All three
 // files (client cert, key, CA) must be present and the CA must be non-empty.
 func (g *gwConnector) load() error {
-	tlsConfig, err := CertDirTLSConfig(g.certDir)
+	certPath := filepath.Join(g.certDir, gatewayCertFile)
+	keyPath := filepath.Join(g.certDir, gatewayKeyFile)
+	caPath := filepath.Join(g.certDir, gatewayCAFile)
+	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("reading gateway client cert: %w", err)
+	}
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		return fmt.Errorf("reading gateway client key: %w", err)
+	}
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return fmt.Errorf("reading gateway CA: %w", err)
+	}
+	// Fail closed: an empty CA makes NewTLSConfigWithCert set InsecureSkipVerify, which
+	// would leave the gateway's server cert unverified (plan §5). Require a real CA.
+	if len(bytes.TrimSpace(caPEM)) == 0 {
+		return fmt.Errorf("gateway CA %s is empty", caPath)
+	}
+	tlsConfig, err := tlsutils.NewTLSConfigWithCert(keyPEM, certPEM, caPEM)
+	if err != nil {
+		return fmt.Errorf("building gateway TLS config: %w", err)
+	}
+	if tlsConfig.InsecureSkipVerify {
+		return fmt.Errorf("TLS config from %s does not verify the gateway", g.certDir)
 	}
 	g.client = &http.Client{
 		Timeout: gwHTTPTimeout,
@@ -124,41 +146,6 @@ func (g *gwConnector) load() error {
 	tlog.Debug.Printf("gateway connector: instance-identity source=%s",
 		map[bool]string{true: "mock", false: "AWS IMDS"}[g.mockAWS])
 	return nil
-}
-
-// CertDirTLSConfig builds the outbound mTLS config from the three files in -gateway-cert-dir:
-// tls.crt/tls.key is this instance's client certificate and ca.crt is RootCAs.
-//
-// An empty CA is refused: tlsutils reads an empty chain as "no trust configured" and sets
-// InsecureSkipVerify, which would leave the gateway unverified.
-func CertDirTLSConfig(certDir string) (*tls.Config, error) {
-	certPath := filepath.Join(certDir, gatewayCertFile)
-	keyPath := filepath.Join(certDir, gatewayKeyFile)
-	caPath := filepath.Join(certDir, gatewayCAFile)
-	certPEM, err := os.ReadFile(certPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading TKFS cert: %w", err)
-	}
-	keyPEM, err := os.ReadFile(keyPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading TKFS key: %w", err)
-	}
-	caPEM, err := os.ReadFile(caPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading gateway CA: %w", err)
-	}
-	if len(bytes.TrimSpace(caPEM)) == 0 {
-		return nil, fmt.Errorf("gateway CA %s is empty", caPath)
-	}
-	cfg, err := tlsutils.NewTLSConfigWithCert(keyPEM, certPEM, caPEM)
-	if err != nil {
-		return nil, fmt.Errorf("building TLS config from %s: %w", certDir, err)
-	}
-	// Belt and braces against the above ever changing under us: neither role tolerates these.
-	if cfg.InsecureSkipVerify || cfg.ClientAuth != tls.RequireAndVerifyClientCert {
-		return nil, fmt.Errorf("TLS config from %s does not verify its peer", certDir)
-	}
-	return cfg, nil
 }
 
 // transportKemType identifies the transit-wrap algorithm sent on the wire as TransportAlg; the
@@ -304,9 +291,8 @@ func (g *gwConnector) post(path string, body, out any) error {
 	}
 	switch {
 	case resp.StatusCode == http.StatusForbidden:
-		// A decision rather than an outage: the DN left the ACL, its CA was removed, or a
-		// blocklist entry names this instance. ErrDenied is what keeps the heartbeat from
-		// spending its failure budget retrying a refusal that will not change.
+		// A decision rather than an outage, so the heartbeat must not spend its failure budget
+		// retrying it.
 		return fmt.Errorf("gateway %s: not authorized (HTTP 403): %w: %s", path, ErrDenied, bytes.TrimSpace(respBody))
 	case resp.StatusCode == http.StatusUnauthorized:
 		return fmt.Errorf("gateway %s: not authorized (HTTP 401): %s", path, bytes.TrimSpace(respBody))

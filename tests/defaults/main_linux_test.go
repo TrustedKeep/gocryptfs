@@ -20,8 +20,8 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// -init writes the config (and gocryptfs.diriv) with all-default options; the first mount
-	// generates the data key through the mock gateway.
+	// -init writes the config with all-default options; the first mount generates the data key
+	// through the mock gateway.
 	test_helpers.ResetTmpDir()
 	test_helpers.InitDefaultCipherDir()
 	test_helpers.MountOrExit(test_helpers.DefaultCipherDir, test_helpers.DefaultPlainDir)

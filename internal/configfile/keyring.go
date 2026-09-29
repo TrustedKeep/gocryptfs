@@ -171,8 +171,3 @@ func LockKeyRing(confPath string, wait time.Duration) (*os.File, error) {
 	}
 	return nil, err
 }
-
-// Remove deletes the key-ring file, for a first mount undoing itself before anything is encrypted.
-func (kr *KeyRing) Remove() error {
-	return os.Remove(kr.filename)
-}

@@ -166,10 +166,8 @@ func TestValidateExitCodes(t *testing.T) {
 	}
 }
 
-// A filesystem gets no identity at -init. Its InstanceID is the id of the KEK keep mints on the first
-// generate, which the first mount records in the key ring, so a freshly created config legitimately has
-// no identity and must still validate. Two configs created from one template stay distinct because each
-// mints its own on first mount, which is a copy-before-mount that used to share one identity.
+// A filesystem gets no identity at -init: its InstanceID is the KEK id the first mount records in the
+// key ring, so a freshly created config has none and must still validate.
 func TestCreateAssignsNoIdentity(t *testing.T) {
 	conf := filepath.Join(t.TempDir(), "gocryptfs.conf")
 	if err := Create(testCreateArgs(conf)); err != nil {
@@ -195,11 +193,8 @@ func TestCreateAssignsNoIdentity(t *testing.T) {
 	}
 }
 
-// A config with no NodeID is refused at load rather than mounting into a state the operator has no
-// lever over: the value is reported on every data-key call and heartbeat, and a blocklist entry naming
-// a node cannot match a field that is never sent. There is deliberately no equivalent check for the
-// InstanceID — it is not a config field but the KeyID the key ring carries, so a filesystem that has
-// never mounted has none yet, and requiring one here would make every first mount fail.
+// A config with no NodeID is refused at load: a blocklist entry naming a node cannot match a field
+// that is never sent.
 func TestValidateRequiresNodeID(t *testing.T) {
 	good := ConfFile{
 		Version:      contentenc.CurrentVersion,

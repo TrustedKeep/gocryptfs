@@ -299,9 +299,8 @@ func TestGatewayConnectorSendsInstanceID(t *testing.T) {
 	}
 }
 
-// An empty CA is the one input tlsutils quietly turns into "trust anything": InsecureSkipVerify
-// plus RequireAnyClientCert. Both roles of this config have to refuse it.
-func TestCertDirTLSConfigRejectsEmptyCA(t *testing.T) {
+// An empty CA is the one input tlsutils quietly turns into "trust anything", so load must refuse it.
+func TestGatewayConnectorLoadRejectsEmptyCA(t *testing.T) {
 	dir := t.TempDir()
 	for _, f := range []string{gatewayCertFile, gatewayKeyFile} {
 		if err := os.WriteFile(filepath.Join(dir, f), []byte("x"), 0600); err != nil {
@@ -311,7 +310,7 @@ func TestCertDirTLSConfigRejectsEmptyCA(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, gatewayCAFile), []byte("  \n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CertDirTLSConfig(dir); err == nil {
+	if err := (&gwConnector{certDir: dir}).load(); err == nil {
 		t.Fatal("an empty CA must fail closed")
 	} else if !strings.Contains(err.Error(), "empty") {
 		t.Errorf("error should name the empty CA, got: %v", err)

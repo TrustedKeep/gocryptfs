@@ -153,10 +153,10 @@ func (rn *RootNode) isFiltered(child string) bool {
 	if !rn.args.PlaintextNames {
 		return false
 	}
-	// gocryptfs.conf in the root directory is forbidden
-	if child == configfile.ConfDefaultName {
-		tlog.Info.Printf("The name /%s is reserved when -plaintextnames is used\n",
-			configfile.ConfDefaultName)
+	// gocryptfs.conf and the key ring in the root directory are forbidden
+	switch child {
+	case configfile.ConfDefaultName, configfile.KeyRingFileName, configfile.KeyRingTmpFileName:
+		tlog.Info.Printf("The name /%s is reserved when -plaintextnames is used\n", child)
 		return true
 	}
 	// Note: gocryptfs.diriv is NOT forbidden because diriv and plaintextnames

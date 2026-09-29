@@ -71,16 +71,11 @@ const (
 	// AlreadyMounted - another gocryptfs process already has this filesystem mounted. A key ring
 	// has one writer, so a second mount is refused rather than left to race the first.
 	AlreadyMounted = 32
-	// Revoked - the key service withdrew this instance's authorization (a 403 heartbeat), told it
-	// to shut down, or would not answer a heartbeat at all, and it terminated itself. Distinct
-	// from a clean exit because the mountpoint may be left dead: the unmount is attempted, but a
-	// busy mountpoint does not buy a revoked filesystem more time to serve.
+	// Revoked - the key service withdrew this instance's authorization (a 403 heartbeat) or would
+	// not answer a heartbeat at all. The mountpoint may be left dead if it was busy.
 	Revoked = 33
-	// RotateFailed - the mount could not keep its key operation budget: either the counter
-	// could not be persisted, or the active key passed the threshold and the rotation that
-	// should have followed did not complete. Either way it stopped rather than keep drawing
-	// nonces under a key it can no longer bound. The usual cause is an unreachable key service or
-	// an unwritable cipherdir; the first is one the heartbeat would end the mount over anyway.
+	// RotateFailed - a rotation the op counter or a rekey demanded failed, or the op count could
+	// not be persisted.
 	RotateFailed = 34
 )
 

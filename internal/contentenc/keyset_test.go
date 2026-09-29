@@ -115,8 +115,7 @@ func TestBlockRoundTripAcrossKeys(t *testing.T) {
 	}
 }
 
-// The file header carries the index verbatim, including a non-zero one. It sits outside the AAD,
-// so a flipped index has to fail on the tag rather than on parsing.
+// The file header carries the index verbatim, including a non-zero one.
 func TestFileHeaderNonZeroKeyIdx(t *testing.T) {
 	h := RandomHeader(1234)
 	parsed, err := ParseHeader(h.Pack())

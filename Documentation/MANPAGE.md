@@ -413,8 +413,10 @@ Encrypt operations under one data key before the mount rotates to a fresh one
 (default 1073741824, i.e. 2^30, which is roughly 4.4 TB at the default 4 KiB
 block size). The count is persisted in the key ring against the active entry, so
 it spans mounts rather than restarting with each one. It is checked on the
-heartbeat timer, and flushed once more at unmount so a mount shorter than one
-interval still contributes what it spent; that final flush never rotates.
+heartbeat timer and once before the filesystem is served, so a count earlier
+mounts left at or past the threshold rotates before this one writes anything.
+It is flushed once more at unmount so a mount shorter than one interval still
+contributes what it spent; that final flush never rotates.
 
 Only writes under the *current* key are counted. Rotation is additive — a new
 key is appended to the ring, subsequent writes use it, and nothing already
@@ -822,18 +824,21 @@ a key it was told to stop using. `-ro` suppresses the rotation, as it does the
 op counter's, and the request stays pending for a writable mount.
 
 **The first heartbeat is sent before anything is mounted.** A key service that
-refuses it, cannot be reached, asks the instance to shut down, or does not
-implement the route at all fails the mount outright (**exit code 33**), with no
-mountpoint ever attached. A key service that cannot answer a heartbeat cannot
-revoke this instance either, so it does not get to serve one.
+refuses it, cannot be reached, or does not implement the route at all fails the
+mount outright (**exit code 33**), with no mountpoint ever attached. A key
+service that cannot answer a heartbeat cannot revoke this instance either, so it
+does not get to serve one. A rekey that heartbeat brings back is carried out
+before the filesystem is served.
 
-Once mounted, a refusal — the DN removed from the ACL, its CA removed, a
-blocklist entry naming it, an explicit shutdown directive, or the route
+Once mounted, a refusal — a blocklist entry naming the instance, its DN removed
+from the ACL (gateway mounts only; `-search` has no ACL), or the route
 disappearing under a running mount — ends the mount on the heartbeat that
 carries it. Merely *failing to reach* the key service is survivable twice, and
-the third consecutive failure ends it too. A heartbeat the key service answers
-but cannot record counts as one of those failures, not as a success: revocation
-acts through that record, so a mount missing from it is one nobody can stop.
+the third consecutive failure ends it too. Removing the instance's CA from the
+gateway's trust set is one of those failures, not a refusal: the TLS handshake
+fails, so it takes three heartbeats. A heartbeat the key service answers but
+cannot record also counts as a failure, not as a success: revocation acts
+through that record, so a mount missing from it is one nobody can stop.
 
 Either way the mount ends the same way, and it is not abortable: a clean
 unmount is attempted, a busy mountpoint gets ten seconds and one more try, and
@@ -857,7 +862,7 @@ EXIT CODES
 26: fsck found errors  
 31: the health-check port could not be bound  
 32: the filesystem is already mounted by another gocryptfs process  
-33: the key service withdrew this instance's authorization, told it to shut down, or would not answer a heartbeat  
+33: the key service withdrew this instance's authorization or would not answer a heartbeat  
 34: the key operation counter could not be persisted, or a rotation failed — the op threshold's or a rekey's  
 other: please check the error message
 

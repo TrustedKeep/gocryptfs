@@ -3,12 +3,10 @@ package main
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sync/atomic"
 	"time"
 
 	"github.com/TrustedKeep/tkutils/v2/model"
-	"github.com/hanwen/go-fuse/v2/fuse"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
@@ -67,8 +65,10 @@ type keyServiceMonitor struct {
 	readOnly bool
 	// opThreshold is the operation count that triggers auto-rotation. Zero disables it.
 	opThreshold uint64
-	srv         *fuse.Server
-	mountpoint  string
+	// srv is nil until the filesystem is mounted.
+	srv        interface{ Unmount() error }
+	mountpoint string
+	exit       func(code int)
 
 	failures int
 }
@@ -85,28 +85,22 @@ func (m *keyServiceMonitor) verifyKeyService() {
 	case errors.Is(err, tkc.ErrNotImplemented):
 		tlog.Fatal.Printf("The key service does not implement the heartbeat route, so this mount would run with " +
 			"no revocation: blocking or de-authorizing it could not unmount it. Upgrade the key service.")
-		os.Exit(exitcodes.Revoked)
+		m.exit(exitcodes.Revoked)
 	case errors.Is(err, tkc.ErrDenied):
 		tlog.Fatal.Printf("The key service refused this instance: %v", err)
-		os.Exit(exitcodes.Revoked)
+		m.exit(exitcodes.Revoked)
 	case err != nil:
 		tlog.Fatal.Printf("The first heartbeat did not reach the key service: %v", err)
-		os.Exit(exitcodes.Revoked)
-	case resp.Command == model.TKFSCommandShutdown:
-		tlog.Fatal.Printf("The key service asked this instance to shut down")
-		os.Exit(exitcodes.Revoked)
+		m.exit(exitcodes.Revoked)
+	case resp.Command == model.TKFSCommandRekey:
+		// A short mount never reaches the first scheduled beat.
+		m.rekey()
 	}
-	// A rekey waiting here is left for the first scheduled beat, which has a mount to tear down if
-	// the rotation fails; one interval late is the same lateness a directive queued while the
-	// instance was down already carries.
 }
 
 // keyIdx is the key-ring index this mount writes under. Reporting it is what makes a rotation
 // observable to an operator and what clears a rekey the key service has asked for.
 func (m *keyServiceMonitor) keyIdx() uint16 {
-	if m.rotator == nil {
-		return 0
-	}
 	return m.rotator.cEnc.WriteKeyIdx()
 }
 
@@ -131,7 +125,7 @@ func (m *keyServiceMonitor) run() {
 // beat sends one heartbeat and acts on the answer, including any rekey it brings back.
 func (m *keyServiceMonitor) beat() {
 	resp, err := m.hb.Heartbeat(m.keyIdx())
-	if die, reason := m.classify(resp, err); die {
+	if die, reason := m.classify(err); die {
 		m.shutdownNow("Heartbeat: "+reason, exitcodes.Revoked)
 		return
 	}
@@ -173,7 +167,7 @@ func (m *keyServiceMonitor) rekey() {
 // classify reports whether one heartbeat outcome ends the mount, advancing the failure counter as it
 // goes. A decision about this instance ends it at once; failing to reach the key service is an outage,
 // survivable twice.
-func (m *keyServiceMonitor) classify(resp model.TKFSHeartbeatResponse, err error) (die bool, reason string) {
+func (m *keyServiceMonitor) classify(err error) (die bool, reason string) {
 	switch {
 	case errors.Is(err, tkc.ErrDenied):
 		return true, "the key service withdrew this instance's authorization"
@@ -186,8 +180,6 @@ func (m *keyServiceMonitor) classify(resp model.TKFSHeartbeatResponse, err error
 			return true, fmt.Sprintf("lost contact with the key service (%d consecutive failures)", m.failures)
 		}
 		return false, ""
-	case resp.Command == model.TKFSCommandShutdown:
-		return true, "the key service asked this instance to shut down"
 	}
 	m.failures = 0
 	return false, ""
@@ -203,6 +195,11 @@ var fatalExitCode atomic.Int32
 // mountpoint stays busy it gives up and exits, leaving a mountpoint whose every operation fails.
 func (m *keyServiceMonitor) shutdownNow(reason string, code int32) {
 	fatalExitCode.Store(code)
+	if m.srv == nil {
+		tlog.Fatal.Printf("%s.", reason)
+		m.exit(int(code))
+		return
+	}
 	tlog.Fatal.Printf("%s. Unmounting %s.", reason, m.mountpoint)
 	if err := m.srv.Unmount(); err != nil {
 		tlog.Fatal.Printf("Unmount failed: %v. Retrying once in %v, then leaving the mountpoint dead.", err, forcefulUnmountGrace)
@@ -211,7 +208,7 @@ func (m *keyServiceMonitor) shutdownNow(reason string, code int32) {
 			tlog.Fatal.Printf("Unmount still failing: %v.", err)
 		}
 	}
-	os.Exit(int(code))
+	m.exit(int(code))
 }
 
 // flushOpCounts persists this mount's encrypt-op counter into the key ring and rotates when the

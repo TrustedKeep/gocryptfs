@@ -3,9 +3,7 @@ package tkc
 import "testing"
 
 // The identity arrives either from the generate that mints the KEK or from the key ring a later
-// mount reads it back from, and nothing may change it afterwards. A mount that adopted another
-// mount's ring has no identity until AdoptIdentity gives it one, and without that its next generate
-// would arrive empty and mint a second KEK.
+// mount reads it back from, and nothing may change it afterwards.
 func TestInstanceIdentityAdopt(t *testing.T) {
 	var i instanceIdentity
 	if err := i.adopt(""); err != nil || i.get() != "" {

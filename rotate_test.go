@@ -3,6 +3,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -89,5 +92,84 @@ func TestUnwrapDataKeyRetriesOutagesButNotRefusals(t *testing.T) {
 				t.Errorf("calls = %d, want %d", f.calls, c.wantCalls)
 			}
 		})
+	}
+}
+
+// opCounts is each ring entry's persisted OpCount.
+func opCounts(t *testing.T, r *keyRotator) (c []uint64) {
+	for _, e := range loadRing(t, r).Keys {
+		c = append(c, e.OpCount)
+	}
+	return c
+}
+
+// encrypt draws n nonces under the write key.
+func encrypt(r *keyRotator, n int) {
+	for range n {
+		r.cEnc.EncryptBlock([]byte("x"), 0, nil, r.cEnc.WriteKeyIdx())
+	}
+}
+
+// Crossing the threshold rotates; the outgoing entry keeps what it spent and the new one is credited
+// only with its own ops.
+func TestFlushOpCountsRotatesAtThreshold(t *testing.T) {
+	r := newTestRotator(t, "")
+	m, _, code := newTestMonitor(t, r, nil)
+	m.opThreshold = 4
+
+	encrypt(r, 3)
+	m.flushOpCounts()
+	if got := opCounts(t, r); !slices.Equal(got, []uint64{3}) {
+		t.Fatalf("under the threshold: op counts %v, want [3]", got)
+	}
+	encrypt(r, 1)
+	m.flushOpCounts()
+	if got := opCounts(t, r); !slices.Equal(got, []uint64{4, 0}) {
+		t.Fatalf("at the threshold: op counts %v, want [4 0]", got)
+	}
+	if got := r.cEnc.WriteKeyIdx(); got != 1 {
+		t.Errorf("write index = %d, want 1", got)
+	}
+	encrypt(r, 2)
+	m.flushOpCounts()
+	if got := opCounts(t, r); !slices.Equal(got, []uint64{4, 2}) {
+		t.Errorf("after the rotation: op counts %v, want [4 2]", got)
+	}
+
+	// A ring write renames a new file into place, so an unchanged inode means no write.
+	ringPath := filepath.Join(filepath.Dir(r.configPath), configfile.KeyRingFileName)
+	before, err := os.Stat(ringPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.flushOpCounts()
+	after, err := os.Stat(ringPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Error("a flush with nothing to credit rewrote the ring")
+	}
+	if *code != -1 {
+		t.Errorf("exit code = %d, want none", *code)
+	}
+}
+
+// A count earlier mounts left at the threshold rotates on the first flush, before any new op.
+func TestFlushOpCountsRotatesAnInheritedCount(t *testing.T) {
+	r := newTestRotator(t, "")
+	kr := loadRing(t, r)
+	kr.Keys[0].OpCount = 10
+	if err := kr.WriteFile(); err != nil {
+		t.Fatal(err)
+	}
+	m, _, code := newTestMonitor(t, r, nil)
+	m.opThreshold = 10
+	m.flushOpCounts()
+	if n := len(loadRing(t, r).Keys); n != 2 {
+		t.Errorf("ring has %d entries, want 2", n)
+	}
+	if *code != -1 {
+		t.Errorf("exit code = %d, want none", *code)
 	}
 }

@@ -1,29 +1,10 @@
 package tkc
 
-// TrustedGateway data-key API contract.
-//
-// keep holds the key-encryption key (KEK) and wraps/unwraps 32-byte AES-256 data keys; the gateway
-// proxies. TKFS never holds the KEK and holds an unwrapped data key only long enough to HKDF-derive the
-// filename and content keys, then zeroizes it (mount.go).
+// TrustedGateway data-key API contract; Documentation/phase-3-rotation-rekeying.md has the model.
 //
 //	generate   POST .../tkfsdatakey/generate   -> {KeyID, Ciphertext, TransitWrappedKey}
 //	unwrap     POST .../tkfsdatakey/unwrap     -> {TransitWrappedKey}
 //	heartbeat  POST .../tkfsdatakey/heartbeat  -> {Command}
-//
-// The plaintext never crosses the wire even inside mTLS: each call sends an ephemeral transport public
-// key and the response comes back wrapped to it (see gwconnect.go, newTransport). Only Ciphertext is
-// persisted, in the key ring beside gocryptfs.conf. -init writes no ring, so the first mount generates
-// and later mounts unwrap every retained entry, one round trip each.
-//
-// One KEK serves an instance for its whole life and its id is the instance's identity: the first
-// generate goes out with no InstanceID, mints it, and the returned KeyID is what the ring records and
-// the instance reports from then on. So every entry carries the same KeyID and only Ciphertext tells
-// them apart, and the identity cannot name a KEK the ring does not use.
-//
-// A call succeeds when the signing CA is trusted, the cert DN is in the ACL, and no blocklist entry
-// names the DN, NodeID or InstanceID; keep makes that decision. What it cannot check is which instance
-// is calling, since the identity ships beside the Ciphertext on untrusted storage. The tenant is the
-// hard boundary and per-instance separation a partition within it.
 
 import (
 	"errors"
@@ -94,34 +75,24 @@ type DataKeyConnector interface {
 	// UnwrapTKFSDataKey recovers the plaintext master key for a key-ring entry.
 	UnwrapTKFSDataKey(keyID string, ciphertext []byte) (plaintext []byte, err error)
 	// AdoptIdentity tells the connector this filesystem's identity, read back from its key ring.
-	// The first mount of a cipherdir has none to give and learns it from the generate that mints
-	// the KEK instead; every later mount, including one that adopted another mount's ring rather
-	// than generating, has to hand it over here or its next generate would mint a second KEK.
-	//
-	// Idempotent. A non-empty id that contradicts one already held is an error.
+	// A non-empty id that contradicts one already held is an error.
 	AdoptIdentity(id string) error
 	// Close releases the connector's resources: network connections for the real
 	// connectors, the bbolt handle for the mock. Called from the unmount teardown.
 	Close() error
 }
 
-// Heartbeater is the liveness-and-registration half of the key-service contract. Both real connectors
-// implement it; it is a separate interface from DataKeyConnector, asserted for at mount, because the
-// mock has no route to beat to by design. The first unanswered heartbeat refuses the mount, which
-// would otherwise make -mock-kms and the whole integration suite self-destruct.
+// Heartbeater is the liveness-and-registration half of the key-service contract. Only the real
+// connectors implement it; the mock has no route to beat to.
 type Heartbeater interface {
-	// Heartbeat reports this instance as alive and says which key-ring index it is writing under.
-	// That index is how a rotation becomes visible to an operator, and how a rekey the key service
-	// asked for is seen to have been carried out.
-	//
-	// A returned ErrDenied means authorization is gone, not that the key service is unavailable,
-	// and the caller must act on it immediately rather than retrying.
+	// Heartbeat reports this instance as alive and writing under key-ring index keyIdx, which is
+	// what clears a rekey the key service asked for.
 	Heartbeat(keyIdx uint16) (model.TKFSHeartbeatResponse, error)
 }
 
-// ErrDenied wraps every HTTP 403 from the gateway: the DN left the ACL, its CA was removed, or a
-// blocklist entry names this instance. It is separated from every other failure because it is a
-// decision rather than an outage — the caller must not spend a retry budget on it.
+// ErrDenied wraps every HTTP 403 from the gateway: the DN left the ACL or a blocklist entry names
+// this instance. It is a decision rather than an outage, so the caller must not spend a retry
+// budget on it.
 var ErrDenied = errors.New("the gateway refused this instance")
 
 // ErrNotImplemented wraps an HTTP 404 or 501: the route does not exist on the key service this

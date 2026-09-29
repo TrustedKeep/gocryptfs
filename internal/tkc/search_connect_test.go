@@ -33,7 +33,7 @@ func jsonResponse(code int, v any) *http.Response {
 }
 
 // A search mount heartbeats to keep exactly as a gateway-proxied one does to the gateway: same body,
-// same pass-through of a shutdown directive, and the same three failure classes. 403 is revocation,
+// same pass-through of a rekey directive, and the same three failure classes. 403 is revocation,
 // 404/501 is a keep that does not serve the route, and everything else is an outage — the caller
 // unmounts immediately on the first two and spends a failure budget on the third.
 func TestSearchConnectorHeartbeat(t *testing.T) {

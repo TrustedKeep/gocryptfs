@@ -1,5 +1,5 @@
-github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20260929061055-4ae9b60bb57c h1:/qwD4PNyPBM37fJuH/A+cERTfkc9s8WvFrzeL2i9Lys=
-github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20260929061055-4ae9b60bb57c/go.mod h1:bdUjAZjkBJkZgVU5fFnV86wJJRaV+3jORA9lgueRVNU=
+github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20260929073810-a8f5a6dd26d1 h1:DIvYNHwY+9e4DwslJdnakB8aqNFepq1aoEaR0XM4JyY=
+github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20260929073810-a8f5a6dd26d1/go.mod h1:bdUjAZjkBJkZgVU5fFnV86wJJRaV+3jORA9lgueRVNU=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.95.0 h1:MIWra+MSq53CFaXXAywB2qg9YvVZifkk6vEGl/1Qor0=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.95.0/go.mod h1:79S2BdqCJpScXZA2y+cpZuocWsjGjJINyXnOsf5DTz8=
 github.com/aws/smithy-go v1.25.1 h1:J8ERsGSU7d+aCmdQur5Txg6bVoYelvQJgtZehD12GkI=

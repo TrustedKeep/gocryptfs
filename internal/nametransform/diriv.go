@@ -80,11 +80,7 @@ func (n *NameTransform) fdReadDirIV(fd *os.File) (iv []byte, keyIdx uint16, err 
 // On error we try to delete the incomplete file.
 // This function is exported because it is used from fusefrontend, main,
 // and also the automated tests.
-//
-// -deterministic-names gets an all-zero IV rather than no file at all: carrying an
-// otherwise-unused 16 bytes is cheaper than an exception in the key-selection path. It is a
-// parameter rather than read off a *NameTransform because the root diriv is written at first
-// mount, before there is a key set to build one from.
+// deterministicNames writes an all-zero IV.
 func WriteDirIVAt(dirfd int, keyIdx uint16, deterministicNames bool) error {
 	record := make([]byte, DirIVFileLen)
 	if !deterministicNames {

@@ -31,12 +31,7 @@ type ctlSockHandler struct {
 // Serve serves incoming connections on "sock". This call blocks so you
 // probably want to run it in a new goroutine.
 //
-// "rotate" is the mount's key-rotation entry point, passed in rather than added to Interface because
-// rotation needs the key ring and key service, which live in main. It is nil on a read-only mount.
-//
-// "holes" are the key-ring indices that failed to unwrap at mount time. They are fixed for the life of
-// the mount, and reporting them is the only way an operator learns it is serving less than the whole
-// filesystem.
+// "rotate" is nil on a read-only mount; "holes" are the indices that failed to unwrap at mount.
 func Serve(sock net.Listener, fs Interface, rotate func() (uint16, error), holes []uint16) {
 	handler := ctlSockHandler{
 		fs:     fs,

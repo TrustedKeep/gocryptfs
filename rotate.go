@@ -27,18 +27,12 @@ type keyRotator struct {
 	ivBits        int
 	cEnc          *contentenc.ContentEnc
 	nameTransform *nametransform.NameTransform
-	// flushed is the write key's op count already added to the on-disk counter, so the next
-	// flush contributes only what happened since. Reset by a rotation, which starts a fresh
-	// counter. Guarded by lock.
+	// flushed is the write key's op count already credited to the ring. Guarded by lock.
 	flushed uint64
 }
 
-// rotate generates a data key, appends it to the on-disk ring, and makes it the key new content,
-// names and directories are written under. Returns the new ring index.
-//
-// Forward-only: nothing already on disk is re-encrypted. Existing files, directories and open
-// handles keep the index they were created with, and stay readable for as long as their entry
-// is in the ring.
+// rotate appends a freshly generated data key to the ring and makes it the key new content, names
+// and directories are written under. Nothing on disk is re-encrypted.
 func (r *keyRotator) rotate() (uint16, error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
@@ -93,32 +87,26 @@ func (r *keyRotator) rotate() (uint16, error) {
 	return idx, nil
 }
 
-// flushOpCounts adds this mount's encrypt operations since the last flush to the ring's persisted
-// counter for the active key, and reports whether that key has passed "threshold". Counting is
-// persisted because the threshold bounds work over a key's whole life, which outlasts any one mount.
-//
-// It does not rotate itself: rotate() takes the same lock, and the caller rotates after this returns.
+// flushOpCounts credits the encrypt operations since the last flush to the active entry's persisted
+// count, which spans every mount, and reports whether that count has reached "threshold". The caller
+// does the rotating, since rotate() takes the same lock.
 func (r *keyRotator) flushOpCounts(threshold uint64) (rotateDue bool, err error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
-	count := r.cEnc.OpCount()
-	if count <= r.flushed {
-		// Nothing drawn under this key since the last flush, so nothing can have crossed a
-		// threshold that had not already been crossed then. (Wipe() publishes a fresh counter,
-		// which an unmount flush can race; the comparison keeps that from wrapping.)
-		return false, nil
-	}
-	delta := count - r.flushed
 	keyRing, err := configfile.LoadKeyRing(r.configPath)
 	if err != nil {
 		return false, err
 	}
-	if keyRing.AddOpCount(delta) {
-		if err := keyRing.WriteFile(); err != nil {
-			return false, fmt.Errorf("failed to persist the key-ring op counter: %w", err)
+	// Wipe() publishes a fresh counter, which an unmount flush can race; the comparison keeps
+	// that from wrapping.
+	if count := r.cEnc.OpCount(); count > r.flushed {
+		if keyRing.AddOpCount(count - r.flushed) {
+			if err := keyRing.WriteFile(); err != nil {
+				return false, fmt.Errorf("failed to persist the key-ring op counter: %w", err)
+			}
 		}
+		r.flushed = count
 	}
-	r.flushed = count
 	active, err := keyRing.Active()
 	if err != nil {
 		return false, err

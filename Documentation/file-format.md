@@ -19,11 +19,12 @@ filesystem's identity lives. Every entry naming the same KEK is an invariant the
 against at load. Rotation is triggered by
 the `-ctlsock` `Rotate` command, by a rekey the heartbeat carries back from the key service, or by the active
 entry's `OpCount` — a persisted count of the encrypt operations performed under the current key,
-which the mount accumulates and flushes on the heartbeat timer and once more at unmount.
+which the mount accumulates and flushes on the heartbeat timer and once more at unmount. The count is
+also checked before a mount serves anything, so a count inherited at or past the threshold rotates first.
 
 `KR.tmp` is reserved alongside `KR` and `gocryptfs.conf`: the ring is replaced atomically, so it exists
 in the cipherdir root for the length of every write. Anything that enumerates that directory has to skip
-all three.
+all three, and `-plaintextnames` reserves all three names in the root.
 
 Every encrypted object therefore carries an explicit **key-ring index**, a big-endian `uint16`,
 which is the entry's **position** in `KR`. There is no trial decryption anywhere, and a missing
@@ -82,7 +83,8 @@ index has a carrier. `-plaintextnames` has no diriv at all, and needs none: xatt
 EME-encrypted objects left in that mode, and they carry their index on the inode.
 
 The root diriv is created by the **first mount**, not by `-init`: `-init` never contacts the key
-service, so there is no ring yet and no index to write.
+service, so there is no ring yet and no index to write. It is written before the ring, so a ring on disk
+implies a root diriv; a leftover diriv with no ring is replaced by the next first mount.
 
 Symlink target
 --------------

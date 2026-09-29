@@ -275,9 +275,8 @@ func findEncryptedXattrName(t *testing.T, cPath string) string {
 }
 
 // TestXattrValueRead checks that a stored xattr value is decrypted from exactly the bytes on
-// disk — a keyIdx prefix followed by the encrypted block — and that anything else is EIO. There
-// is no second accepted encoding: the base64 fallback for pre-v3 filesystems is gone, which is
-// what puts a base64-wrapped value in the broken list below rather than in the working case.
+// disk — a keyIdx prefix followed by the encrypted block — and that anything else, a base64-wrapped
+// value included, is EIO.
 func TestXattrValueRead(t *testing.T) {
 	attrName := "user.test"
 	attrName2 := "user.test2"
@@ -340,8 +339,7 @@ func TestXattrValueRead(t *testing.T) {
 		"raw-test-long-block123",
 		"raw-test-long-block123-xyz11111111111111111111111111111111111111",
 		"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$",
-		// The value that pre-v3 filesystems stored, and that the deleted fallback used to
-		// accept. It must now be rejected like any other corrupt value.
+		// A base64-wrapped value is corrupt like any other.
 		base64.RawURLEncoding.EncodeToString(encryptedAttrValue),
 	}
 	for _, val := range brokenVals {

@@ -53,8 +53,7 @@ func initDir(args *argContainer) {
 		os.Exit(exitcodes.CipherDir)
 	}
 
-	// Resolve the NodeID once and persist it: every mount reads it back from the config, Minting
-	// it here — not inside configfile.Create — keeps the value visible to initDir.
+	// Resolve the NodeID once and persist it: every mount reads it back from the config.
 	nodeID := args.nodeID
 	if nodeID == "" {
 		nodeID = uuid.NewString()

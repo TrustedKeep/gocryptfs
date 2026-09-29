@@ -2,17 +2,25 @@ package tkfs_kek
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/pkg/xattr"
 
 	"github.com/rfjakob/gocryptfs/v2/ctlsock"
+	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
+	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
+	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
@@ -115,6 +123,23 @@ func TestRotateContentAndNames(t *testing.T) {
 		test_helpers.UnmountPanic(pDir)
 		t.Fatal(err)
 	}
+	for _, tc := range []struct {
+		what string
+		got  uint16
+		want uint16
+	}{
+		{"old.txt header", headerKeyIdx(t, backingPath(t, cDir, sock, "old.txt")), 0},
+		{"new.txt header", headerKeyIdx(t, backingPath(t, cDir, sock, "new.txt")), 1},
+		{"olddir/late.txt header", headerKeyIdx(t, backingPath(t, cDir, sock, "olddir/late.txt")), 1},
+		{"old.link target", symlinkKeyIdx(t, backingPath(t, cDir, sock, "old.link")), 0},
+		{"new.link target", symlinkKeyIdx(t, backingPath(t, cDir, sock, "new.link")), 1},
+		{"old.txt xattr value", xattrValueKeyIdx(t, backingPath(t, cDir, sock, "old.txt")), 0},
+		{"new.txt xattr value", xattrValueKeyIdx(t, backingPath(t, cDir, sock, "new.txt")), 1},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s: key-ring index %d, want %d", tc.what, tc.got, tc.want)
+		}
+	}
 	test_helpers.UnmountPanic(pDir)
 
 	// The ring must have grown to two entries, both retained.
@@ -184,10 +209,7 @@ func TestRotateContentAndNames(t *testing.T) {
 }
 
 // An xattr name is a property of the inode, so it must stay addressable when the inode moves into a
-// directory that a rotation keyed differently, and when a hard link puts it in two such directories
-// at once. Keying xattr names by the containing directory made every one of these silently wrong:
-// Getxattr returned ENODATA for an attribute that exists, Removexattr removed nothing, Setxattr
-// wrote a second attribute and Listxattr dropped the name as mitigated corruption.
+// directory that a rotation keyed differently, and when a hard link puts it in two such directories.
 func TestXattrNamesSurviveMoveAcrossRotation(t *testing.T) {
 	cDir := test_helpers.InitFS(t, "-mock-kms")
 	os.Chmod(cDir, 0777)
@@ -328,6 +350,81 @@ func TestXattrNameWithoutMarkerIsRefused(t *testing.T) {
 	if names, err := xattr.LList(fn); err != nil || len(names) != 0 {
 		t.Errorf("list = %v, %v; want nothing", names, err)
 	}
+	if err := xattr.LRemove(fn, "user.x"); !errors.Is(err, syscall.ENODATA) {
+		t.Errorf("remove = %v, want ENODATA", err)
+	}
+	if n := countEncryptedXattrs(t, backingPath(t, cDir, sock, "file")); n != 1 {
+		t.Errorf("%d encrypted xattrs left on the backing file, want the 1 a refused remove must keep", n)
+	}
+}
+
+// headerKeyIdx returns the key-ring index in the file header of the cipher file "cPath".
+func headerKeyIdx(t *testing.T, cPath string) uint16 {
+	t.Helper()
+	f, err := os.Open(cPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	buf := make([]byte, contentenc.HeaderLen)
+	if _, err := io.ReadFull(f, buf); err != nil {
+		t.Fatal(err)
+	}
+	h, err := contentenc.ParseHeader(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h.KeyIdx
+}
+
+// symlinkKeyIdx returns the key-ring index prefixed to the encrypted target of the cipher symlink "cPath".
+func symlinkKeyIdx(t *testing.T, cPath string) uint16 {
+	t.Helper()
+	target, err := os.Readlink(cPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := base64.RawURLEncoding.DecodeString(target)
+	if err != nil || len(blob) < 2 {
+		t.Fatalf("symlink target %q: %v", target, err)
+	}
+	return binary.BigEndian.Uint16(blob)
+}
+
+// xattrValueKeyIdx returns the key-ring index prefixed to the one encrypted xattr value on "cPath".
+func xattrValueKeyIdx(t *testing.T, cPath string) uint16 {
+	t.Helper()
+	names, err := xattr.LList(cPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if !strings.HasPrefix(name, "user.gocryptfs.") {
+			continue
+		}
+		v, err := xattr.LGet(cPath, name)
+		if err != nil || len(v) < 2 {
+			t.Fatalf("xattr %q on %q: %v", name, cPath, err)
+		}
+		return binary.BigEndian.Uint16(v)
+	}
+	t.Fatalf("no encrypted xattr on %q: %v", cPath, names)
+	return 0
+}
+
+// countEncryptedXattrs counts the encrypted xattr names on the cipher file "cPath".
+func countEncryptedXattrs(t *testing.T, cPath string) (n int) {
+	t.Helper()
+	names, err := xattr.LList(cPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if strings.HasPrefix(name, "user.gocryptfs.") {
+			n++
+		}
+	}
+	return n
 }
 
 // backingPath returns the cipher-side path of "plainPath", relative to the mount root.
@@ -541,35 +638,160 @@ func backingDirs(t *testing.T, cDir string, want int) []string {
 	return dirs
 }
 
-// Every mount here lives far under one heartbeat interval, so without the flush in doMount's
-// teardown the ring would come back with OpCount 0 and the threshold would bound nothing on
-// short-lived mounts. That flush only credits: even a threshold of 1 must not rotate on the way out.
-func TestShortMountCreditsItsOps(t *testing.T) {
-	cDir := test_helpers.InitFS(t, "-mock-kms")
-	os.Chmod(cDir, 0777)
-	pDir := cDir + ".mnt"
+// waitForTeardown returns once the process that mounted cDir has exited, which is after its teardown
+// flush: it holds the key-ring lock until then.
+func waitForTeardown(t *testing.T, cDir string) {
+	t.Helper()
+	f, err := configfile.LockKeyRing(filepath.Join(cDir, configfile.ConfDefaultName), 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+}
+
+// mountAndWrite mounts cDir with "-rotate-op-threshold=1", writes one file and unmounts.
+func mountAndWrite(t *testing.T, cDir, pDir string) {
+	t.Helper()
 	test_helpers.MountOrFatal(t, cDir, pDir, "-mock-kms", "-extpass=echo test", "-rotate-op-threshold=1")
 	if err := os.WriteFile(filepath.Join(pDir, "f.txt"), []byte("some content"), 0600); err != nil {
 		test_helpers.UnmountPanic(pDir)
 		t.Fatal(err)
 	}
 	test_helpers.UnmountPanic(pDir)
+	waitForTeardown(t, cDir)
+}
 
-	// fusermount returns before the gocryptfs process has run its teardown, and the flush is in
-	// there, so poll rather than read once.
-	var kr parsedKeyRing
-	for range 100 {
-		var absent bool
-		if kr, absent = readKeyRing(t, cDir); !absent && len(kr.Keys) > 0 && kr.Keys[0].OpCount > 0 {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+// Every mount here lives far under one heartbeat interval, so without the flush in doMount's
+// teardown the ring would come back with OpCount 0. That flush only credits: even a threshold of 1
+// must not rotate on the way out.
+func TestShortMountCreditsItsOps(t *testing.T) {
+	cDir := test_helpers.InitFS(t, "-mock-kms")
+	os.Chmod(cDir, 0777)
+	mountAndWrite(t, cDir, cDir+".mnt")
+
+	kr, _ := readKeyRing(t, cDir)
 	if len(kr.Keys) != 1 {
 		t.Errorf("ring has %d entries, want 1: the teardown flush must never rotate", len(kr.Keys))
 	}
 	if len(kr.Keys) > 0 && kr.Keys[0].OpCount == 0 {
 		t.Error("OpCount = 0; a mount shorter than one interval must still credit what it wrote")
+	}
+}
+
+// A count earlier mounts left past the threshold rotates before the next mount serves, so a filesystem
+// that is only ever mounted briefly still rotates.
+func TestMountPastThresholdRotatesBeforeServing(t *testing.T) {
+	cDir := test_helpers.InitFS(t, "-mock-kms")
+	os.Chmod(cDir, 0777)
+	pDir := cDir + ".mnt"
+	mountAndWrite(t, cDir, pDir)
+
+	test_helpers.MountOrFatal(t, cDir, pDir, "-mock-kms", "-extpass=echo test", "-rotate-op-threshold=1")
+	defer test_helpers.UnmountPanic(pDir)
+	if kr, _ := readKeyRing(t, cDir); len(kr.Keys) != 2 {
+		t.Errorf("ring has %d entries once mounted, want 2", len(kr.Keys))
+	}
+	if got, err := os.ReadFile(filepath.Join(pDir, "f.txt")); err != nil || string(got) != "some content" {
+		t.Errorf("read = %q, %v", got, err)
+	}
+}
+
+// A remount learns its identity from the ring, so its rotations stay under the instance's one KEK.
+func TestRotateAfterRemount(t *testing.T) {
+	cDir := test_helpers.InitFS(t, "-mock-kms")
+	pDir := cDir + ".mnt"
+	test_helpers.MountOrFatal(t, cDir, pDir, "-mock-kms", "-extpass=echo test")
+	test_helpers.UnmountPanic(pDir)
+
+	pDir, sock := mountWithCtlsock(t, cDir)
+	rotate(t, sock)
+	test_helpers.UnmountPanic(pDir)
+	kr, _ := readKeyRing(t, cDir)
+	if len(kr.Keys) != 2 || kr.Keys[1].KeyID != kr.Keys[0].KeyID {
+		t.Errorf("ring = %+v, want two entries under one KeyID", kr.Keys)
+	}
+}
+
+// corruptEntry flips a bit in ring entry idx's wrapped key, so it no longer unwraps.
+func corruptEntry(t *testing.T, cDir string, idx int) {
+	t.Helper()
+	waitForTeardown(t, cDir)
+	kr, err := configfile.LoadKeyRing(filepath.Join(cDir, configfile.ConfDefaultName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct := kr.Keys[idx].Ciphertext
+	ct[len(ct)-1] ^= 1
+	if err := kr.WriteFile(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An entry that will not unwrap leaves a hole: the mount serves everything else, the hole's files
+// fail with EIO, and ctlsock Status names it.
+func TestKeyRingHole(t *testing.T) {
+	cDir := test_helpers.InitFS(t, "-mock-kms")
+	os.Chmod(cDir, 0777)
+	pDir, sock := mountWithCtlsock(t, cDir)
+	var files []string
+	for i := range 3 {
+		fn := filepath.Join(pDir, fmt.Sprintf("gen%d.txt", i))
+		if err := os.WriteFile(fn, []byte("content"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, fn)
+		if i < 2 {
+			rotate(t, sock)
+		}
+	}
+	test_helpers.UnmountPanic(pDir)
+	corruptEntry(t, cDir, 1)
+
+	// Reading the hole's file is logged at Warn, which -wpanic would turn into a crash.
+	test_helpers.MountOrFatal(t, cDir, pDir, "-ctlsock="+sock, "-mock-kms", "-extpass=echo test", "-wpanic=0")
+	defer test_helpers.UnmountPanic(pDir)
+	resp := test_helpers.QueryCtlSock(t, sock, ctlsock.RequestStruct{Status: true})
+	if !slices.Equal(resp.KeyHoles, []uint16{1}) {
+		t.Errorf("KeyHoles = %v, want [1]", resp.KeyHoles)
+	}
+	for i, fn := range files {
+		_, err := os.ReadFile(fn)
+		if i == 1 && !errors.Is(err, syscall.EIO) {
+			t.Errorf("read of the file under the hole: %v, want EIO", err)
+		} else if i != 1 && err != nil {
+			t.Errorf("read %q: %v", fn, err)
+		}
+	}
+}
+
+// A hole the mount cannot serve around is fatal: the active entry, and with encrypted names entry 0,
+// which the root directory is keyed with.
+func TestKeyRingHoleThatCannotBeServedIsFatal(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		initArgs []string
+		corrupt  int
+		fatal    bool
+	}{
+		{"active entry", nil, 1, true},
+		{"root directory's entry", nil, 0, true},
+		{"entry 0 under -plaintextnames", []string{"-plaintextnames"}, 0, false},
+	} {
+		// No subtests: InitFS names the cipherdir after t.Name(), which a subtest gives a slash.
+		cDir := test_helpers.InitFS(t, append(c.initArgs, "-mock-kms")...)
+		pDir, sock := mountWithCtlsock(t, cDir)
+		rotate(t, sock)
+		test_helpers.UnmountPanic(pDir)
+		corruptEntry(t, cDir, c.corrupt)
+
+		err := test_helpers.Mount(cDir, pDir, false, "-mock-kms", "-extpass=echo test", "-wpanic=0")
+		if err == nil {
+			test_helpers.UnmountPanic(pDir)
+		}
+		// A clean refusal, not a crash on the missing key.
+		if code := test_helpers.ExtractCmdExitCode(err); c.fatal && code != exitcodes.Other || !c.fatal && err != nil {
+			t.Errorf("%s: mount error = %v, want fatal %v", c.name, err, c.fatal)
+		}
 	}
 }
 
