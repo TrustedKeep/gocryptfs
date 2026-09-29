@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -80,6 +81,9 @@ func LoadKeyRing(confPath string) (*KeyRing, error) {
 // Validate checks that every entry can be recovered and that the ring names one KEK. The caller
 // attaches the exit code.
 func (kr *KeyRing) Validate() error {
+	if len(kr.Keys)-1 > math.MaxUint16 {
+		return fmt.Errorf("key ring has %d entries, more than a uint16 index can name", len(kr.Keys))
+	}
 	for i, e := range kr.Keys {
 		if e.KeyID == "" {
 			return fmt.Errorf("key ring entry %d has an empty KeyID", i)
@@ -117,11 +121,17 @@ func (kr *KeyRing) All() []KeyRingEntry {
 	return kr.Keys
 }
 
+// ErrKeyRingFull means every index a uint16 can name already has an entry.
+var ErrKeyRingFull = errors.New("the key ring is full: every uint16 index is taken")
+
 // Append adds e as the active entry and returns its ring index. Indices are positions stamped on
-// disk, so entries are never removed or reordered.
-func (kr *KeyRing) Append(e KeyRingEntry) uint16 {
+// disk, so entries are never removed or reordered, and a full ring refuses another.
+func (kr *KeyRing) Append(e KeyRingEntry) (uint16, error) {
+	if len(kr.Keys) > math.MaxUint16 {
+		return 0, ErrKeyRingFull
+	}
 	kr.Keys = append(kr.Keys, e)
-	return uint16(len(kr.Keys) - 1)
+	return uint16(len(kr.Keys) - 1), nil
 }
 
 // AddOpCount credits delta to the active entry and reports whether anything changed.

@@ -82,11 +82,14 @@ func (r *keyRotator) rotate() (uint16, error) {
 	if outgoing := r.cEnc.OpCount(); outgoing > r.flushed {
 		keyRing.AddOpCount(outgoing - r.flushed)
 	}
-	idx := keyRing.Append(configfile.KeyRingEntry{
+	idx, err := keyRing.Append(configfile.KeyRingEntry{
 		KeyID:      dk.KeyID,
 		Ciphertext: dk.Ciphertext,
 		CreatedAt:  dk.CreatedAt,
 	})
+	if err != nil {
+		return 0, err
+	}
 	// Persist before use: anything encrypted under a key that is not recoverable from disk is
 	// lost at unmount.
 	if err := keyRing.WriteFile(); err != nil {

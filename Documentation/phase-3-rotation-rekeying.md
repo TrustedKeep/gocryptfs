@@ -566,7 +566,8 @@ it). Even at *complete* overlap:
 | 2³² | 4.3 s | 2⁻³² |
 
 At 2³⁰ that is ~4.4 TB under one key at the 4 KiB default block size, and ring growth stays a non-issue:
-65536 rotations × 2³⁰ ops ≈ 281 PB. XChaCha20-Poly1305 is strictly safer (192-bit nonce = 8 counter + **16**
+65536 rotations × 2³⁰ ops ≈ 281 PB. The ring is still bounded there: a rotation into a full ring fails
+(exit 34) rather than wrap the index. XChaCha20-Poly1305 is strictly safer (192-bit nonce = 8 counter + **16**
 random) and needs no separate threshold. The counter is consumed by everything in the process, not just one
 key, so a per-entry `OpCount` *undercounts* consumption — which errs safe.
 

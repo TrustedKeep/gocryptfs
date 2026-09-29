@@ -33,6 +33,8 @@ Every encrypted object therefore carries an explicit **key-ring index**, a big-e
 which is the entry's **position** in `KR`. There is no trial decryption anywhere, and a missing
 index is an error, never a default of 0. Because an index is a position, entries are only ever
 appended: removing or reordering one would silently remap every object written under a later key.
+A ring therefore holds at most 65,536 entries; a rotation into a full ring fails, and a larger ring
+is refused at load.
 
 | Object | Key | Where the index is |
 |---|---|---|

@@ -90,13 +90,36 @@ func TestKeyRingValidate(t *testing.T) {
 	}
 }
 
+// An entry's index is a uint16, so a ring holds at most 1<<16 entries: Append refuses another and
+// Validate refuses a ring that somehow has one.
+func TestKeyRingBoundedByUint16(t *testing.T) {
+	e := KeyRingEntry{KeyID: "kek", Ciphertext: []byte{1}}
+	kr := &KeyRing{Keys: make([]KeyRingEntry, 1<<16)}
+	for i := range kr.Keys {
+		kr.Keys[i] = e
+	}
+	if err := kr.Validate(); err != nil {
+		t.Fatalf("a full ring must validate: %v", err)
+	}
+	if _, err := kr.Append(e); !errors.Is(err, ErrKeyRingFull) {
+		t.Fatalf("Append to a full ring: err = %v, want ErrKeyRingFull", err)
+	}
+	if len(kr.Keys) != 1<<16 {
+		t.Errorf("a refused Append grew the ring to %d entries", len(kr.Keys))
+	}
+	kr.Keys = append(kr.Keys, e)
+	if err := kr.Validate(); err == nil {
+		t.Error("a ring past 1<<16 entries must not validate")
+	}
+}
+
 // An entry's ring index is its position: Append hands out the next one and ActiveIdx names the last.
 func TestKeyRingAppend(t *testing.T) {
 	kr := &KeyRing{}
 	for want := uint16(0); want < 3; want++ {
-		got := kr.Append(KeyRingEntry{KeyID: "kek", Ciphertext: []byte{byte(want)}})
-		if got != want {
-			t.Errorf("Append returned %d, want %d", got, want)
+		got, err := kr.Append(KeyRingEntry{KeyID: "kek", Ciphertext: []byte{byte(want)}})
+		if err != nil || got != want {
+			t.Errorf("Append returned %d, %v, want %d", got, err, want)
 		}
 	}
 	if err := kr.Validate(); err != nil {

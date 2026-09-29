@@ -579,11 +579,15 @@ func generateInitialDataKey(args *argContainer, keyRing *configfile.KeyRing, pla
 		tlog.Fatal.Printf("Failed to generate the initial data key: %v", err)
 		os.Exit(exitcodes.Other)
 	}
-	idx := keyRing.Append(configfile.KeyRingEntry{
+	idx, err := keyRing.Append(configfile.KeyRingEntry{
 		KeyID:      dk.KeyID,
 		Ciphertext: dk.Ciphertext,
 		CreatedAt:  dk.CreatedAt,
 	})
+	if err != nil {
+		tlog.Fatal.Printf("Failed to add the initial data key to the key ring: %v", err)
+		os.Exit(exitcodes.Other)
+	}
 	// Before the ring: once a ring is on disk, no later mount comes back here to write it.
 	if !plaintextNames {
 		if err := writeRootDirIV(args.cipherdir, idx, deterministicNames); err != nil {
