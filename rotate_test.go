@@ -13,6 +13,7 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
 	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
+	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 )
 
@@ -92,7 +93,7 @@ func TestNewKeyRotatorWritesUnderTheNewestEntry(t *testing.T) {
 
 // So does the first mount's entry.
 func TestGenerateInitialDataKeyStoresTheKeyServicesStamp(t *testing.T) {
-	connectOnce.Do(func() { tkc.Connect("", "", testNodeID, true, false, false) })
+	connectOnce.Do(func() { tkc.Connect("", "", testNodeID, true, false, false, false) })
 	dir := t.TempDir()
 	kr, err := configfile.LoadKeyRing(filepath.Join(dir, configfile.ConfDefaultName))
 	if err != nil {
@@ -158,6 +159,26 @@ func TestUnwrapDataKeyRetriesOutagesButNotRefusals(t *testing.T) {
 				t.Errorf("calls = %d, want %d", f.calls, c.wantCalls)
 			}
 		})
+	}
+}
+
+// A refusal of any key-service call is a revocation, or SharedStorageRefused for -sharedstorage, so it
+// exits as a refused heartbeat would; anything else exits the caller's code.
+func TestKeyServiceExit(t *testing.T) {
+	for _, c := range []struct {
+		err        error
+		code, want int
+	}{
+		{fmt.Errorf("gateway unwrap: %w", tkc.ErrSharedStorageRefused), exitcodes.Other, exitcodes.SharedStorageRefused},
+		{fmt.Errorf("gateway unwrap: %w", tkc.ErrDenied), exitcodes.Other, exitcodes.Revoked},
+		{fmt.Errorf("gateway generate: %w", tkc.ErrDenied), exitcodes.RotateFailed, exitcodes.Revoked},
+		{fmt.Errorf("gateway generate: %w", tkc.ErrSharedStorageRefused), exitcodes.RotateFailed, exitcodes.SharedStorageRefused},
+		{errors.New("connection refused"), exitcodes.Other, exitcodes.Other},
+		{errors.New("connection refused"), exitcodes.RotateFailed, exitcodes.RotateFailed},
+	} {
+		if got := keyServiceExit(c.err, c.code); got != c.want {
+			t.Errorf("keyServiceExit(%v, %d) = %d, want %d", c.err, c.code, got, c.want)
+		}
 	}
 }
 

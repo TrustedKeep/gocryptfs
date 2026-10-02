@@ -62,16 +62,16 @@ type gwConnector struct {
 	identity instanceIdentity
 	certDir  string
 	client   *http.Client
-	// mockAWS selects where the signed instance identity document attached to data-key
-	// requests comes from: a mock AWS session (true) or real AWS IMDS via tkutils/awssession
-	// (false). Threaded in now; the document is attached to requests in a later phase.
-	mockAWS bool
+	// machine proves which machine this mount runs on, on every call.
+	machine machineIdentity
+	// sharedStorage reports -sharedstorage on every call, which a gateway requiring binding refuses.
+	sharedStorage bool
 }
 
 // newGatewayConnector loads the operator-provisioned cert material and builds the mTLS client.
 // The first data-key call is what actually dials the gateway. A missing host, cert dir, or
 // unreadable/invalid cert set is a fatal misconfiguration.
-func newGatewayConnector(host, certDir, nodeID string, mockAWS bool) *gwConnector {
+func newGatewayConnector(host, certDir, nodeID string, mockAWS, sharedStorage bool) *gwConnector {
 	if host == "" {
 		tlog.Fatal.Printf("gateway connector: -gateway-host is required")
 		os.Exit(exitcodes.Usage)
@@ -90,10 +90,11 @@ func newGatewayConnector(host, certDir, nodeID string, mockAWS bool) *gwConnecto
 	// The identity is not known yet: it lives in the key ring, which is loaded after the connector
 	// exists, and AdoptIdentity is how it arrives.
 	g := &gwConnector{
-		host:    host,
-		nodeID:  nodeID,
-		certDir: certDir,
-		mockAWS: mockAWS,
+		host:          host,
+		nodeID:        nodeID,
+		certDir:       certDir,
+		machine:       newMachineIdentity(mockAWS),
+		sharedStorage: sharedStorage,
 	}
 	if err := g.load(); err != nil {
 		tlog.Fatal.Printf("gateway connector: %v", err)
@@ -143,8 +144,6 @@ func (g *gwConnector) load() error {
 		},
 	}
 	tlog.Info.Printf("Loaded gateway mTLS certificate from %s", g.certDir)
-	tlog.Debug.Printf("gateway connector: instance-identity source=%s",
-		map[bool]string{true: "mock", false: "AWS IMDS"}[g.mockAWS])
 	return nil
 }
 
@@ -190,6 +189,8 @@ func (g *gwConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 		InstanceID:      g.identity.get(),
 		TransportAlg:    uint16(transportKemType),
 		TransportPubKey: pubPEM,
+		Identity:        g.machine(),
+		SharedStorage:   g.sharedStorage,
 	}
 	var out model.TKFSDataKeyGenerateResponse
 	if err := g.post(gatewayGeneratePath, req, &out); err != nil {
@@ -230,6 +231,8 @@ func (g *gwConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]byte
 		Ciphertext:      ciphertext,
 		TransportAlg:    uint16(transportKemType),
 		TransportPubKey: pubPEM,
+		Identity:        g.machine(),
+		SharedStorage:   g.sharedStorage,
 	}
 	var out model.TKFSDataKeyUnwrapResponse
 	if err := g.post(gatewayUnwrapPath, req, &out); err != nil {
@@ -244,10 +247,12 @@ func (g *gwConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]byte
 
 func (g *gwConnector) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
 	req := model.TKFSHeartbeatRequest{
-		NodeID:       g.nodeID,
-		InstanceID:   g.identity.get(),
-		KeyIdx:       keyIdx,
-		KeyCreatedAt: keyCreatedAt,
+		NodeID:        g.nodeID,
+		InstanceID:    g.identity.get(),
+		KeyIdx:        keyIdx,
+		KeyCreatedAt:  keyCreatedAt,
+		Identity:      g.machine(),
+		SharedStorage: g.sharedStorage,
 	}
 	var out model.TKFSHeartbeatResponse
 	if err := g.post(gatewayHeartbeatPath, req, &out); err != nil {
@@ -270,8 +275,8 @@ func (g *gwConnector) Close() error {
 }
 
 // post sends body as JSON to a gateway route and decodes the JSON response. A non-2xx
-// status is an error; a 401/403 (the cert DN is not in the gateway ACL) is called out
-// explicitly so the operator sees the authorization failure.
+// status is an error, and a 403, or the 409 a gateway requiring binding gives a
+// -sharedstorage mount, wraps ErrDenied.
 func (g *gwConnector) post(path string, body, out any) error {
 	if g.client == nil {
 		return fmt.Errorf("gateway client not initialized")
@@ -295,6 +300,8 @@ func (g *gwConnector) post(path string, body, out any) error {
 		return fmt.Errorf("gateway %s: reading response: %w", path, err)
 	}
 	switch {
+	case resp.StatusCode == http.StatusConflict:
+		return fmt.Errorf("gateway %s: %w", path, ErrSharedStorageRefused)
 	case resp.StatusCode == http.StatusForbidden:
 		// A decision rather than an outage, so the heartbeat must not spend its failure budget
 		// retrying it.

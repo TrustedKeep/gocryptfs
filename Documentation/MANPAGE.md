@@ -427,9 +427,10 @@ its original key, which no later rotation can bound.
 rotation, and a negative one is a usage error. `-ro` suppresses it, because a
 read-only mount performs no encrypt operations and may not write the cipherdir.
 
-**Failing to keep the count ends the mount** (**exit code 34**) rather than
-carrying on under a key whose budget nothing can account for: either the counter
-could not be persisted, or the threshold was crossed and the rotation failed. The
+**Failing to keep the count ends the mount** (**exit code 34**, or 33 when the
+key service refuses the rotation, 35 for a `-sharedstorage` refusal) rather
+than carrying on under a key whose budget nothing can account for: either the
+counter could not be persisted, or the threshold was crossed and the rotation failed. The
 usual causes are an unreachable gateway — which the heartbeat would end the mount
 over in any case — and an unwritable cipherdir.
 
@@ -483,6 +484,13 @@ and report any problems you may hit.
 
 It does not permit a second mount of a mounted filesystem: its key ring has one
 writer, so a second mount on the same host is refused (exit code 32).
+
+It cannot be used with instance binding, which pins a filesystem to one
+machine. A gateway that requires binding refuses a `-sharedstorage` mount
+(**exit code 35**), at mount or on the first heartbeat, rekey or op-counter
+rotation of a running mount to reach such a gateway, for example behind a load
+balancer or after a gateway restart; a refused `-ctlsock` `Rotate` only returns
+the error. `-search` and `-mock-kms` mounts are never refused for it.
 
 More info: https://github.com/rfjakob/gocryptfs/issues/156
 
@@ -821,13 +829,17 @@ made; a rotation it makes after the request for another reason, such as the
 `-ctlsock` `Rotate` command or the op counter, completes it too. Nothing dials
 the mount, so it listens on no inbound port for this. A rekey that arrives
 while the instance is down is collected when it returns. A rotation
-that fails ends the mount (**exit code 34**) rather than leaving it writing under
-a key it was told to stop using. `-ro` suppresses the rotation, as it does the
+that fails ends the mount (**exit code 34**, or 33 when the key service refuses
+it, 35 for a `-sharedstorage` refusal) rather than leaving it writing under a
+key it was told to stop using. `-ro` suppresses the rotation, as it does the
 op counter's, and the request stays pending for a writable mount.
 
 **The first heartbeat is sent before anything is mounted.** A key service that
 refuses it, cannot be reached, or does not implement the route at all fails the
-mount outright (**exit code 33**), with no mountpoint ever attached. A key
+mount outright (**exit code 33**), with no mountpoint ever attached. The key-ring
+unwrap, or a first mount's key generation, comes first: a refusal there is also
+exit code 33, and a key service that cannot be reached at all fails the mount
+there with exit code 11. A key
 service that cannot answer a heartbeat cannot revoke this instance either, so it
 does not get to serve one. A rekey that heartbeat brings back is carried out
 before the filesystem is served.
@@ -844,12 +856,40 @@ through that record, so a mount missing from it is one nobody can stop.
 
 Either way the mount ends the same way, and it is not abortable: a clean
 unmount is attempted, a busy mountpoint gets ten seconds and one more try, and
-the process then exits (**exit code 33**) regardless, at worst leaving a dead
-mountpoint. Whether a filesystem outlives its key service does not depend on
+the process then exits (**exit code 33**, or 35 for a `-sharedstorage` refusal)
+regardless, at worst leaving a dead mountpoint. Whether a filesystem outlives its key service does not depend on
 whether someone has a file open in it.
 
 `-mock-kms` is the one mount with no heartbeat, and so neither revocation nor
 rekeying.
+
+INSTANCE BINDING
+================
+
+Every call to the gateway carries this machine's EC2 instance-identity
+document, signed by AWS with RSA-2048 (the instance metadata service's
+`rsa2048` signature), read on the first call and kept for the mount's life.
+Once an operator has given the key service AWS's signing certificate for the
+region, a gateway configured to require binding pairs each filesystem, for
+good, with the first EC2 instance to mount it through such a gateway, and
+refuses every call not from that instance, so a copied cipherdir and client
+certificate stop working anywhere else. Only a mount pairs: such a gateway
+refuses an unpaired filesystem's heartbeat and rotation, so a mount already
+running when binding is turned on exits with **exit code 33** at its next
+heartbeat and must be remounted by hand, which pairs it. A gateway that does
+not require binding pairs nothing. `-search` mounts reach keep directly, send
+no document and are never paired.
+
+Off EC2 there is no document: the mount warns once and carries on. A gateway
+that requires binding refuses such a mount, and one on any instance but its
+own, with **exit code 33**, at mount or on the next heartbeat; it refuses a
+`-sharedstorage` mount with **exit code 35**. A pairing cannot be moved, so a
+filesystem moved to a new instance is refused there. Containers need IMDSv1,
+or IMDSv2 with a hop limit of 2 or more.
+
+With `-mock-aws` (given at `-init`) the mount proves a fixed, fake instance
+signed by a test key instead, which only a key service given that test key's
+certificate accepts.
 
 EXIT CODES
 ==========
@@ -865,8 +905,12 @@ EXIT CODES
 31: the health-check port could not be bound  
 32: the filesystem is already mounted by another gocryptfs process  
 33: the key service withdrew this instance's authorization or would not answer a heartbeat  
-34: the key operation counter could not be persisted, or a rotation failed — the op threshold's or a rekey's  
+34: the key operation counter could not be persisted, or a rotation failed other than by a refusal — the op threshold's or a rekey's  
+35: a gateway that requires instance binding refused this `-sharedstorage` mount  
 other: please check the error message
+
+A systemd unit should set `RestartPreventExitStatus=33 35`, so a revoked or
+refused mount is not restarted into the same answer.
 
 See also: https://github.com/rfjakob/gocryptfs/blob/master/internal/exitcodes/exitcodes.go
 

@@ -147,7 +147,7 @@ func doMount(args *argContainer) {
 	security.Memlock()
 	// The instance's identity lives in the key ring, which is not loaded until initFuseFrontend, so
 	// the connector is built without one and is handed it there.
-	tkc.Connect(cf.GatewayHost, args.gatewayCertDir, cf.NodeID, cf.MockKMS, cf.MockAWS, cf.IsSearch)
+	tkc.Connect(cf.GatewayHost, args.gatewayCertDir, cf.NodeID, cf.MockKMS, cf.MockAWS, cf.IsSearch, args.sharedstorage)
 
 	// Initialize gocryptfs (read config file, ask for password, ...)
 	fs, rotator, wipeKeys := initFuseFrontend(args)
@@ -507,8 +507,8 @@ const unwrapAttempts = 3
 // unwrapRetryDelay is the wait before the first retry, doubled after each one. Tests shorten it.
 var unwrapRetryDelay = 500 * time.Millisecond
 
-// unwrapDataKey unwraps one ring entry, retrying anything but a 403: that is the key service
-// deciding, and asking again would only repeat the answer.
+// unwrapDataKey unwraps one ring entry, retrying anything but a refusal (ErrDenied): that is the key
+// service deciding, and asking again would only repeat the answer.
 func unwrapDataKey(dk tkc.DataKeyConnector, idx uint16, e configfile.KeyRingEntry) (key []byte, err error) {
 	for attempt := 1; ; attempt++ {
 		key, err = dk.UnwrapTKFSDataKey(e.KeyID, e.Ciphertext)
@@ -539,11 +539,16 @@ func buildKeySets(kr *configfile.KeyRing, freshKey []byte, backend cryptocore.AE
 		key := freshKey
 		if idx != activeIdx || key == nil {
 			if key, err = unwrapDataKey(tkc.DataKey(), idx, e); err != nil {
+				// The refusal is the mount's, not the entry's, so it is never a hole.
+				if errors.Is(err, tkc.ErrSharedStorageRefused) {
+					tlog.Fatal.Printf("Failed to unwrap key-ring index %d: %v", idx, err)
+					os.Exit(keyServiceExit(err, exitcodes.Other))
+				}
 				// The root diriv is stamped with index 0, so with encrypted names no path
 				// resolves without it.
 				if idx == activeIdx || (idx == 0 && !plaintextNames) {
 					tlog.Fatal.Printf("Failed to unwrap key-ring index %d, which this mount cannot serve without: %v", idx, err)
-					os.Exit(exitcodes.Other)
+					os.Exit(keyServiceExit(err, exitcodes.Other))
 				}
 				// Fatal is the level, not the outcome: the mount goes on, and -q must not
 				// hide that part of it is unreadable.
@@ -569,6 +574,18 @@ func buildKeySets(kr *configfile.KeyRing, freshKey []byte, backend cryptocore.AE
 	return ks
 }
 
+// keyServiceExit is the exit code for a key-service failure that ends the mount: a refusal is a revocation,
+// or SharedStorageRefused for -sharedstorage, and anything else exits code.
+func keyServiceExit(err error, code int) int {
+	switch {
+	case errors.Is(err, tkc.ErrSharedStorageRefused):
+		return exitcodes.SharedStorageRefused
+	case errors.Is(err, tkc.ErrDenied):
+		return exitcodes.Revoked
+	}
+	return code
+}
+
 // generateInitialDataKey mints the data key for a freshly initialized filesystem, persists it in
 // keyRing and returns its plaintext. It also writes the root gocryptfs.diriv, which needs the ring
 // index and so cannot be written by -init.
@@ -577,7 +594,7 @@ func generateInitialDataKey(args *argContainer, keyRing *configfile.KeyRing, pla
 	dk, err := tkc.DataKey().GenerateTKFSDataKey()
 	if err != nil {
 		tlog.Fatal.Printf("Failed to generate the initial data key: %v", err)
-		os.Exit(exitcodes.Other)
+		os.Exit(keyServiceExit(err, exitcodes.Other))
 	}
 	idx, err := keyRing.Append(configfile.KeyRingEntry{
 		KeyID:      dk.KeyID,

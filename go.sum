@@ -1,5 +1,11 @@
 github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20260929221626-e01f281de54e h1:PRFse/cy56Htaeq1+b/ujN3wyblFE0EdEO+oo1s5C/c=
 github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20260929221626-e01f281de54e/go.mod h1:bdUjAZjkBJkZgVU5fFnV86wJJRaV+3jORA9lgueRVNU=
+github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20261002233011-e3e801ed207b h1:rsrQoNoMpIdXK4glmBLRYAMxAjvsOGOmxYB5GnqAiEw=
+github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20261002233011-e3e801ed207b/go.mod h1:KgOXuvs+vE340q5fX/09WNGAZmYtuMTYTZ6KWht1Fcs=
+github.com/aws/aws-sdk-go-v2 v1.41.7 h1:DWpAJt66FmnnaRIOT/8ASTucrvuDPZASqhhLey6tLY8=
+github.com/aws/aws-sdk-go-v2 v1.41.7/go.mod h1:4LAfZOPHNVNQEckOACQx60Y8pSRjIkNZQz1w92xpMJc=
+github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.23 h1:UuSfcORqNSz/ey3VPRS8TcVH2Ikf0/sC+Hdj400QI6U=
+github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.23/go.mod h1:+G/OSGiOFnSOkYloKj/9M35s74LgVAdJBSD5lsFfqKg=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.95.0 h1:MIWra+MSq53CFaXXAywB2qg9YvVZifkk6vEGl/1Qor0=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.95.0/go.mod h1:79S2BdqCJpScXZA2y+cpZuocWsjGjJINyXnOsf5DTz8=
 github.com/aws/smithy-go v1.25.1 h1:J8ERsGSU7d+aCmdQur5Txg6bVoYelvQJgtZehD12GkI=
@@ -43,6 +49,8 @@ github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRI
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/rfjakob/eme v1.1.2 h1:SxziR8msSOElPayZNFfQw4Tjx/Sbaeeh3eRvrHVMUs4=
 github.com/rfjakob/eme v1.1.2/go.mod h1:cVvpasglm/G3ngEfcfT/Wt0GwhkuO32pf/poW6Nyk1k=
+github.com/smallstep/pkcs7 v0.2.3 h1:bhoQ3TeZmdoXTatcwxCbk+FMcdsyr0gYrrW2Xq2qr+s=
+github.com/smallstep/pkcs7 v0.2.3/go.mod h1:7STkdKhZaZe4xNEXTtY4j1NGeST1gYM4GA40kC5iqr8=
 github.com/smira/go-kmip v0.2.0 h1:1H+PM4qrDty8pjHO1IgA3/wBZcX2qXeIZ3mpF9s/GfU=
 github.com/smira/go-kmip v0.2.0/go.mod h1:8IyDn8GwRjQmTLv8cEmFgV3Q+CXVN7qEhvcD8FUB4cc=
 github.com/spf13/pflag v1.0.5 h1:iy+VFUOCP1a+8yFto/drg2CJ5u0yRoB7fZw3DKv/JXA=

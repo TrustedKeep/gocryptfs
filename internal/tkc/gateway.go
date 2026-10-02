@@ -96,10 +96,15 @@ type Heartbeater interface {
 	Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error)
 }
 
-// ErrDenied wraps every HTTP 403 from the gateway: the DN left the ACL or a blocklist entry names
-// this instance. It is a decision rather than an outage, so the caller must not spend a retry
-// budget on it.
+// ErrDenied wraps every HTTP 403 from the gateway: the DN left the ACL, a blocklist entry names this
+// instance, or the call failed instance binding. It is a decision rather than an outage, so the caller
+// must not spend a retry budget on it.
 var ErrDenied = errors.New("the gateway refused this instance")
+
+// ErrSharedStorageRefused wraps the 409 a gateway requiring instance binding gives a -sharedstorage mount,
+// since a filesystem bound to one machine cannot be shared between several. It wraps ErrDenied.
+var ErrSharedStorageRefused = fmt.Errorf("%w: it requires instance binding, which a -sharedstorage mount cannot keep "+
+	"(mount without -sharedstorage, or through a gateway that does not require binding)", ErrDenied)
 
 // ErrNotImplemented wraps an HTTP 404 or 501: the route does not exist on the key service this
 // mount is talking to. It is separated from every other failure because it says nothing about this

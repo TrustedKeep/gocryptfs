@@ -31,9 +31,10 @@ func wrapForTransport(alg uint16, pubPEM, dek []byte) ([]byte, error) {
 // machinery so the data-key logic can be tested directly.
 func newTestGWConnector(ts *httptest.Server, nodeID string) *gwConnector {
 	return &gwConnector{
-		host:   strings.TrimPrefix(ts.URL, "https://"),
-		nodeID: nodeID,
-		client: ts.Client(),
+		host:    strings.TrimPrefix(ts.URL, "https://"),
+		nodeID:  nodeID,
+		client:  ts.Client(),
+		machine: func() *model.TKFSIdentityProof { return nil },
 	}
 }
 
@@ -203,6 +204,27 @@ func TestGatewayConnectorACLReject(t *testing.T) {
 		t.Fatal("expected an error when the gateway returns 403")
 	} else if !strings.Contains(err.Error(), "not authorized") || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("error should call out the ACL rejection, got: %v", err)
+	}
+}
+
+// A gateway refuses a -sharedstorage mount with a 409, so the mount can exit for that reason rather than as
+// revoked. A 403 is a revocation.
+func TestGatewayConnectorSharedStorageRefusal(t *testing.T) {
+	status := http.StatusConflict
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "refused", status)
+	}))
+	defer ts.Close()
+
+	g := newTestGWConnector(ts, "node-1")
+	g.identity.adopt("instance-1")
+	_, err := g.Heartbeat(0, testCreatedAt)
+	if !errors.Is(err, ErrSharedStorageRefused) || !errors.Is(err, ErrDenied) {
+		t.Errorf("409 = %v, want ErrSharedStorageRefused, which is also ErrDenied", err)
+	}
+	status = http.StatusForbidden
+	if _, err = g.UnwrapTKFSDataKey("instance-1", []byte("c")); !errors.Is(err, ErrDenied) || errors.Is(err, ErrSharedStorageRefused) {
+		t.Errorf("403 = %v, want ErrDenied alone", err)
 	}
 }
 

@@ -188,7 +188,7 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 	flagSet.StringVar(&args.gatewayHost, "gateway-host", defaultGatewayHost, "Host:port of the TrustedGateway")
 	flagSet.StringVar(&args.gatewayCertDir, "gateway-cert-dir", "", "Directory holding the operator-provisioned gateway mTLS material: tls.crt, tls.key, ca.crt")
 	flagSet.StringVar(&args.nodeID, "node-id", "", "Unique identifier for the mount")
-	flagSet.BoolVarP(&args.mockAWS, "mock-aws", "", false, "Mock AWS connection for development")
+	flagSet.BoolVarP(&args.mockAWS, "mock-aws", "", false, "Prove a mock AWS machine instead of reading EC2 IMDS, for development")
 	flagSet.BoolVarP(&args.mockKMS, "mock-kms", "", false, "Use a mock gateway (bbolt-backed) for development, no key service required")
 	flagSet.BoolVarP(&args.isSearch, "search", "", false, "Use TrustedSearch as key provider")
 
