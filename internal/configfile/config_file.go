@@ -37,7 +37,7 @@ type ConfFile struct {
 	// GatewayHost is the host:port of the TrustedGateway that wraps and unwraps
 	// our data keys
 	GatewayHost string
-	// MockAWS uses a mock AWS connection for development
+	// MockAWS proves tkutils' test-signed mock machine instead of reading EC2 IMDS.
 	MockAWS bool `json:",omitempty"`
 	// MockKMS uses a mock KMS for development
 	MockKMS  bool `json:",omitempty"`

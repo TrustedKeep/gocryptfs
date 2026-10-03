@@ -71,12 +71,15 @@ const (
 	// AlreadyMounted - another gocryptfs process already has this filesystem mounted. A key ring
 	// has one writer, so a second mount is refused rather than left to race the first.
 	AlreadyMounted = 32
-	// Revoked - the key service withdrew this instance's authorization (a 403 heartbeat) or would
-	// not answer a heartbeat at all. The mountpoint may be left dead if it was busy.
+	// Revoked - the key service withdrew this instance's authorization (a 403 on any key-service call)
+	// or would not answer a heartbeat at all. The mountpoint may be left dead if it was busy.
 	Revoked = 33
-	// RotateFailed - a rotation the op counter or a rekey demanded failed, or the op count could
-	// not be persisted.
+	// RotateFailed - a rotation the op counter or a rekey demanded failed other than by a refusal, or
+	// the op count could not be persisted.
 	RotateFailed = 34
+	// SharedStorageRefused - the gateway requires instance binding, which a -sharedstorage mount cannot
+	// keep. Remount without -sharedstorage, or through a gateway that does not require binding.
+	SharedStorageRefused = 35
 )
 
 // Err wraps an error with an associated numeric exit code

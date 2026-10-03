@@ -23,9 +23,10 @@ var (
 // identity does not: it lives in the key ring, which is not loaded yet, so the caller hands it over
 // with DataKey().AdoptIdentity once it has one.
 //
-// mockAWS selects the instance-identity source for the real gateway connector; it is threaded now and
-// attached to requests in a later phase.
-func Connect(gatewayHost, gatewayCertDir, id string, mockKMS, mockAWS, isSearch bool) {
+// mockAWS makes the gateway connector prove tkutils' mock AWS machine instead of reading EC2 IMDS, and
+// sharedStorage makes it report -sharedstorage, which a gateway requiring binding refuses. Binding is the
+// gateway's, so the search connector takes neither.
+func Connect(gatewayHost, gatewayCertDir, id string, mockKMS, mockAWS, isSearch, sharedStorage bool) {
 	initOnce.Do(func() {
 		switch {
 		case isSearch:
@@ -36,7 +37,7 @@ func Connect(gatewayHost, gatewayCertDir, id string, mockKMS, mockAWS, isSearch 
 			dkc = newMockGatewayConnector(id, "")
 		default:
 			tlog.Info.Printf("Connecting to TrustedGateway: %s", gatewayHost)
-			dkc = newGatewayConnector(gatewayHost, gatewayCertDir, id, mockAWS)
+			dkc = newGatewayConnector(gatewayHost, gatewayCertDir, id, mockAWS, sharedStorage)
 		}
 	})
 }

@@ -25,7 +25,7 @@ Common Options (use -hh to show all):
   -gateway-host      Host:port of the TrustedGateway
   -gateway-cert-dir  Directory with the gateway mTLS material: tls.crt, tls.key, ca.crt
   -node-id           Unique identifier for the mount
-  -mock-aws          Use a mock AWS connection for development and testing
+  -mock-aws          Prove a mock AWS machine instead of reading EC2 IMDS
   -mock-kms          Use a mock gateway (bbolt-backed) for development and testing
   -search            Use TrustedSearch as a key provider
   -version           Print version information

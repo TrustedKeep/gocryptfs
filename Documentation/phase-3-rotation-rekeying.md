@@ -733,7 +733,8 @@ Four things fall out of this:
   is a Phase-4/5 deliverable arriving early and in the right place.
 - A gateway restart self-heals within one interval, instead of leaving the admin action mysteriously
   unable to find an instance that is running fine.
-- The record is the shape Phase 4 needs — it gains `IdentityDoc` rather than being replaced.
+- The record is the shape Phase 4 needs — it gains `IdentityDoc` rather than being replaced. (As
+  built, Phase 4 replaced `IdentityDoc` with a verified `Host`; see `phase-4-instance-binding.md`.)
 
 **The registry is keep-backed, and that is forced by the deployment, not chosen.** A tenant is "a cluster
 of TrustedGateways (typically in an ASG behind an ELB)" (gatehouse `CLAUDE.md`, and
@@ -1008,6 +1009,10 @@ For a TKFS instance to make a successful call, exactly three things must be true
 2. Its DN is in the ACL — **gateway route only**, see below.
 3. Neither its DN, nor its NodeID, nor its InstanceID is recorded as blocked.
 
+(Phase 4 adds a fourth: through a gateway requiring binding, the call is no `-sharedstorage` mount and
+proves a trusted machine, the one its instance is paired with, which only a mint or an unwrap may lack.
+See `phase-4-instance-binding.md` §3.)
+
 That is the whole model. **Rekey is not a separate permission**, and neither is anything else. On the
 gateway route condition 1 is the operator's `TKFSTrustedCAs`, enforced by the data-key listener's TLS
 handshake; a `-search` mount presents a certificate keep itself provisioned, so there it is keep's own
@@ -1074,7 +1079,8 @@ immediately, without waiting out the count.
 | `404` / `501` | **die now** — a key service without the route cannot revoke this instance |
 
 A `rekey` that fails to rotate ends the mount too, at exit 34 rather than 33: that is the op
-counter's succeeds-or-dies rule (§12.2), and the same reasoning reaches it.
+counter's succeeds-or-dies rule (§12.2), and the same reasoning reaches it. (As of Phase 4 a rotation the
+key service refuses exits as a refused heartbeat would: 33, or 35 for a `-sharedstorage` 409.)
 
 The first heartbeat goes out **before `initGoFuse`**, so a refusal, a missing route or an unreachable key
 service fails the mount with no mountpoint ever attached — there is no failure budget before one exists.

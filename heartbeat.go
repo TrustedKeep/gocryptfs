@@ -85,16 +85,18 @@ func (m *keyServiceMonitor) verifyKeyService() {
 	case errors.Is(err, tkc.ErrNotImplemented):
 		tlog.Fatal.Printf("The key service does not implement the heartbeat route, so this mount would run with " +
 			"no revocation: blocking or de-authorizing it could not unmount it. Upgrade the key service.")
-		m.exit(exitcodes.Revoked)
+	case errors.Is(err, tkc.ErrSharedStorageRefused):
+		tlog.Fatal.Printf("%v", err)
 	case errors.Is(err, tkc.ErrDenied):
 		tlog.Fatal.Printf("The key service refused this instance: %v", err)
-		m.exit(exitcodes.Revoked)
 	case err != nil:
 		tlog.Fatal.Printf("The first heartbeat did not reach the key service: %v", err)
-		m.exit(exitcodes.Revoked)
 	case resp.Command == model.TKFSCommandRekey:
 		// A short mount never reaches the first scheduled beat.
 		m.rekey()
+	}
+	if err != nil {
+		m.exit(keyServiceExit(err, exitcodes.Revoked))
 	}
 }
 
@@ -120,7 +122,7 @@ func (m *keyServiceMonitor) run() {
 func (m *keyServiceMonitor) beat() {
 	resp, err := m.hb.Heartbeat(m.rotator.writeKey())
 	if die, reason := m.classify(err); die {
-		m.shutdownNow("Heartbeat: "+reason, exitcodes.Revoked)
+		m.shutdownNow("Heartbeat: "+reason, keyServiceExit(err, exitcodes.Revoked))
 		return
 	}
 	switch resp.Command {
@@ -147,7 +149,7 @@ func (m *keyServiceMonitor) rekey() {
 		// Same rule as the counter-driven rotation: it succeeds or the mount ends. A filesystem
 		// told its key should change must not go on writing under the old one.
 		m.shutdownNow(fmt.Sprintf("Heartbeat: the key service asked for a rekey and it failed: %v", err),
-			exitcodes.RotateFailed)
+			keyServiceExit(err, exitcodes.RotateFailed))
 		return
 	}
 	tlog.Info.Printf("Heartbeat: rekey requested; rotated to key-ring index %d", idx)
@@ -157,7 +159,7 @@ func (m *keyServiceMonitor) rekey() {
 	switch {
 	case errors.Is(err, tkc.ErrDenied), errors.Is(err, tkc.ErrNotImplemented):
 		_, reason := m.classify(err)
-		m.shutdownNow("Heartbeat: "+reason, exitcodes.Revoked)
+		m.shutdownNow("Heartbeat: "+reason, keyServiceExit(err, exitcodes.Revoked))
 	case err != nil:
 		tlog.Info.Printf("Heartbeat: reporting key-ring index %d failed: %v.", idx, err)
 	}
@@ -168,6 +170,8 @@ func (m *keyServiceMonitor) rekey() {
 // survivable twice.
 func (m *keyServiceMonitor) classify(err error) (die bool, reason string) {
 	switch {
+	case errors.Is(err, tkc.ErrSharedStorageRefused):
+		return true, "a gateway that requires instance binding refused this -sharedstorage mount"
 	case errors.Is(err, tkc.ErrDenied):
 		return true, "the key service withdrew this instance's authorization"
 	case errors.Is(err, tkc.ErrNotImplemented):
@@ -192,11 +196,11 @@ var fatalExitCode atomic.Int32
 
 // shutdownNow ends the mount and is not abortable. A clean unmount is attempted first; if the
 // mountpoint stays busy it gives up and exits, leaving a mountpoint whose every operation fails.
-func (m *keyServiceMonitor) shutdownNow(reason string, code int32) {
-	fatalExitCode.Store(code)
+func (m *keyServiceMonitor) shutdownNow(reason string, code int) {
+	fatalExitCode.Store(int32(code))
 	if m.srv == nil {
 		tlog.Fatal.Printf("%s.", reason)
-		m.exit(int(code))
+		m.exit(code)
 		return
 	}
 	tlog.Fatal.Printf("%s. Unmounting %s.", reason, m.mountpoint)
@@ -207,7 +211,7 @@ func (m *keyServiceMonitor) shutdownNow(reason string, code int32) {
 			tlog.Fatal.Printf("Unmount still failing: %v.", err)
 		}
 	}
-	m.exit(int(code))
+	m.exit(code)
 }
 
 // flushOpCounts persists this mount's encrypt-op counter into the key ring and rotates when the
@@ -229,7 +233,7 @@ func (m *keyServiceMonitor) flushOpCounts() {
 	idx, err := m.rotator.rotate()
 	if err != nil {
 		m.shutdownNow(fmt.Sprintf("The active key passed %d operations but rotating away from it failed: %v",
-			m.opThreshold, err), exitcodes.RotateFailed)
+			m.opThreshold, err), keyServiceExit(err, exitcodes.RotateFailed))
 		return
 	}
 	tlog.Info.Printf("Auto-rotated to key-ring index %d: the previous key passed %d operations", idx, m.opThreshold)

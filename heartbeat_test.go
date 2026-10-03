@@ -38,7 +38,7 @@ func TestMain(m *testing.M) {
 // A non-empty keyID overrides the entry's KEK, which makes every rotation fail.
 func newTestRotator(t *testing.T, keyID string) *keyRotator {
 	t.Helper()
-	connectOnce.Do(func() { tkc.Connect("", "", testNodeID, true, false, false) })
+	connectOnce.Do(func() { tkc.Connect("", "", testNodeID, true, false, false, false) })
 	dk, err := tkc.DataKey().GenerateTKFSDataKey()
 	if err != nil {
 		t.Fatal(err)
@@ -187,16 +187,25 @@ func TestHeartbeatMissingRouteKills(t *testing.T) {
 	}
 }
 
-// A beat that dies unmounts and exits 33.
+// A beat that dies unmounts and exits 33, or 35 when a gateway requiring binding refused -sharedstorage,
+// as when the mount reaches such a gateway after starting behind another.
 func TestHeartbeatRefusalUnmountsAndExits(t *testing.T) {
-	hb := &fakeHeartbeater{err: fmt.Errorf("gateway: %w", tkc.ErrDenied)}
-	m, srv, code := newTestMonitor(t, newTestRotator(t, ""), hb)
-	m.beat()
-	if *code != exitcodes.Revoked {
-		t.Errorf("exit code = %d, want %d", *code, exitcodes.Revoked)
-	}
-	if srv.unmounts != 1 {
-		t.Errorf("unmounts = %d, want 1", srv.unmounts)
+	for _, c := range []struct {
+		err  error
+		want int
+	}{
+		{fmt.Errorf("gateway: %w", tkc.ErrDenied), exitcodes.Revoked},
+		{fmt.Errorf("gateway: %w", tkc.ErrSharedStorageRefused), exitcodes.SharedStorageRefused},
+	} {
+		hb := &fakeHeartbeater{err: c.err}
+		m, srv, code := newTestMonitor(t, newTestRotator(t, ""), hb)
+		m.beat()
+		if *code != c.want {
+			t.Errorf("%v: exit code = %d, want %d", c.err, *code, c.want)
+		}
+		if srv.unmounts != 1 {
+			t.Errorf("%v: unmounts = %d, want 1", c.err, srv.unmounts)
+		}
 	}
 }
 
@@ -246,6 +255,7 @@ func TestHeartbeatRekeyReportRefusalExits(t *testing.T) {
 		wantCode int
 	}{
 		{"403", fmt.Errorf("gateway: %w", tkc.ErrDenied), exitcodes.Revoked},
+		{"sharedstorage", fmt.Errorf("gateway: %w", tkc.ErrSharedStorageRefused), exitcodes.SharedStorageRefused},
 		{"missing route", fmt.Errorf("gateway: %w", tkc.ErrNotImplemented), exitcodes.Revoked},
 		{"outage", errors.New("connection refused"), -1},
 	} {
@@ -263,7 +273,7 @@ func TestHeartbeatRekeyReportRefusalExits(t *testing.T) {
 	}
 }
 
-// A rekey that cannot rotate ends the mount with 34.
+// A rekey whose rotation fails other than by a refusal ends the mount with 34.
 func TestHeartbeatRekeyFailureExits(t *testing.T) {
 	r := newTestRotator(t, "not-this-instances-kek")
 	hb := &fakeHeartbeater{answer: model.TKFSHeartbeatResponse{Command: model.TKFSCommandRekey}}
@@ -324,6 +334,8 @@ func TestVerifyKeyService(t *testing.T) {
 	}{
 		{"missing route", fakeHeartbeater{err: fmt.Errorf("gateway: %w", tkc.ErrNotImplemented)}, false, exitcodes.Revoked, 1, []uint16{0}},
 		{"refused", fakeHeartbeater{err: fmt.Errorf("gateway: %w", tkc.ErrDenied)}, false, exitcodes.Revoked, 1, []uint16{0}},
+		{"sharedstorage refused", fakeHeartbeater{err: fmt.Errorf("gateway: %w", tkc.ErrSharedStorageRefused)}, false,
+			exitcodes.SharedStorageRefused, 1, []uint16{0}},
 		{"unreachable", fakeHeartbeater{err: errors.New("connection refused")}, false, exitcodes.Revoked, 1, []uint16{0}},
 		{"answered", fakeHeartbeater{}, false, -1, 1, []uint16{0}},
 		{"rekey", fakeHeartbeater{answer: rekey}, false, -1, 2, []uint16{0, 1}},
