@@ -428,8 +428,8 @@ Ring API grows `All()`, `Append(entry)` and `ActiveIdx()` alongside `Active()`
 
 **`KeyID` is NOT a per-entry identity — it is the FILESYSTEM's** (revised 2026-08-21, see §12.7). One KEK
 serves an instance for its whole life and is minted exactly once, so every entry of a ring carries the same
-`KeyID` and they differ only in `Ciphertext`. That value is also the instance's `InstanceID`: `KR` is where
-a filesystem's identity lives, read back by `KeyRing.InstanceID()` on every mount.
+`KeyID` and they differ only in `Ciphertext`. That value is also the instance's `KekID`: `KR` is where
+a filesystem's identity lives, read back by `KeyRing.KekID()` on every mount.
 
 Unlike the 2026-08-19 shape this now holds as an invariant rather than "ordinarily" — the only mint is the
 first one, and every rotation names the id it already has, so no path adds a second KEK to a ring.
@@ -439,7 +439,7 @@ first one, and every rotation names the id it already has, so no path adds a sec
 entry's; and `instanceIdentity.adopt` refuses to replace an identity the connector already holds. Every
 mount after the first reads an existing ring and never generates, so `AdoptIdentity` at mount is the
 only thing that gives it an identity, and without one its first rotation would arrive with an empty
-`InstanceID` and mint a second KEK.
+`KekID` and mint a second KEK.
 
 The rule to code against is still the negative one: never rely on `KeyID` to distinguish, dedupe or count
 entries. And it must stay one field per entry despite the value repeating — an unwrap names the entry's own
@@ -467,7 +467,7 @@ Replacing [mount.go](../mount.go):
 
 ```
 keyRing := LoadKeyRing(...)                              // or generateInitialDataKey on a first mount
-tkc.DataKey().AdoptIdentity(keyRing.InstanceID())        // the connector is built without an identity
+tkc.DataKey().AdoptIdentity(keyRing.KekID())        // the connector is built without an identity
 entries := keyRing.All()
 for each entry: unwrap via tkc.DataKey().UnwrapTKFSDataKey(e.KeyID, e.Ciphertext)
                 -> cryptocore.New(key, backend, IVBits)   // EME + content AEAD
@@ -643,7 +643,7 @@ to carry the host it advertises, because it advertises nothing.
 
 ### 12.5 gatehouse — the caller
 
-`PUT <versionPrefix>/tkfsdatakey/rekey/:instanceID` with `RequireAdmin`, registered from
+`PUT <versionPrefix>/tkfsdatakey/rekey/:kekID` with `RequireAdmin`, registered from
 `registerTKFSDataKeyAdminAPI`, posts to keep and answers **202** with the stored `TKFSRekeyDirective` —
 whose `PastIdx` and `RequestedAt` tell the operator which index has to move and what the new key must
 postdate. keep's 404 (no such instance) is answered
@@ -651,17 +651,17 @@ postdate. keep's 404 (no such instance) is answered
 carries the audit action (`NewAction(r, "...").Start()` + `defer action.CompleteEx()`), as every TKFS
 admin mutation does.
 
-`GET <versionPrefix>/tkfsdatakey/instance/:instanceID` proxies keep's registry record, which is where that
+`GET <versionPrefix>/tkfsdatakey/instance/:kekID` proxies keep's registry record, which is where that
 index is read back. gatehouse exposed no instance read at all before, so without it a pulled rekey would be
 unobservable from the admin plane. Beside it, also `RequireAdmin` and proxied to keep:
 `GET <versionPrefix>/tkfsdatakey/instances` lists the registry, and
-`DELETE <versionPrefix>/tkfsdatakey/instance/:instanceID` forgets one record along with any rekey pending
+`DELETE <versionPrefix>/tkfsdatakey/instance/:kekID` forgets one record along with any rekey pending
 for it. Forgetting is not blocking: a mount still running registers again on its next heartbeat.
 
 **One instance per call, named by the path** (settled 2026-08-07; moved out of the body 2026-09-22). An
-earlier draft let the request name any of DN, NodeID or InstanceID and fanned out over every match, with a
+earlier draft let the request name any of DN, NodeID or KekID and fanned out over every match, with a
 per-instance results list and a guard against an empty selector being read as "the whole fleet". That was
-solving a problem nobody has: rekeying is a per-instance operation, and `InstanceID` names both the
+solving a problem nobody has: rekeying is a per-instance operation, and `KekID` names both the
 instance and the KEK its new data key is wrapped under (§12.7), so there is nothing else to select on.
 Rotation is additive and takes no parameters either, so both hops are **bodyless** — there is no request
 type on either, and `TKFSRekeyRequest` was deleted rather than left holding one field.
@@ -669,7 +669,7 @@ type on either, and `TKFSRekeyRequest` was deleted rather than left holding one 
 An operator provenance note rode the directive in an earlier round, composed by the gateway from the
 authenticated admin DN so the instance's own log recorded who asked. It is gone, and what that costs is
 worth stating: attribution now survives only in the gateway's `tkfsRekey` audit action. keep logs
-`{tenant, instanceID, pastIdx}` and stores no caller, and the mount logs the rotation without saying who
+`{tenant, kekID, pastIdx}` and stores no caller, and the mount logs the rotation without saying who
 asked for it. That is the same gap every other TKFS route at keep already has — the ACL, trust-set and
 blocklist writes are equally unattributed — so closing it is its own change covering all of them, not a
 string on this one.
@@ -684,13 +684,13 @@ the gateway where to reach an instance even once it exists.
 **Instead TKFS heartbeats to the gateway, which forwards to keep.**
 
 - TKFS sends `POST …/tkfsdatakey/heartbeat` on the existing mTLS data-key listener — the same client,
-  cert and connection it already uses — carrying `{NodeID, InstanceID, KeyIdx, KeyCreatedAt}`. The DN comes from the
+  cert and connection it already uses — carrying `{NodeID, KekID, KeyIdx, KeyCreatedAt}`. The DN comes from the
   verified client cert, never the body, matching how the data-key handlers already derive it
   (`tcutils.SanitizeDN(tcutils.CertificatesToClientDN(r.TLS))`). Adding the route costs one line in
   gatehouse's `registerTKFSDataKeyAPI`, one handler, and one assertion in the existing route test.
-- keep records `InstanceID -> {DN, NodeID, KeyIdx, KeyCreatedAt, LastSeen}`.
+- keep records `KekID -> {DN, NodeID, KeyIdx, KeyCreatedAt, LastSeen}`.
 
-**`InstanceID` is a third, unique field** — the id of the KEK keep mints on the filesystem's first
+**`KekID` is a third, unique field** — the id of the KEK keep mints on the filesystem's first
 generate, recorded as the `KeyID` of its first key-ring entry and read back from `KR` on every mount. It
 is *not* a config field and is *not* minted at `-init`: see §12.7 for why the identity is derived from
 the key rather than invented alongside it. It is the registry key on its own. Without it two filesystems
@@ -746,7 +746,7 @@ cross-gateway-visible store in this codebase besides the optional Redis credenti
 where every other object that has to be visible from any gateway already lives — the TKFS trust set
 included — for exactly this reason.
 
-**One keep object per instance, keyed by `InstanceID` — not a single registry object.** keep's existing
+**One keep object per instance, keyed by `KekID` — not a single registry object.** keep's existing
 policy write lock is explicitly process-local and is justified by the traffic being low-contention
 admin-plane writes (keep `web/tkfspolicy.go`, `tkfsPolicyWriteMu`: it serializes them "within this
 process").
@@ -755,9 +755,9 @@ read-modify-write on every heartbeat from every instance across every keep node,
 coordination — a lost-update generator. Per-instance objects make each heartbeat a blind `Put`: no RMW,
 no lock, no contention.
 
-The key is the `InstanceID` and nothing else. It identifies an instance on its own, and a DN or NodeID
+The key is the `KekID` and nothing else. It identifies an instance on its own, and a DN or NodeID
 prefix would only mean an admin had to know both to look up an instance they named by ID. The cost is that
-the key is now entirely self-asserted: an authorized instance that claims another's `InstanceID` takes over
+the key is now entirely self-asserted: an authorized instance that claims another's `KekID` takes over
 that record. Nothing authorizes off the registry — it is heartbeat-rebuilt state for the admin view and for
 holding directives — so what a takeover buys is a misleading listing and a rekey collected by the wrong
 instance of the same tenant, which costs that instance a ring entry.
@@ -772,7 +772,7 @@ stating rather than discovering:
 - It **restarts the listener whenever the CA set changes**, dropping in-flight connections. A
   heartbeat is cheap to retry; the client should not treat one failure as significant.
 
-**Trust boundary.** The DN is cert-proven; `NodeID`, `InstanceID`, `KeyIdx` and `KeyCreatedAt` are
+**Trust boundary.** The DN is cert-proven; `NodeID`, `KekID`, `KeyIdx` and `KeyCreatedAt` are
 self-asserted, the same caveat the data-key handlers already carry. An authorized instance can
 therefore report a key it is not on, and so satisfy a rekey it never performed. That is bounded by what it
 buys: the instance already decides whether to rotate at all, so a liar gains nothing it could not have by
@@ -808,17 +808,17 @@ generate mints a new KEK and hence a new identity — plus copying the data acro
 rekey-shaped answer to it.
 
 **The identity IS the KEK's id, and the keyspace concept is gone** (simplified 2026-08-22). keep mints a
-filesystem's KEK on its first generate — the one call that carries no `InstanceID` — and the id it returns
+filesystem's KEK on its first generate — the one call that carries no `KekID` — and the id it returns
 is the identity the filesystem adopts. `model.TKFSKeyspace` is deleted, along with the `kek/ks` and
 `kek/own` KVS prefixes, `KekWrapScoped`, `KekUnwrapScoped`, `ensureScopedKek` and `recordKekOwner`. The
 three TKFS manager methods that briefly replaced them are gone too: `ensureKek` resolves a kek by id when
 given one, mints an unassociated kek when given neither id nor path, and otherwise follows the `kek/curr`
 association as before — so `KekWrap` serves every service and unwrap is plain `KekUnwrap`.
-`TKFSDataKeyUnwrapRequest` lost its `InstanceID` field, since `KeyID` is that same value.
+`TKFSDataKeyUnwrapRequest` lost its `KekID` field, since `KeyID` is that same value.
 
 Three shapes preceded it, and each one was answering a question this one dissolves. `DN + NodeID` put a
-filesystem's keys behind its certificate. The `DN + NodeID + InstanceID` triple of 2026-08-19 added the
-instance while keeping both. `InstanceID` alone, earlier the same week, dropped the other two — the UUID
+filesystem's keys behind its certificate. The `DN + NodeID + KekID` triple of 2026-08-19 added the
+instance while keeping both. `KekID` alone, earlier the same week, dropped the other two — the UUID
 already identified an instance, and each extra component cost something real: the DN made a re-issued
 certificate or a DR restore onto a differently-named host compose a *new* keyspace owning no KEK, so the
 active ring entry 403s and the filesystem does not mount; the NodeID made renaming a node do the same.
@@ -901,7 +901,7 @@ derived slot per instance, no pointer to move — so the "new instance, not a re
 structural rather than policy.
 
 Two smaller consequences. An instance has **no identity until its first successful generate**, so it
-cannot be pre-registered or pre-blocked by `InstanceID` (DN and NodeID still apply, and a mint is gated on
+cannot be pre-registered or pre-blocked by `KekID` (DN and NodeID still apply, and a mint is gated on
 those alone — there is no instance yet for a block to name). And the KEK id becomes operator-facing: it
 appears in admin listings, blocklist entries and rekey requests. No new exposure, since `KeyID` was
 already in `KR` next to the ciphertext, but it means key identifiers get pasted into tickets.
@@ -917,10 +917,10 @@ Nothing here changes shared semantics for non-TKFS callers: `KekWrap` behaves as
 `Path` is given, and `KekUnwrap`, `KekGet` and `KekRotate` are untouched.
 
 **keep's own data-key route.** `web/tenantdatakey.go` serves TrustedSearch mounts, which talk to keep
-directly with no gateway in front. It mints on an empty `InstanceID` and rotates otherwise, exactly as the
+directly with no gateway in front. It mints on an empty `KekID` and rotates otherwise, exactly as the
 gateway path does, so the two reach the same KEK for the same instance and a filesystem is not locked to
 the route that created it. The other side of it: this route, authenticated by tenant cert and token alone,
-can reach a gateway-managed instance's KEK by asserting its `InstanceID`. It also applies **no ACL or
+can reach a gateway-managed instance's KEK by asserting its `KekID`. It also applies **no ACL or
 blocklist check at all** — blocking an instance does nothing to a `-search` mount — which is the gap
 Part B (moving authorization into keep) exists to close, and did: see the dated amendment above, which
 also gave the route family a heartbeat.
@@ -1007,7 +1007,7 @@ For a TKFS instance to make a successful call, exactly three things must be true
 
 1. The CA that signed its certificate is in the trusted set.
 2. Its DN is in the ACL — **gateway route only**, see below.
-3. Neither its DN, nor its NodeID, nor its InstanceID is recorded as blocked.
+3. Neither its DN, nor its NodeID, nor its KekID is recorded as blocked.
 
 (Phase 4 adds a fourth: through a gateway requiring binding, the call is no `-sharedstorage` mount and
 proves a trusted machine, the one its instance is paired with, which only a mint or an unwrap may lack.
@@ -1042,9 +1042,9 @@ every field it names matches:
 
 | Block entry | Effect |
 |---|---|
-| `{DN: cn=foo}` | every request from `cn=foo`, whatever its NodeID or InstanceID |
+| `{DN: cn=foo}` | every request from `cn=foo`, whatever its NodeID or KekID |
 | `{DN: cn=foo, NodeID: bar}` | only instances that are `cn=foo` **and** NodeID `bar` |
-| `{InstanceID: <uuid>}` | exactly one instance, regardless of its DN or NodeID |
+| `{KekID: <uuid>}` | exactly one instance, regardless of its DN or NodeID |
 
 It lives beside the ACL in the keep-backed `TKFSPolicy`, which keep reads directly on every call, so an
 entry takes effect on the next one rather than after a gateway refresh. It is the *only* place a block
@@ -1054,7 +1054,7 @@ authoritative copy (§12.6).
 
 **Enforceability differs by field, and the difference is not cosmetic.** The DN is cert-proven, so a DN
 block is *hard* — a blocked DN cannot present itself as anything else without a different certificate.
-NodeID and InstanceID are self-asserted in the request body, so blocks on them are *soft*: an instance
+NodeID and KekID are self-asserted in the request body, so blocks on them are *soft*: an instance
 that wants to evade one can simply send different values, and it will still pass conditions 1 and 2.
 Per-instance isolation is soft in the same way and for the same reason (§12.7), and it is the right trade for
 what blocking is actually for — decommissioning an instance an operator controls, not defending against
@@ -1088,7 +1088,7 @@ A `rekey` it brings back is carried out there too, before anything is served, an
 persisted op count is already due; `-ro` does neither. Everything below describes the mounted case.
 
 `403` is what blocking already produces, at no extra cost: keep's `TKFSPermissionCheck` refuses a blocked
-DN, NodeID or InstanceID, and on the gateway route a DN no longer in the ACL, and the gateway forwards
+DN, NodeID or KekID, and on the gateway route a DN no longer in the ACL, and the gateway forwards
 that refusal as a `403`. Removing the CA does *not* land there: the listener's TLS handshake fails before
 any request is made, so it counts as a transport failure and the instance goes down on the third.
 
@@ -1247,12 +1247,12 @@ were decided on reasoning that is not recoverable from the code.
   filesystem but not to create or rotate a key. Accepted.
 - **tkutils changes — done.** `TKFSHeartbeatRequest`/`Response`, the rekey types in `model/tkfscontrol.go`,
   `TKFSBlockEntry` + `Blocklist` with a single `Allows`, `ACL` as `map[string]struct{}`,
-  `TKFSInstance` gaining `InstanceID`/`KeyIdx`/`KeyCreatedAt`, `InstanceID` on the generate request, empty
+  `TKFSInstance` gaining `KekID`/`KeyIdx`/`KeyCreatedAt`, `KekID` on the generate request, empty
   only on the minting call, and keep's `CreatedAt` on the generate response. Unwrap names the instance by its `KeyID` (§15.1).
   All three consumers pin the tkutils Phase-3 branch by pseudo-version until it merges and is tagged.
-- **`InstanceID` in `configfile` — reversed.** It was a config field `Create` minted and `Validate`
+- **`KekID` in `configfile` — reversed.** It was a config field `Create` minted and `Validate`
   required; it is now the `KeyID` in `KR`, and `ConfFile.Validate` deliberately does *not* require one
-  (§12.7). `KeyRing.InstanceID()` reads it, and `initFuseFrontend` hands it to the connector with
+  (§12.7). `KeyRing.KekID()` reads it, and `initFuseFrontend` hands it to the connector with
   `AdoptIdentity` once the ring is loaded — `tkc.Connect` runs before that and takes no identity.
 - **Docs** — `file-format.md` and `MANPAGE.md` updated alongside the code.
 
@@ -1324,11 +1324,11 @@ Things that were not visible from code reading and change the picture rather tha
   mitigation still holds for each object independently: both are only ever written as a re-marshal of
   their typed form, so nothing the admin routes store can be undecodable in turn.
 
-- **A field that is present but optional is worse than an absent one.** `InstanceID` was added to the
-  generate and unwrap requests specifically so an InstanceID blocklist entry would be enforceable there,
+- **A field that is present but optional is worse than an absent one.** `KekID` was added to the
+  generate and unwrap requests specifically so a KekID blocklist entry would be enforceable there,
   but the handlers accepted it empty. Since `TKFSBlockEntry.Matches` cannot fire on an unset field, an
-  `{InstanceID: …}` block was **inert on exactly the two routes that touch key material** while appearing
-  covered. As built, unwrap has no `InstanceID` field: its `KeyID` is the identity, and keep matches the
+  `{KekID: …}` block was **inert on exactly the two routes that touch key material** while appearing
+  covered. As built, unwrap has no `KekID` field: its `KeyID` is the identity, and keep matches the
   blocklist against that. Generate carries it on every call but the mint, which has no instance yet for
   a block to name (§12.7). The heartbeat requires it, rejected before authorization like `NodeID`. The
   general rule: a self-asserted field a blocklist can name must be present wherever there is an instance
@@ -1359,7 +1359,7 @@ Things that were not visible from code reading and change the picture rather tha
   deployment requirement rather than a silent security downgrade.
 
 - **Existing development cipherdirs stop mounting**, and for a different reason than first recorded. The
-  original break was `Validate` requiring a new `InstanceID` config field. That field is gone, but the KEK
+  original break was `Validate` requiring a new `KekID` config field. That field is gone, but the KEK
   model changed underneath: a ring written before this phase names a KEK minted under the old scoped path,
   which no longer resolves. Re-`init` and copy the data across; consistent with §0.9.
 

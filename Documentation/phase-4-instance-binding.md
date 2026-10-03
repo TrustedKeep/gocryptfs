@@ -32,19 +32,19 @@ certificates, admin routes) and gocryptfs (fetching and attaching the proof). Th
   the machine must match. Only a mint, with the machine minting it, or an unwrap of an unpaired
   instance, with the machine unwrapping it, makes one, since an unwrap needs a ring entry; any other
   call naming an unpaired instance is refused. A rotation in particular hands out a fresh ring entry,
-  so letting it through would let any ACL'd caller knowing a victim's `InstanceID` unwrap that entry and
+  so letting it through would let any ACL'd caller knowing a victim's `KekID` unwrap that entry and
   pair the victim with their own machine for good. A mount running when the flag goes on was never
   paired, so it exits 33 at its next heartbeat, and the unwrap of its remount pairs it. The gateway also
   refuses a call proving no machine or another one, and a mint or unwrap whose pairing it cannot save; it
   writes a
   pairing only after keep has authorized the call. Nothing moves or removes a pairing; there are no
   admin binding writes. A gateway without the flag reads and writes no pairing at all.
-- **A pairing is its own keep object** (`tkfsb/<instanceID>`), not a field of the heartbeat-rebuilt
+- **A pairing is its own keep object** (`tkfsb/<kekID>`), not a field of the heartbeat-rebuilt
   registry record, and deleting the record keeps it.
 - **The machine is `AccountID + Region + CloudInstanceID`** (`TKFSHost.SameMachine`). `CloudInstanceID`
-  is the EC2 `i-…` id, named apart from the TKFS `InstanceID` (the KEK id). `ImageID` and `PrivateIP`
+  is the EC2 `i-…` id, named apart from the TKFS `KekID`. `ImageID` and `PrivateIP`
   are shown to admins and take no part in matching.
-- **Refusals are logged where they happen**, at the gateway, with the DN, NodeID, InstanceID and the
+- **Refusals are logged where they happen**, at the gateway, with the DN, NodeID, KekID and the
   machines involved. There is no conflict preview, and removing an identity certificate is not guarded:
   behind a gateway requiring binding, the instances it verified are refused from their next call.
 - **`-mock-aws` proves a fake machine** (account `000000000000`) made for testing and signed by a
@@ -101,7 +101,7 @@ one. It sets the record's `Route` (`gateway` or `search`) itself, from the door 
 through. The gateway refuses `-sharedstorage` with a 409, which no other data-key answer uses (keep's
 own 409s reach an instance as 502).
 
-`TKFSBinding{InstanceID, Host, BoundAt}`.
+`TKFSBinding{KekID, Host, BoundAt}`.
 
 ## 3. gatehouse — verification and enforcement
 
@@ -135,7 +135,7 @@ query strings and bodies unchanged:
 | `POST tkfsdatakey/identitycert` (PEM cert or chain) | `POST tkfspolicy/identitycert` | 200 `[]fingerprint`; 400 (not RSA-2048+) |
 | `DELETE tkfsdatakey/identitycert/:fp` | `DELETE tkfspolicy/identitycert/:fp` | 204; 404 |
 | `GET tkfsdatakey/bindings` | `GET tkfsbinding` | 200 `[]TKFSBinding` |
-| `GET tkfsdatakey/binding/:instanceID` | `GET tkfsbinding/:instanceID` | 200; 404 |
+| `GET tkfsdatakey/binding/:kekID` | `GET tkfsbinding/:kekID` | 200; 404 |
 
 The gateway itself uses keep's `GET tkfspolicy/identitycert` (the certificates, `{}` for none) and `POST
 tkfsbinding/:id`, neither proxied.

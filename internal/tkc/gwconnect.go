@@ -182,11 +182,11 @@ func (g *gwConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	if err != nil {
 		return TKFSDataKey{}, fmt.Errorf("gateway generate: transport keygen: %w", err)
 	}
-	// An empty InstanceID asks the gateway to mint this filesystem's KEK; anything else asks for
+	// An empty KekID asks the gateway to mint this filesystem's KEK; anything else asks for
 	// another data key under the KEK that id names.
 	req := model.TKFSDataKeyGenerateRequest{
 		NodeID:          g.nodeID,
-		InstanceID:      g.identity.get(),
+		KekID:           g.identity.get(),
 		TransportAlg:    uint16(transportKemType),
 		TransportPubKey: pubPEM,
 		Identity:        g.machine(),
@@ -248,7 +248,7 @@ func (g *gwConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]byte
 func (g *gwConnector) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
 	req := model.TKFSHeartbeatRequest{
 		NodeID:        g.nodeID,
-		InstanceID:    g.identity.get(),
+		KekID:         g.identity.get(),
 		KeyIdx:        keyIdx,
 		KeyCreatedAt:  keyCreatedAt,
 		Identity:      g.machine(),

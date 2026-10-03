@@ -63,7 +63,7 @@ type CreateArgs struct {
 }
 
 // Create - create a new config and write it to "Filename". No key ring is written, and so no identity
-// is assigned: a filesystem's InstanceID is the id of the KEK keep mints on its first generate, which
+// is assigned: a filesystem's KekID is the id of the KEK keep mints on its first generate, which
 // the first mount records in the key ring (see keyring.go).
 func Create(args *CreateArgs) error {
 	if args.NodeID == "" {

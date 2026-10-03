@@ -24,7 +24,7 @@ const KeyRingTmpFileName = KeyRingFileName + ".tmp"
 // under it, is its position in KeyRing.Keys.
 type KeyRingEntry struct {
 	// KeyID is the gateway KEK the Ciphertext is wrapped under, the same on every entry. It is also
-	// the filesystem's InstanceID, so editing it names a different KEK or none.
+	// the filesystem's KekID, so editing it names a different KEK or none.
 	KeyID string
 	// Ciphertext is the gateway-wrapped master key.
 	Ciphertext []byte
@@ -40,8 +40,8 @@ type KeyRing struct {
 	filename string
 }
 
-// InstanceID is the filesystem's identity: the KEK id its entries share, or "" before the first generate.
-func (kr *KeyRing) InstanceID() string {
+// KekID is the filesystem's identity: the KEK id its entries share, or "" before the first generate.
+func (kr *KeyRing) KekID() string {
 	if len(kr.Keys) == 0 {
 		return ""
 	}

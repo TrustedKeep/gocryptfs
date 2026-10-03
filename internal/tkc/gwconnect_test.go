@@ -269,7 +269,7 @@ func TestGatewayConnectorHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
-	if got.NodeID != "node-1" || got.InstanceID != "instance-1" || got.KeyIdx != 7 || !got.KeyCreatedAt.Equal(testCreatedAt) {
+	if got.NodeID != "node-1" || got.KekID != "instance-1" || got.KeyIdx != 7 || !got.KeyCreatedAt.Equal(testCreatedAt) {
 		t.Errorf("request = %+v, want the node, instance, key-ring index and key stamp", got)
 	}
 	if resp.Command != model.TKFSCommandRekey {
@@ -302,7 +302,7 @@ func TestGatewayConnectorHeartbeat(t *testing.T) {
 
 // Generate must send the identity, since it names the KEK to wrap under and is what a blocklist entry
 // matches. Unwrap carries it as the KeyID instead — a second copy would be the same value.
-func TestGatewayConnectorSendsInstanceID(t *testing.T) {
+func TestGatewayConnectorSendsKekID(t *testing.T) {
 	var gen model.TKFSDataKeyGenerateRequest
 	var unw model.TKFSDataKeyUnwrapRequest
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -320,8 +320,8 @@ func TestGatewayConnectorSendsInstanceID(t *testing.T) {
 	g.identity.adopt("instance-1")
 	_, _ = g.GenerateTKFSDataKey()
 	_, _ = g.UnwrapTKFSDataKey("key-1", []byte("c"))
-	if gen.InstanceID != "instance-1" {
-		t.Errorf("generate InstanceID = %q, want instance-1", gen.InstanceID)
+	if gen.KekID != "instance-1" {
+		t.Errorf("generate KekID = %q, want instance-1", gen.KekID)
 	}
 	if unw.KeyID != "key-1" {
 		t.Errorf("unwrap KeyID = %q, want key-1", unw.KeyID)
@@ -347,7 +347,7 @@ func TestGatewayConnectorLoadRejectsEmptyCA(t *testing.T) {
 }
 
 // A cipherdir that has never mounted has no identity, so its first generate must go out with an empty
-// InstanceID — that is what asks the gateway to mint a KEK — and the connector must then adopt the
+// KekID — that is what asks the gateway to mint a KEK — and the connector must then adopt the
 // returned KeyID as its identity. Without the adoption, the heartbeat would register the instance as ""
 // and every blocklist entry naming it would be inert.
 func TestGatewayConnectorAdoptsTheMintedIdentity(t *testing.T) {
@@ -379,8 +379,8 @@ func TestGatewayConnectorAdoptsTheMintedIdentity(t *testing.T) {
 
 	g := newTestGWConnector(ts, "node-1")
 	_, _ = g.GenerateTKFSDataKey()
-	if gen.InstanceID != "" {
-		t.Errorf("first generate sent InstanceID = %q, want empty so the gateway mints one", gen.InstanceID)
+	if gen.KekID != "" {
+		t.Errorf("first generate sent KekID = %q, want empty so the gateway mints one", gen.KekID)
 	}
 	if got := g.identity.get(); got != "kek-minted" {
 		t.Fatalf("identity after mint = %q, want kek-minted", got)
@@ -388,14 +388,14 @@ func TestGatewayConnectorAdoptsTheMintedIdentity(t *testing.T) {
 	if _, err := g.Heartbeat(1, testCreatedAt); err != nil {
 		t.Fatal(err)
 	}
-	if beat.InstanceID != "kek-minted" {
-		t.Errorf("heartbeat InstanceID = %q, want the adopted identity", beat.InstanceID)
+	if beat.KekID != "kek-minted" {
+		t.Errorf("heartbeat KekID = %q, want the adopted identity", beat.KekID)
 	}
 
 	// A second generate is a rotation: it names the identity it now has, and the answer cannot change it.
 	_, _ = g.GenerateTKFSDataKey()
-	if gen.InstanceID != "kek-minted" {
-		t.Errorf("rotation sent InstanceID = %q, want the adopted identity", gen.InstanceID)
+	if gen.KekID != "kek-minted" {
+		t.Errorf("rotation sent KekID = %q, want the adopted identity", gen.KekID)
 	}
 }
 

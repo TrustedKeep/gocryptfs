@@ -56,7 +56,7 @@ func TestSearchConnectorHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
-	if got.NodeID != "node-1" || got.InstanceID != "instance-1" || got.KeyIdx != 7 || !got.KeyCreatedAt.Equal(testCreatedAt) {
+	if got.NodeID != "node-1" || got.KekID != "instance-1" || got.KeyIdx != 7 || !got.KeyCreatedAt.Equal(testCreatedAt) {
 		t.Errorf("request = %+v, want the node, instance, key-ring index and key stamp", got)
 	}
 	if resp.Command != model.TKFSCommandRekey {

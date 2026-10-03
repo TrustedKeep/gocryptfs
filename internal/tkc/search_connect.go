@@ -148,7 +148,7 @@ func (s *searchConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	}
 	req := model.TKFSDataKeyGenerateRequest{
 		NodeID:          s.nodeID,
-		InstanceID:      s.identity.get(),
+		KekID:           s.identity.get(),
 		TransportAlg:    uint16(transportKemType),
 		TransportPubKey: pubPEM,
 	}
@@ -204,7 +204,7 @@ func (s *searchConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]
 func (s *searchConnector) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
 	req := model.TKFSHeartbeatRequest{
 		NodeID:       s.nodeID,
-		InstanceID:   s.identity.get(),
+		KekID:        s.identity.get(),
 		KeyIdx:       keyIdx,
 		KeyCreatedAt: keyCreatedAt,
 	}

@@ -166,7 +166,7 @@ func TestValidateExitCodes(t *testing.T) {
 	}
 }
 
-// A filesystem gets no identity at -init: its InstanceID is the KEK id the first mount records in the
+// A filesystem gets no identity at -init: its KekID is the KEK id the first mount records in the
 // key ring, so a freshly created config has none and must still validate.
 func TestCreateAssignsNoIdentity(t *testing.T) {
 	conf := filepath.Join(t.TempDir(), "gocryptfs.conf")
@@ -188,7 +188,7 @@ func TestCreateAssignsNoIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id := kr.InstanceID(); id != "" {
+	if id := kr.KekID(); id != "" {
 		t.Errorf("identity = %q, want empty before the first generate", id)
 	}
 }
