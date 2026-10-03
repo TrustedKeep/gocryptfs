@@ -1,5 +1,5 @@
-github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20261003001422-36af8d37c4ab h1:+gmR+Rg+OIqFV5pQ2597jSqW5IUlnBuc3slNkftCXw0=
-github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20261003001422-36af8d37c4ab/go.mod h1:KgOXuvs+vE340q5fX/09WNGAZmYtuMTYTZ6KWht1Fcs=
+github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20261003004034-36eb425af299 h1:gc4ybj47RVGGVUcfIowaOco002Pxu4l8bupcvLR20/k=
+github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20261003004034-36eb425af299/go.mod h1:KgOXuvs+vE340q5fX/09WNGAZmYtuMTYTZ6KWht1Fcs=
 github.com/aws/aws-sdk-go-v2 v1.41.7 h1:DWpAJt66FmnnaRIOT/8ASTucrvuDPZASqhhLey6tLY8=
 github.com/aws/aws-sdk-go-v2 v1.41.7/go.mod h1:4LAfZOPHNVNQEckOACQx60Y8pSRjIkNZQz1w92xpMJc=
 github.com/aws/aws-sdk-go-v2/config v1.31.12 h1:pYM1Qgy0dKZLHX2cXslNacbcEFMkDMl+Bcj5ROuS6p8=

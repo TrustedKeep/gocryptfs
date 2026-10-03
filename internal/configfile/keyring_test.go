@@ -293,8 +293,8 @@ func TestLoadKeyRingRejectsTwoKEKs(t *testing.T) {
 }
 
 // The instance's identity is the entries' KeyID, and an empty ring has none.
-func TestKeyRingInstanceIDIsTheKeyID(t *testing.T) {
-	if got := (&KeyRing{}).InstanceID(); got != "" {
+func TestKeyRingKekIDIsTheKeyID(t *testing.T) {
+	if got := (&KeyRing{}).KekID(); got != "" {
 		t.Errorf("empty ring: identity = %q, want \"\"", got)
 	}
 
@@ -303,7 +303,7 @@ func TestKeyRingInstanceIDIsTheKeyID(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		kr.Append(KeyRingEntry{KeyID: keyID, Ciphertext: []byte{byte(i)}})
 	}
-	if got := kr.InstanceID(); got != keyID {
+	if got := kr.KekID(); got != keyID {
 		t.Errorf("identity = %q, want %q", got, keyID)
 	}
 }

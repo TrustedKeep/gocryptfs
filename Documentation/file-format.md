@@ -14,7 +14,7 @@ is re-encrypted, so old objects stay readable under the key that wrote them. One
 entry of a filesystem — it is minted once, on the first generate, and every rotation names it again — so
 `KeyID` repeats across the whole ring and never identifies an entry; `Ciphertext`, the wrapped data key, is
 what does. That repeated `KeyID` is also the filesystem's **identity**: it is the id of the KEK, which is
-what the instance reports to the gateway as its `InstanceID`, so `KR` and not `gocryptfs.conf` is where a
+what the instance reports to the gateway as its `KekID`, so `KR` and not `gocryptfs.conf` is where a
 filesystem's identity lives. Every entry naming the same KEK is an invariant the ring is validated
 against at load. Rotation is triggered by
 the `-ctlsock` `Rotate` command, by a rekey the heartbeat carries back from the key service, or by the active

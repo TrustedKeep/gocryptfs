@@ -446,7 +446,7 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, rotator *k
 	}
 	// A mint has already adopted the identity. Every later mount gets it here, or its next generate
 	// would mint a second KEK.
-	if err := tkc.DataKey().AdoptIdentity(keyRing.InstanceID()); err != nil {
+	if err := tkc.DataKey().AdoptIdentity(keyRing.KekID()); err != nil {
 		tlog.Fatal.Printf("%v", err)
 		os.Exit(exitcodes.Other)
 	}
