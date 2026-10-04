@@ -204,8 +204,8 @@ rotation included, which exited 34 before Phase 4), and the caller's code otherw
   escaped, and passes query, body, keep's status and Content-Type through.
 - keep: the search route never pairs or records a `Host`, and keep sets `Route`, which no caller can; the
   heartbeat records the gateway's `Host`; attach refuses an instance already paired, and no route moves
-  or removes one; an undecodable pairing is an error; the certificate list; no route reads a tenant from
-  the header; pairings surviving a record delete.
+  one; an undecodable pairing is an error; the certificate list; no route reads a tenant from the header;
+  Forget deleting the pairing, also when the record is already gone.
 - gocryptfs: the proof and `SharedStorage` ride generate, unwrap and heartbeat on the gateway connector;
   the connector is built with both; a 409 is `ErrSharedStorageRefused` and a 403 is not; it exits 35 at
   the first heartbeat, on a later one and on the report after a rekey, and `keyServiceExit` maps a

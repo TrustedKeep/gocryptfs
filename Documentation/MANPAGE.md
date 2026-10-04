@@ -870,8 +870,8 @@ Every call to the gateway carries this machine's EC2 instance-identity
 document, signed by AWS with RSA-2048 (the instance metadata service's
 `rsa2048` signature), read on the first call and kept for the mount's life.
 Once an operator has given the key service AWS's signing certificate for the
-region, a gateway configured to require binding pairs each filesystem, for
-good, with the first EC2 instance to mount it through such a gateway, and
+region, a gateway configured to require binding pairs each filesystem with
+the first EC2 instance to mount it through such a gateway, and
 refuses every call not from that instance, so a copied cipherdir and client
 certificate stop working anywhere else. Only a mount pairs: such a gateway
 refuses an unpaired filesystem's heartbeat and rotation, so a mount already
