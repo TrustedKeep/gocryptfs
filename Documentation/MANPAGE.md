@@ -870,8 +870,8 @@ Every call to the gateway carries this machine's EC2 instance-identity
 document, signed by AWS with RSA-2048 (the instance metadata service's
 `rsa2048` signature), read on the first call and kept for the mount's life.
 Once an operator has given the key service AWS's signing certificate for the
-region, a gateway configured to require binding pairs each filesystem, for
-good, with the first EC2 instance to mount it through such a gateway, and
+region, a gateway configured to require binding pairs each filesystem with
+the first EC2 instance to mount it through such a gateway, and
 refuses every call not from that instance, so a copied cipherdir and client
 certificate stop working anywhere else. Only a mount pairs: such a gateway
 refuses an unpaired filesystem's heartbeat and rotation, so a mount already
@@ -884,7 +884,10 @@ Off EC2 there is no document: the mount warns once and carries on. A gateway
 that requires binding refuses such a mount, and one on any instance but its
 own, with **exit code 33**, at mount or on the next heartbeat; it refuses a
 `-sharedstorage` mount with **exit code 35**. A pairing cannot be moved, so a
-filesystem moved to a new instance is refused there. Containers need IMDSv1,
+filesystem moved to a new instance is refused there until an administrator
+forgets the instance in the gateway; its next mount then pairs it with the new
+instance. Forgetting a mounted instance ends that mount with **exit code 33**
+at its next heartbeat, and remounting it pairs it again. Containers need IMDSv1,
 or IMDSv2 with a hop limit of 2 or more.
 
 With `-mock-aws` (given at `-init`) the mount proves a fixed, fake instance

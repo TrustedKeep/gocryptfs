@@ -27,20 +27,22 @@ certificates, admin routes) and gocryptfs (fetching and attaching the proof). Th
   TKFS reports `SharedStorage` on generate, unwrap and heartbeat, and a gateway requiring binding
   answers it 409 before anything else. TKFS exits 35 (`SharedStorageRefused`) at mount, and on the
   heartbeat, rekey or op-counter rotation that first reaches such a gateway.
-- **A pairing is permanent, automatic, and made only where binding is required.** A gateway with the
-  flag checks that every call proves a machine and looks up its instance's pairing; where there is one,
-  the machine must match. Only a mint, with the machine minting it, or an unwrap of an unpaired
+- **A pairing is automatic, never moves, and is made only where binding is required.** A gateway with
+  the flag checks that every call proves a machine and looks up its instance's pairing; where there is
+  one, the machine must match. Only a mint, with the machine minting it, or an unwrap of an unpaired
   instance, with the machine unwrapping it, makes one, since an unwrap needs a ring entry; any other
   call naming an unpaired instance is refused. A rotation in particular hands out a fresh ring entry,
   so letting it through would let any ACL'd caller knowing a victim's `KekID` unwrap that entry and
-  pair the victim with their own machine for good. A mount running when the flag goes on was never
-  paired, so it exits 33 at its next heartbeat, and the unwrap of its remount pairs it. The gateway also
-  refuses a call proving no machine or another one, and a mint or unwrap whose pairing it cannot save; it
-  writes a
-  pairing only after keep has authorized the call. Nothing moves or removes a pairing; there are no
-  admin binding writes. A gateway without the flag reads and writes no pairing at all.
+  pair the victim with their own machine until an admin forgets it. A mount running when the flag goes
+  on was never paired, so it exits 33 at its next heartbeat, and the unwrap of its remount pairs it.
+  The gateway also refuses a call proving no machine or another one, and a mint or unwrap whose pairing
+  it cannot save; it writes a pairing only after keep has authorized the call. Nothing moves a pairing
+  and there are no admin binding writes, but an admin's Forget
+  (`DELETE .../tkfsdatakey/instance/:kekID`) removes it along with the instance record. Behind a
+  gateway requiring binding, a mount still running then exits 33 at its next heartbeat and pairs again when
+  remounted by hand. A gateway without the flag reads and writes no pairing at all.
 - **A pairing is its own keep object** (`tkfsb/<kekID>`), not a field of the heartbeat-rebuilt
-  registry record, and deleting the record keeps it.
+  registry record. Forget deletes both, and works on a pairing whose record is already gone.
 - **The machine is `AccountID + Region + CloudInstanceID`** (`TKFSHost.SameMachine`). `CloudInstanceID`
   is the EC2 `i-…` id, named apart from the TKFS `KekID`. `ImageID` and `PrivateIP`
   are shown to admins and take no part in matching.
@@ -58,8 +60,8 @@ Considered and dropped: an account mode and an account allowlist (the goal is li
 losing a pairing on an ASG replacement is acceptable); built-in AWS certificates; STS
 `GetCallerIdentity` (see §8); checking in keep (it would reach `-search` too); a tenant-wide admin switch;
 bindings naming several machines; a conflict preview (the UI shows each instance's machine beside its
-pairing); admin bind, move and unbind (a pairing is permanent); refusing an unpaired instance until an
-admin pairs it; blocklist entries naming a machine (`CloudInstanceID`).
+pairing); admin bind and move (Forget is the only way to drop a pairing); refusing an unpaired
+instance until an admin pairs it; blocklist entries naming a machine (`CloudInstanceID`).
 
 ## 1. What it buys, and what it does not
 
@@ -81,7 +83,10 @@ elsewhere sign a document naming the paired machine.
   flag to squat that instance.
 - **`cp -a` on the paired machine** stays paired with it, as in Phase 3 §12.6.
 - **Moving a filesystem.** A pairing cannot be moved, so a filesystem whose instance is replaced is
-  refused by a gateway requiring binding until it is re-minted.
+  refused by a gateway requiring binding until it is re-minted, or until an admin forgets the instance
+  and its remount pairs it with the new machine.
+- **Forget reopens trust on first use.** Once an admin forgets an instance, the next authorized unwrap
+  pairs it with whatever machine made it, so a copied certificate and ring can then pair elsewhere.
 - **A gateway without the flag** (a mixed ASG, a rolling change) holds no call to a pairing and makes
   none.
 - **`-search` mounts** are never paired or held to anything.
@@ -199,8 +204,8 @@ rotation included, which exited 34 before Phase 4), and the caller's code otherw
   escaped, and passes query, body, keep's status and Content-Type through.
 - keep: the search route never pairs or records a `Host`, and keep sets `Route`, which no caller can; the
   heartbeat records the gateway's `Host`; attach refuses an instance already paired, and no route moves
-  or removes one; an undecodable pairing is an error; the certificate list; no route reads a tenant from
-  the header; pairings surviving a record delete.
+  one; an undecodable pairing is an error; the certificate list; no route reads a tenant from the header;
+  Forget deleting the pairing, also when the record is already gone.
 - gocryptfs: the proof and `SharedStorage` ride generate, unwrap and heartbeat on the gateway connector;
   the connector is built with both; a 409 is `ErrSharedStorageRefused` and a 403 is not; it exits 35 at
   the first heartbeat, on a later one and on the report after a rekey, and `keyServiceExit` maps a
