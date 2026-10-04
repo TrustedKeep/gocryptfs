@@ -884,7 +884,10 @@ Off EC2 there is no document: the mount warns once and carries on. A gateway
 that requires binding refuses such a mount, and one on any instance but its
 own, with **exit code 33**, at mount or on the next heartbeat; it refuses a
 `-sharedstorage` mount with **exit code 35**. A pairing cannot be moved, so a
-filesystem moved to a new instance is refused there. Containers need IMDSv1,
+filesystem moved to a new instance is refused there until an administrator
+forgets the instance in the gateway; its next mount then pairs it with the new
+instance. Forgetting a mounted instance ends that mount with **exit code 33**
+at its next heartbeat, and remounting it pairs it again. Containers need IMDSv1,
 or IMDSv2 with a hop limit of 2 or more.
 
 With `-mock-aws` (given at `-init`) the mount proves a fixed, fake instance

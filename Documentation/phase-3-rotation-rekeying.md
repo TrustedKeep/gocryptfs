@@ -657,6 +657,8 @@ unobservable from the admin plane. Beside it, also `RequireAdmin` and proxied to
 `GET <versionPrefix>/tkfsdatakey/instances` lists the registry, and
 `DELETE <versionPrefix>/tkfsdatakey/instance/:kekID` forgets one record along with any rekey pending
 for it. Forgetting is not blocking: a mount still running registers again on its next heartbeat.
+(Since Phase 4 it also removes the instance's pairing, so behind a gateway requiring binding that mount
+exits 33 instead; see `phase-4-instance-binding.md`.)
 
 **One instance per call, named by the path** (settled 2026-08-07; moved out of the body 2026-09-22). An
 earlier draft let the request name any of DN, NodeID or KekID and fanned out over every match, with a
