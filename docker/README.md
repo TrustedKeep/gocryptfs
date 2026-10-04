@@ -67,7 +67,7 @@ Certs in `certs/`:
 | File | Use |
 | --- | --- |
 | `tkfs_ca.crt` | Upload as the TKFS trusted CA |
-| `tkfs_host1`, `tkfs_host2` | Client certs from `tkfs_ca`, DNs `CN=TKFS_HOST1;O=TK-DEV` and `CN=TKFS_HOST2;O=TK-DEV` |
+| `tkfs_host1`, `tkfs_host2` | Client certs from `tkfs_ca`, DNs `CN=tkfs_host1,O=TK-DEV` and `CN=tkfs_host2,O=TK-DEV` |
 | `tkfs_rogue` | Client cert from the stack CA, which TKFS does not trust unless you upload it |
 | `aws_mock_identity.crt` | Upload as an identity certificate; it verifies the fake machine `-mock-aws` proves |
 
@@ -79,7 +79,7 @@ The stack's stunnel ports need no client cert flags; `13271` is gateway1 managem
 curl http://localhost:13271/api/v1/tkfsdatakey/policy
 curl http://localhost:13271/api/v1/tkfsdatakey/instances
 curl -XPOST --data-binary @certs/tkfs_ca.crt http://localhost:13271/api/v1/tkfsdatakey/ca
-curl -XPUT 'http://localhost:13271/api/v1/tkfsdatakey/acl/CN=TKFS_HOST1;O=TK-DEV'
+curl -XPUT 'http://localhost:13271/api/v1/tkfsdatakey/acl/CN=tkfs_host1,O=TK-DEV'
 ```
 
 ## Rebuild
