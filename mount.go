@@ -91,8 +91,8 @@ func doMount(args *argContainer) {
 			args.mountpoint, args.cipherdir)
 		os.Exit(exitcodes.MountPoint)
 	}
-	// Reverse-mounting "/foo" at "/foo/mnt" means we would be recursively
-	// encrypting ourselves.
+	// Mounting "/foo" at "/foo/mnt" means the mountpoint would hide part of
+	// our own backing storage.
 	if strings.HasPrefix(args.mountpoint, args.cipherdir+"/") {
 		tlog.Fatal.Printf("Mountpoint %q is contained in cipherdir %q, this is not supported",
 			args.mountpoint, args.cipherdir)
@@ -226,7 +226,6 @@ func doMount(args *argContainer) {
 	debug.FreeOSMemory()
 	// Set up autounmount, if requested.
 	if args.idle > 0 {
-		// Not being in reverse mode means we always have a forward file system.
 		fwdFs := fs.(*fusefrontend.RootNode)
 		go idleMonitor(args.idle, fwdFs, srv, args.mountpoint)
 	}
@@ -854,10 +853,17 @@ func unmount(srv *fuse.Server, mountpoint string) {
 		if runtime.GOOS == "linux" {
 			// MacOSX does not support lazy unmount
 			tlog.Info.Printf("Trying lazy unmount")
-			cmd := exec.Command("fusermount", "-u", "-z", mountpoint)
+			fusermountPath, err := getFusermountPath()
+			if err != nil {
+				tlog.Warn.Printf("lazy unmount failed: %v", err)
+				return
+			}
+			cmd := exec.Command(fusermountPath, "-u", "-z", mountpoint)
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
-			cmd.Run()
+			if err := cmd.Run(); err != nil {
+				tlog.Info.Printf("lazy unmount failed: %v", err)
+			}
 		}
 	}
 }
@@ -871,4 +877,18 @@ func loadConfig(args *argContainer) (cf *configfile.ConfFile, err error) {
 		return nil, err
 	}
 	return cf, nil
+}
+
+func getFusermountPath() (path string, err error) {
+	path, err = exec.LookPath("fusermount3")
+	if err == nil {
+		return path, nil
+	}
+
+	path, err = exec.LookPath("fusermount")
+	if err == nil {
+		return path, nil
+	}
+
+	return "", fmt.Errorf("fusermount binary not found: %v", err)
 }

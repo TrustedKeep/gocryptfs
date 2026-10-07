@@ -15,7 +15,7 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
-// Interface should be implemented by fusefrontend[_reverse]
+// Interface should be implemented by fusefrontend
 type Interface interface {
 	EncryptPath(string) (string, error)
 	DecryptPath(string) (string, error)

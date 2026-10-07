@@ -227,7 +227,7 @@ func parseCliOpts(osArgs []string) (args argContainer) {
 		"successful mount - used internally for daemonization")
 
 	flagSet.DurationVar(&args.idle, "i", 0, "Alias for -idle")
-	flagSet.DurationVar(&args.idle, "idle", 0, "Auto-unmount after specified idle duration (ignored in reverse mode). "+
+	flagSet.DurationVar(&args.idle, "idle", 0, "Auto-unmount after specified idle duration. "+
 		"Durations are specified like \"500s\" or \"2h45m\". 0 means stay mounted indefinitely.")
 
 	var dummyString string
