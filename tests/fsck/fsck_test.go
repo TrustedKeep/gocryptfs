@@ -1,7 +1,6 @@
 package fsck
 
 import (
-	"encoding/base64"
 	"os"
 	"os/exec"
 	"runtime"
@@ -9,66 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg/xattr"
-
-	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
-
-func dec64(in string) (out []byte) {
-	out, err := base64.RawURLEncoding.DecodeString(in)
-	if err != nil {
-		panic(err)
-	}
-	return out
-}
-
-func TestBrokenFsV14(t *testing.T) {
-	// git does not save extended attributes, so we apply them here.
-	// xattr_good
-	xattr.Set("broken_fs_v1.4/6nGs4Ugr3EAHd0KzkyLZ-Q",
-		"user.gocryptfs.0a5e7yWl0SGUGeWB0Sy2Kg",
-		dec64("hxnZvXSkDicfwVS9w4r1yYkFF61Qou6NaL-VhObYEdu6kuM"))
-	// xattr_corrupt_name
-	xattr.Set("broken_fs_v1.4/CMyUifVTjW5fsgXonWBT_RDkvLkdGrLttkZ45T3Oi3A",
-		"user.gocryptfs.0a5e7yWl0SGUGeWB0Sy2K0",
-		dec64("QHUMDTgbnl8Sv_A2dFQic_G2vN4_gmDna3651JAhF7OZ-YI"))
-	// xattr_corrupt_value
-	xattr.Set("broken_fs_v1.4/b00sbnGXGToadr01GHZaYQn8tjyRhe1OXNBZoQtMlcQ",
-		"user.gocryptfs.0a5e7yWl0SGUGeWB0Sy2Kg",
-		dec64("A0hvCePeKpL8bCpijhDKtf7cIijXYQsPnEbNJ84M2ONW0dd"))
-
-	cmd := exec.Command(test_helpers.GocryptfsBinary, "-fsck", "-extpass", "echo test", "broken_fs_v1.4")
-	outBin, err := cmd.CombinedOutput()
-	out := string(outBin)
-	t.Log(out)
-	code := test_helpers.ExtractCmdExitCode(err)
-	if code != exitcodes.FsckErrors {
-		t.Errorf("wrong exit code, have=%d want=%d", code, exitcodes.FsckErrors)
-	}
-}
-
-func TestMalleableBase64(t *testing.T) {
-	// Evil filenames. Cannot have them in git, because if we do,
-	//  go install github.com/rfjakob/gocryptfs/v2@latest
-	// fails with
-	//  g: malformed file path "tests/fsck/malleable_base64/27AG8t-XZH7G9ou2OSD_z\rg": invalid char '\r'
-	//  g: malformed file path "tests/fsck/malleable_base64/27AG8t-XZH7G9ou2OSD_z\rg": invalid char '\r'
-	if err := os.WriteFile("malleable_base64/27AG8t-XZH7G9ou2OSD_z\ng", nil, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile("malleable_base64/27AG8t-XZH7G9ou2OSD_z\rg", nil, 0644); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(test_helpers.GocryptfsBinary, "-fsck", "-extpass", "echo test", "malleable_base64")
-	outBin, err := cmd.CombinedOutput()
-	out := string(outBin)
-	t.Log(out)
-	code := test_helpers.ExtractCmdExitCode(err)
-	if code != exitcodes.FsckErrors {
-		t.Errorf("wrong exit code, have=%d want=%d", code, exitcodes.FsckErrors)
-	}
-}
 
 // TestTerabyteFile verifies that fsck does something intelligent when it hits
 // a 1-terabyte sparse file (trying to read the whole file is not intelligent).

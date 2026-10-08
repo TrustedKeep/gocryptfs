@@ -1,0 +1,320 @@
+package tkc
+
+import (
+	"bytes"
+	"crypto/rsa"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/TrustedKeep/tkutils/v2/kem"
+	"github.com/TrustedKeep/tkutils/v2/model"
+	"github.com/TrustedKeep/tkutils/v2/tlsutils"
+	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
+	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
+)
+
+// Operator-provisioned mTLS material is loaded from -gateway-cert-dir under these names.
+const (
+	gatewayCertFile = "tls.crt"
+	gatewayKeyFile  = "tls.key"
+	gatewayCAFile   = "ca.crt"
+)
+
+// Gateway data-key routes (the gateway serves them under its /api/v1 version prefix). See
+// gateway.go for the contract these implement.
+const (
+	gatewayGeneratePath  = "/api/v1/tkfsdatakey/generate"
+	gatewayUnwrapPath    = "/api/v1/tkfsdatakey/unwrap"
+	gatewayHeartbeatPath = "/api/v1/tkfsdatakey/heartbeat"
+)
+
+// gwIdleConnTimeout bounds how long an idle keep-alive connection to the gateway is pooled.
+const gwIdleConnTimeout = time.Minute
+
+// gwHTTPTimeout bounds a single data-key call.
+const gwHTTPTimeout = 10 * time.Second
+
+// maxGatewayResponseBytes bounds a gateway response body. Data-key responses are tiny (a wrapped
+// 32-byte key plus small JSON); this cap only stops a misbehaving gateway or proxy from forcing an
+// unbounded read.
+const maxGatewayResponseBytes = 1 << 20 // 1 MiB
+
+var (
+	_ DataKeyConnector = (*gwConnector)(nil)
+	_ Heartbeater      = (*gwConnector)(nil)
+)
+
+// gwConnector is the real client of the gateway data-key API. It presents an
+// operator-provisioned client cert over mTLS and speaks the generate/unwrap contract in
+// gateway.go. The cert/key/CA are read once at startup and the mTLS client is built once;
+// rotating the cert material requires remounting.
+type gwConnector struct {
+	host   string // gateway host:port
+	nodeID string // travels in each request so the gateway can record and block by node
+	// identity travels in each request both so a blocklist entry naming one instance is enforceable
+	// on every call, not just on the heartbeat, and because it names the KEK to wrap under. It is
+	// empty until the first generate mints one; see instanceIdentity.
+	identity instanceIdentity
+	certDir  string
+	client   *http.Client
+	// machine proves which machine this mount runs on, on every call.
+	machine machineIdentity
+	// sharedStorage reports -sharedstorage on every call, which a gateway requiring binding refuses.
+	sharedStorage bool
+}
+
+// newGatewayConnector loads the operator-provisioned cert material and builds the mTLS client.
+// The first data-key call is what actually dials the gateway. A missing host, cert dir, or
+// unreadable/invalid cert set is a fatal misconfiguration.
+func newGatewayConnector(host, certDir, nodeID string, mockAWS, sharedStorage bool) *gwConnector {
+	if host == "" {
+		tlog.Fatal.Printf("gateway connector: -gateway-host is required")
+		os.Exit(exitcodes.Usage)
+	}
+	if certDir == "" {
+		tlog.Fatal.Printf("gateway connector: -gateway-cert-dir is required")
+		os.Exit(exitcodes.Usage)
+	}
+	if nodeID == "" {
+		// The gateway rejects a data-key call that omits it, and a blocklist entry naming a node
+		// cannot match a field never sent. The mock connector rejects it for its own reason: the
+		// NodeID names the mock's key store.
+		tlog.Fatal.Printf("gateway connector: NodeID is required")
+		os.Exit(exitcodes.Usage)
+	}
+	// The identity is not known yet: it lives in the key ring, which is loaded after the connector
+	// exists, and AdoptIdentity is how it arrives.
+	g := &gwConnector{
+		host:          host,
+		nodeID:        nodeID,
+		certDir:       certDir,
+		machine:       newMachineIdentity(mockAWS),
+		sharedStorage: sharedStorage,
+	}
+	if err := g.load(); err != nil {
+		tlog.Fatal.Printf("gateway connector: %v", err)
+		os.Exit(exitcodes.Other)
+	}
+	return g
+}
+
+// load reads the operator-provisioned cert files and builds the mTLS http.Client. It runs once
+// at construction and the client is never swapped afterward, so it needs no locking. All three
+// files (client cert, key, CA) must be present and the CA must be non-empty.
+func (g *gwConnector) load() error {
+	certPath := filepath.Join(g.certDir, gatewayCertFile)
+	keyPath := filepath.Join(g.certDir, gatewayKeyFile)
+	caPath := filepath.Join(g.certDir, gatewayCAFile)
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return fmt.Errorf("reading gateway client cert: %w", err)
+	}
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		return fmt.Errorf("reading gateway client key: %w", err)
+	}
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return fmt.Errorf("reading gateway CA: %w", err)
+	}
+	// Fail closed: an empty CA makes NewTLSConfigWithCert set InsecureSkipVerify, which
+	// would leave the gateway's server cert unverified.
+	if len(bytes.TrimSpace(caPEM)) == 0 {
+		return fmt.Errorf("gateway CA %s is empty", caPath)
+	}
+	tlsConfig, err := tlsutils.NewTLSConfigWithCert(keyPEM, certPEM, caPEM)
+	if err != nil {
+		return fmt.Errorf("building gateway TLS config: %w", err)
+	}
+	if tlsConfig.InsecureSkipVerify {
+		return fmt.Errorf("TLS config from %s does not verify the gateway", g.certDir)
+	}
+	g.client = &http.Client{
+		Timeout: gwHTTPTimeout,
+		Transport: &http.Transport{
+			MaxIdleConns:    1,
+			MaxConnsPerHost: 2,
+			IdleConnTimeout: gwIdleConnTimeout,
+			TLSClientConfig: tlsConfig,
+		},
+	}
+	tlog.Info.Printf("Loaded gateway mTLS certificate from %s", g.certDir)
+	return nil
+}
+
+// transportKemType identifies the transit-wrap algorithm sent on the wire as TransportAlg; the
+// wrap/unwrap protocol lives in model.NewTransportKey / model.TransitWrap / model.TransitUnwrap
+// (RSA-OAEP). RSA is the only transport algorithm wired end-to-end today; a post-quantum or hybrid
+// transport (e.g. RFC 9180 HPKE) is a deliberate, tested change, not a silent flip of this constant.
+const transportKemType = kem.RSA3072
+
+// newTransport mints a fresh ephemeral transport keypair for a single data-key call. The peer seals
+// the returned data key to pubPEM; only this process holds the private half, so the plaintext key is
+// recoverable only here and never appears on the wire (a second layer under mTLS).
+func newTransport() (priv *rsa.PrivateKey, pubPEM []byte, err error) {
+	return model.NewTransportKey(uint16(transportKemType))
+}
+
+// unwrapTransit recovers the plaintext data key from the peer's TransitWrappedKey and
+// enforces the expected data-key length. An empty wrap is rejected inside model.TransitUnwrap: the
+// response carries no plaintext field, so an empty wrap is the only way a non-wrapping peer shows up
+// and must never be silently accepted.
+func unwrapTransit(priv *rsa.PrivateKey, wrapped []byte) ([]byte, error) {
+	dek, err := model.TransitUnwrap(priv, wrapped)
+	if err != nil {
+		return nil, err
+	}
+	if len(dek) != tkfsDataKeyLength {
+		return nil, fmt.Errorf("expected %d-byte data key, got %d", tkfsDataKeyLength, len(dek))
+	}
+	return dek, nil
+}
+
+// GenerateTKFSDataKey mints a fresh gateway-wrapped master key. The plaintext key comes back
+// wrapped to a per-call ephemeral transport key (never in the clear); we unwrap it in memory.
+func (g *gwConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
+	k, pubPEM, err := newTransport()
+	if err != nil {
+		return TKFSDataKey{}, fmt.Errorf("gateway generate: transport keygen: %w", err)
+	}
+	// An empty KekID asks the gateway to mint this filesystem's KEK; anything else asks for
+	// another data key under the KEK that id names.
+	req := model.TKFSDataKeyGenerateRequest{
+		NodeID:          g.nodeID,
+		KekID:           g.identity.get(),
+		TransportAlg:    uint16(transportKemType),
+		TransportPubKey: pubPEM,
+		Identity:        g.machine(),
+		SharedStorage:   g.sharedStorage,
+	}
+	var out model.TKFSDataKeyGenerateResponse
+	if err := g.post(gatewayGeneratePath, req, &out); err != nil {
+		return TKFSDataKey{}, err
+	}
+	if out.KeyID == "" || len(out.Ciphertext) == 0 {
+		return TKFSDataKey{}, fmt.Errorf("gateway generate: incomplete response (keyID=%q, ciphertext=%dB)", out.KeyID, len(out.Ciphertext))
+	}
+	if out.CreatedAt.IsZero() {
+		return TKFSDataKey{}, fmt.Errorf("gateway generate: the key service did not stamp the data key's creation time")
+	}
+	dek, err := unwrapTransit(k, out.TransitWrappedKey)
+	if err != nil {
+		return TKFSDataKey{}, fmt.Errorf("gateway generate: %w", err)
+	}
+	// On a mint this is where the filesystem learns who it is; on a rotation this is the check that
+	// the id we sent is the one that came back.
+	if err := g.identity.adopt(out.KeyID); err != nil {
+		clear(dek)
+		return TKFSDataKey{}, fmt.Errorf("gateway generate: %w", err)
+	}
+	return TKFSDataKey{KeyID: out.KeyID, Plaintext: dek, Ciphertext: out.Ciphertext, CreatedAt: out.CreatedAt}, nil
+}
+
+// UnwrapTKFSDataKey recovers the plaintext master key for a key-ring entry. As with generate, the
+// gateway returns the key wrapped to a per-call ephemeral transport key; we unwrap it in memory.
+func (g *gwConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]byte, error) {
+	if keyID == "" {
+		return nil, fmt.Errorf("gateway unwrap: empty key id")
+	}
+	k, pubPEM, err := newTransport()
+	if err != nil {
+		return nil, fmt.Errorf("gateway unwrap: transport keygen: %w", err)
+	}
+	req := model.TKFSDataKeyUnwrapRequest{
+		NodeID:          g.nodeID,
+		KeyID:           keyID,
+		Ciphertext:      ciphertext,
+		TransportAlg:    uint16(transportKemType),
+		TransportPubKey: pubPEM,
+		Identity:        g.machine(),
+		SharedStorage:   g.sharedStorage,
+	}
+	var out model.TKFSDataKeyUnwrapResponse
+	if err := g.post(gatewayUnwrapPath, req, &out); err != nil {
+		return nil, err
+	}
+	dek, err := unwrapTransit(k, out.TransitWrappedKey)
+	if err != nil {
+		return nil, fmt.Errorf("gateway unwrap: %w", err)
+	}
+	return dek, nil
+}
+
+func (g *gwConnector) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
+	req := model.TKFSHeartbeatRequest{
+		NodeID:        g.nodeID,
+		KekID:         g.identity.get(),
+		KeyIdx:        keyIdx,
+		KeyCreatedAt:  keyCreatedAt,
+		Identity:      g.machine(),
+		SharedStorage: g.sharedStorage,
+	}
+	var out model.TKFSHeartbeatResponse
+	if err := g.post(gatewayHeartbeatPath, req, &out); err != nil {
+		return model.TKFSHeartbeatResponse{}, err
+	}
+	return out, nil
+}
+
+// AdoptIdentity records the identity read out of this filesystem's key ring.
+func (g *gwConnector) AdoptIdentity(id string) error {
+	return g.identity.adopt(id)
+}
+
+// Close releases idle connections to the gateway.
+func (g *gwConnector) Close() error {
+	if g.client != nil {
+		g.client.CloseIdleConnections()
+	}
+	return nil
+}
+
+// post sends body as JSON to a gateway route and decodes the JSON response. A non-2xx
+// status is an error, and a 403, or the 409 a gateway requiring binding gives a
+// -sharedstorage mount, wraps ErrDenied.
+func (g *gwConnector) post(path string, body, out any) error {
+	if g.client == nil {
+		return fmt.Errorf("gateway client not initialized")
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, "https://"+g.host+path, bytes.NewReader(buf))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("gateway %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxGatewayResponseBytes))
+	if err != nil {
+		return fmt.Errorf("gateway %s: reading response: %w", path, err)
+	}
+	switch {
+	case resp.StatusCode == http.StatusConflict:
+		return fmt.Errorf("gateway %s: %w", path, ErrSharedStorageRefused)
+	case resp.StatusCode == http.StatusForbidden:
+		// A decision rather than an outage, so the heartbeat must not spend its failure budget
+		// retrying it.
+		return fmt.Errorf("gateway %s: not authorized (HTTP 403): %w: %s", path, ErrDenied, bytes.TrimSpace(respBody))
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("gateway %s: not authorized (HTTP 401): %s", path, bytes.TrimSpace(respBody))
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotImplemented:
+		return fmt.Errorf("gateway %s: HTTP %d: %w: %s", path, resp.StatusCode, ErrNotImplemented, bytes.TrimSpace(respBody))
+	case resp.StatusCode < 200 || resp.StatusCode >= 300:
+		return fmt.Errorf("gateway %s: HTTP %d: %s", path, resp.StatusCode, bytes.TrimSpace(respBody))
+	}
+	if err := json.Unmarshal(respBody, out); err != nil {
+		return fmt.Errorf("gateway %s: decoding response: %w", path, err)
+	}
+	return nil
+}

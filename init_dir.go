@@ -5,12 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
+	"github.com/google/uuid"
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
-	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
-	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
@@ -43,10 +41,11 @@ func isDir(dir string) error {
 	return nil
 }
 
-// initDir handles "gocryptfs -init". It prepares a directory for use as a
-// gocryptfs storage directory.
-// This means creating the gocryptfs.conf and gocryptfs.diriv files in an
-// empty directory.
+// initDir handles "gocryptfs -init". It prepares a directory for use as a gocryptfs storage
+// directory: the cipherdir must be empty, and it creates gocryptfs.conf. It does not contact the
+// key service and writes no key ring: the first mount generates the data key, creates the
+// key-ring file and — because the root gocryptfs.diriv has to name the key its filenames use —
+// writes that too (mount.go).
 func initDir(args *argContainer) {
 	err := isEmptyDir(args.cipherdir)
 	if err != nil {
@@ -54,39 +53,27 @@ func initDir(args *argContainer) {
 		os.Exit(exitcodes.CipherDir)
 	}
 
-	{
-		err = configfile.Create(&configfile.CreateArgs{
-			Filename:           args.config,
-			PlaintextNames:     args.plaintextnames,
-			DeterministicNames: args.deterministic_names,
-			XChaCha20Poly1305:  args.xchacha,
-			NodeID:             args.nodeID,
-			MockAWS:            args.mockAWS,
-			MockKMS:            args.mockKMS,
-			IsSearch:           args.isSearch,
-			BoundaryHost:       args.boundaryHost,
-			KeyPool:            args.keyPool,
-			LongNameMax:        args.longnamemax,
-			EnvEncAlg:          args.envEncAlg,
-		})
-		if err != nil {
-			tlog.Fatal.Println(err)
-			os.Exit(exitcodes.WriteConf)
-		}
+	// Resolve the NodeID once and persist it: every mount reads it back from the config.
+	nodeID := args.nodeID
+	if nodeID == "" {
+		nodeID = uuid.NewString()
 	}
-	// Forward mode with filename encryption enabled needs a gocryptfs.diriv file
-	// in the root dir
-	if !args.plaintextnames && !args.deterministic_names {
-		// Open cipherdir (following symlinks)
-		dirfd, err := syscall.Open(args.cipherdir, syscall.O_DIRECTORY|syscallcompat.O_PATH, 0)
-		if err == nil {
-			err = nametransform.WriteDirIVAt(dirfd)
-			syscall.Close(dirfd)
-		}
-		if err != nil {
-			tlog.Fatal.Println(err)
-			os.Exit(exitcodes.Init)
-		}
+
+	err = configfile.Create(&configfile.CreateArgs{
+		Filename:           args.config,
+		PlaintextNames:     args.plaintextnames,
+		DeterministicNames: args.deterministic_names,
+		XChaCha20Poly1305:  args.xchacha,
+		NodeID:             nodeID,
+		MockAWS:            args.mockAWS,
+		MockKMS:            args.mockKMS,
+		IsSearch:           args.isSearch,
+		GatewayHost:        args.gatewayHost,
+		LongNameMax:        args.longnamemax,
+	})
+	if err != nil {
+		tlog.Fatal.Println(err)
+		os.Exit(exitcodes.WriteConf)
 	}
 	mountArgs := ""
 	fsName := "gocryptfs"

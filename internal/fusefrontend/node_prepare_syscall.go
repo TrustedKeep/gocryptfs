@@ -1,6 +1,7 @@
 package fusefrontend
 
 import (
+	"errors"
 	"syscall"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
@@ -29,29 +30,30 @@ func (n *Node) prepareAtSyscall(child string) (dirfd int, cName string, errno sy
 		return -1, "", syscall.EPERM
 	}
 
-	var encryptName func(int, string, []byte) (string, error)
+	var encryptName func(int, string, []byte, uint16) (string, error)
 	if !rn.args.PlaintextNames {
-		encryptName = func(dirfd int, child string, iv []byte) (cName string, err error) {
+		encryptName = func(dirfd int, child string, iv []byte, keyIdx uint16) (cName string, err error) {
 			// Badname allowed, try to determine filenames
 			if rn.nameTransform.HaveBadnamePatterns() {
-				return rn.nameTransform.EncryptAndHashBadName(child, iv, dirfd)
+				return rn.nameTransform.EncryptAndHashBadName(child, iv, keyIdx, dirfd)
 			}
-			return rn.nameTransform.EncryptAndHashName(child, iv)
+			return rn.nameTransform.EncryptAndHashName(child, iv, keyIdx)
 		}
 	}
 
 	// Cache lookup
 	var iv []byte
-	dirfd, iv = rn.dirCache.Lookup(n)
+	var keyIdx uint16
+	dirfd, iv, keyIdx = rn.dirCache.Lookup(n)
 	if dirfd > 0 {
 		if rn.args.PlaintextNames {
 			return dirfd, child, 0
 		}
 		var err error
-		cName, err = encryptName(dirfd, child, iv)
+		cName, err = encryptName(dirfd, child, iv, keyIdx)
 		if err != nil {
 			syscall.Close(dirfd)
-			return -1, "", fs.ToErrno(err)
+			return -1, "", nameErrno(err)
 		}
 		return
 	}
@@ -71,25 +73,40 @@ func (n *Node) prepareAtSyscall(child string) (dirfd int, cName string, errno sy
 	// Cache store
 	if !rn.args.PlaintextNames {
 		var err error
-		iv, err = rn.nameTransform.ReadDirIVAt(dirfd)
+		iv, keyIdx, err = rn.nameTransform.ReadDirIVAt(dirfd)
 		if err != nil {
 			syscall.Close(dirfd)
-			return -1, "", fs.ToErrno(err)
+			return -1, "", nameErrno(err)
 		}
 	}
-	rn.dirCache.Store(n, dirfd, iv)
+	rn.dirCache.Store(n, dirfd, iv, keyIdx)
 
 	if rn.args.PlaintextNames {
 		return dirfd, child, 0
 	}
 
-	cName, err = encryptName(dirfd, child, iv)
+	cName, err = encryptName(dirfd, child, iv, keyIdx)
 	if err != nil {
 		syscall.Close(dirfd)
-		return -1, "", fs.ToErrno(err)
+		return -1, "", nameErrno(err)
 	}
 
 	return
+}
+
+// nameErrno maps a name-transform failure to an errno. A name that is too long or invalid already
+// carries one and keeps it; a key-ring index this mount has no key for does not, and go-fuse would
+// answer ENOSYS for it rather than the EIO an unavailable key is documented to produce.
+//
+// Fatal is the level, not the outcome: -q must not hide why a subtree stopped resolving, and Warn
+// would turn it into a panic under -wpanic.
+func nameErrno(err error) syscall.Errno {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return errno
+	}
+	tlog.Fatal.Printf("prepareAtSyscall: %v", err)
+	return syscall.EIO
 }
 
 func (n *Node) prepareAtSyscallMyself() (dirfd int, cName string, errno syscall.Errno) {

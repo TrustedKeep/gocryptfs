@@ -1,0 +1,38 @@
+# Runs TKFS mounts on the gatehouse stack's network; mount.sh starts one container per filesystem. See README.md.
+name: tkfs
+
+services:
+  mount:
+    # build.sh builds it with bake, which adds the private-module auth this file cannot make optional.
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args: [GO_VERSION]
+    image: tkfs-mount:local_dev
+    # FUSE needs the device and mount permission; Docker's AppArmor profile blocks mount(2).
+    devices: [/dev/fuse]
+    cap_add: [SYS_ADMIN, IPC_LOCK]
+    # gocryptfs locks its key memory and refuses to start when it cannot.
+    ulimits:
+      memlock: -1
+    security_opt: [apparmor:unconfined]
+    environment:
+      GATEWAY: ${GATEWAY:-gateway:7083}
+    volumes:
+      # Long form, so a missing certs/ fails instead of Docker creating it owned by root.
+      - type: bind
+        source: ./certs
+        target: /tkfs/certs
+        read_only: true
+        bind:
+          create_host_path: false
+      - state:/tkfs/state
+    networks: [gw]
+
+volumes:
+  state:
+
+networks:
+  gw:
+    external: true
+    name: ${STACK_NETWORK:-gw_gw}

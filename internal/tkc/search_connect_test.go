@@ -1,91 +1,132 @@
 package tkc
 
 import (
-	"fmt"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/TrustedKeep/tkutils/v2/kem"
+	"github.com/TrustedKeep/tkutils/v2/kmsclient"
+	"github.com/TrustedKeep/tkutils/v2/model"
 )
 
-// keyURL must pick the Nexus Search endpoint only in nexus mode, and the keep tenantek
-// path otherwise — preserving the keep URLs exactly so existing deployments are unchanged.
-func TestKeyURL(t *testing.T) {
-	cases := []struct {
-		name  string
-		nexus bool
-		host  string
-		keyID string
-		want  string
-	}{
-		{"nexus by id", true, "nexus:9082", "abc-123", "https://nexus:9082/envelopekey/abc-123"},
-		{"nexus current", true, "nexus:9082", "", "https://nexus:9082/envelopekey/current"},
-		{"keep by id", false, "kms", "abc-123", "https://kms:7070/keepsvc/tenantek/retrieve/abc-123"},
-		{"keep current", false, "kms", "", fmt.Sprintf("https://kms:7070/keepsvc/tenantek/current/%d", kem.RSA3072)},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := keyURL(tc.nexus, tc.host, tc.keyID); got != tc.want {
-				t.Fatalf("keyURL(%v, %q, %q) = %q, want %q", tc.nexus, tc.host, tc.keyID, got, tc.want)
-			}
-		})
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// newTestSearchConnector answers every request from rt, skipping the ramdisk material and the
+// hardcoded KMS port so the route and body logic can be tested directly.
+func newTestSearchConnector(rt roundTripFunc) *searchConnector {
+	return &searchConnector{
+		nodeID:   "node-1",
+		token:    "tenant-token",
+		kmsHosts: []string{"kms-1"},
+		client:   &http.Client{Transport: rt},
 	}
 }
 
-// Only an exact, whitespace-trimmed "nexus" enables nexus mode; everything else is keep.
-func TestParseProvider(t *testing.T) {
-	cases := map[string]bool{
-		"nexus":     true,
-		"nexus\n":   true,
-		"  nexus  ": true,
-		"":          false,
-		"keep":      false,
-		"NEXUS":     false,
-		"nexus-x":   false,
-	}
-	for in, want := range cases {
-		if got := parseProvider([]byte(in)); got != want {
-			t.Errorf("parseProvider(%q) = %v, want %v", in, got, want)
+func jsonResponse(code int, v any) *http.Response {
+	body, _ := json.Marshal(v)
+	return &http.Response{StatusCode: code, Body: io.NopCloser(bytes.NewReader(body)), Header: http.Header{}}
+}
+
+// A search mount heartbeats to keep exactly as a gateway-proxied one does to the gateway: same body,
+// same pass-through of a rekey directive, and the same three failure classes. 403 is revocation,
+// 404/501 is a keep that does not serve the route, and everything else is an outage — the caller
+// unmounts immediately on the first two and spends a failure budget on the third.
+func TestSearchConnectorHeartbeat(t *testing.T) {
+	var got model.TKFSHeartbeatRequest
+	var status int
+	s := newTestSearchConnector(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != searchHeartbeatPath {
+			t.Errorf("path = %q, want %q", r.URL.Path, searchHeartbeatPath)
 		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		if status != 0 {
+			return jsonResponse(status, "nope"), nil
+		}
+		return jsonResponse(http.StatusOK, model.TKFSHeartbeatResponse{Command: model.TKFSCommandRekey}), nil
+	})
+	s.identity.adopt("instance-1")
+
+	resp, err := s.Heartbeat(7, testCreatedAt)
+	if err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	if got.NodeID != "node-1" || got.KekID != "instance-1" || got.KeyIdx != 7 || !got.KeyCreatedAt.Equal(testCreatedAt) {
+		t.Errorf("request = %+v, want the node, instance, key-ring index and key stamp", got)
+	}
+	if resp.Command != model.TKFSCommandRekey {
+		t.Errorf("response = %+v, want the command passed through", resp)
+	}
+
+	status = http.StatusForbidden
+	if _, err := s.Heartbeat(0, testCreatedAt); !errors.Is(err, ErrDenied) {
+		t.Errorf("403 error = %v, want one wrapping ErrDenied", err)
+	}
+	for _, code := range []int{http.StatusNotFound, http.StatusNotImplemented} {
+		status = code
+		_, err := s.Heartbeat(0, testCreatedAt)
+		if !errors.Is(err, ErrNotImplemented) {
+			t.Errorf("%d error = %v, want one wrapping ErrNotImplemented", code, err)
+		}
+		if errors.Is(err, ErrDenied) {
+			t.Errorf("%d must not read as a denial: %v", code, err)
+		}
+	}
+	status = http.StatusServiceUnavailable
+	if _, err := s.Heartbeat(0, testCreatedAt); err == nil {
+		t.Error("503 must be an error")
+	} else if errors.Is(err, ErrDenied) || errors.Is(err, ErrNotImplemented) {
+		t.Errorf("503 must read as a plain outage: %v", err)
 	}
 }
 
-// Run with -race: newClient swaps the shared state (via setState) while fetchKey reads it
-// (via snapshot) concurrently. Without the mutex a torn slice read could panic; -race
-// also flags the unsynchronized access. Guards against a future lock regression.
-func TestSearchConnector_ConcurrentAccess(t *testing.T) {
-	sc := &searchConnector{}
-	const iters = 2000
-	var wg sync.WaitGroup
+// The tenant token authenticates the call alongside the mTLS cert, so every route has to carry it.
+func TestSearchConnectorSendsTenantToken(t *testing.T) {
+	var token string
+	s := newTestSearchConnector(func(r *http.Request) (*http.Response, error) {
+		token = r.Header.Get(kmsclient.HeaderTenantToken)
+		return jsonResponse(http.StatusOK, model.TKFSHeartbeatResponse{}), nil
+	})
+	if _, err := s.Heartbeat(0, testCreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if token != "tenant-token" {
+		t.Errorf("token header = %q, want the connector's token", token)
+	}
+}
 
-	writer := func() {
-		defer wg.Done()
-		for i := 0; i < iters; i++ {
-			hosts := make([]string, (i%5)+1) // varying length to expose torn reads
-			for j := range hosts {
-				hosts[j] = "h"
-			}
-			sc.setState(&http.Client{}, "tok", hosts, i%2 == 0, time.Time{})
-			sc.SetCurrentKeyID("k")
+// Generate returns the key service's stamp, and refuses a key that carries none.
+func TestSearchConnectorGenerateStamp(t *testing.T) {
+	var createdAt time.Time
+	s := newTestSearchConnector(func(r *http.Request) (*http.Response, error) {
+		var req model.TKFSDataKeyGenerateRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		wrapped, err := wrapForTransport(req.TransportAlg, req.TransportPubKey, make([]byte, tkfsDataKeyLength))
+		if err != nil {
+			return nil, err
 		}
-	}
-	reader := func() {
-		defer wg.Done()
-		for i := 0; i < iters; i++ {
-			_, _, _, hosts := sc.snapshot()
-			for x := range hosts {
-				_ = hosts[x] // index every element; a torn slice header would panic
-			}
-			_ = sc.GetCurrentKeyID()
-		}
-	}
+		return jsonResponse(http.StatusOK, model.TKFSDataKeyGenerateResponse{
+			KeyID: "kek-1", Ciphertext: []byte("ct"), TransitWrappedKey: wrapped, CreatedAt: createdAt,
+		}), nil
+	})
 
-	for n := 0; n < 4; n++ {
-		wg.Add(2)
-		go writer()
-		go reader()
+	if _, err := s.GenerateTKFSDataKey(); err == nil {
+		t.Error("a generate with no CreatedAt must fail")
 	}
-	wg.Wait()
+	if got := s.identity.get(); got != "" {
+		t.Errorf("identity = %q after a refused mint, want none", got)
+	}
+	createdAt = testCreatedAt
+	dk, err := s.GenerateTKFSDataKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dk.CreatedAt.Equal(testCreatedAt) {
+		t.Errorf("CreatedAt = %v, want the key service's %v", dk.CreatedAt, testCreatedAt)
+	}
 }
