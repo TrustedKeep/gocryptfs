@@ -25,7 +25,7 @@ const (
 )
 
 // emeSet is an immutable snapshot of the name keys this mount holds, indexed by key-ring index.
-// A nil entry is a ring entry whose key could not be unwrapped at mount.
+// A nil entry is a ring entry whose key could not be unwrapped.
 type emeSet struct {
 	ciphers  []*eme.EMECipher
 	writeIdx uint16
@@ -45,6 +45,9 @@ type NameTransform struct {
 	// the directory's gocryptfs.diriv.
 	emeCiphers    atomic.Pointer[emeSet]
 	addCipherLock sync.Mutex
+	// learn, if set, is asked to fetch a key-ring index this mount does not hold yet, and reports
+	// whether it now does. Set before the filesystem serves.
+	learn func(keyIdx uint16) bool
 	// Names longer than `longNameMax` are hashed. Set to MaxInt when
 	// longnames are disabled.
 	longNameMax int
@@ -94,18 +97,37 @@ func (n *NameTransform) WriteKeyIdx() uint16 {
 	return n.emeCiphers.Load().writeIdx
 }
 
-// AddCipher installs a newly rotated name key as the write key and returns its index. This is
-// rotation's entry point on the filename side; existing directories keep the index they were
-// created with, so their names stay under the key that wrote them.
-func (n *NameTransform) AddCipher(c *eme.EMECipher) uint16 {
+// InstallCipher adds the name key at keyIdx, which must be the next index, without making it the
+// write key. Existing directories keep the index they were created with.
+func (n *NameTransform) InstallCipher(keyIdx uint16, c *eme.EMECipher) error {
 	n.addCipherLock.Lock()
 	defer n.addCipherLock.Unlock()
 	old := n.emeCiphers.Load()
+	if int(keyIdx) != len(old.ciphers) {
+		return fmt.Errorf("installing name key %d, but %d are held", keyIdx, len(old.ciphers))
+	}
 	ciphers := make([]*eme.EMECipher, len(old.ciphers), len(old.ciphers)+1)
 	copy(ciphers, old.ciphers)
-	es := newEMESet(append(ciphers, c))
-	n.emeCiphers.Store(es)
-	return es.writeIdx
+	n.emeCiphers.Store(&emeSet{ciphers: append(ciphers, c), writeIdx: old.writeIdx})
+	return nil
+}
+
+// SetWriteCipher makes keyIdx, a held key at or past the current one, the index new directories get.
+func (n *NameTransform) SetWriteCipher(keyIdx uint16) error {
+	n.addCipherLock.Lock()
+	defer n.addCipherLock.Unlock()
+	old := n.emeCiphers.Load()
+	if int(keyIdx) >= len(old.ciphers) || old.ciphers[keyIdx] == nil || keyIdx < old.writeIdx {
+		return fmt.Errorf("name key %d cannot become the write key (held: %d, write key: %d)",
+			keyIdx, len(old.ciphers), old.writeIdx)
+	}
+	n.emeCiphers.Store(&emeSet{ciphers: old.ciphers, writeIdx: keyIdx})
+	return nil
+}
+
+// SetKeyLearner sets the function asked for an index this mount does not hold.
+func (n *NameTransform) SetKeyLearner(learn func(keyIdx uint16) bool) {
+	n.learn = learn
 }
 
 // Wipe drops the references to the EME ciphers. Called at unmount.
@@ -116,7 +138,7 @@ func (n *NameTransform) Wipe() {
 	n.addCipherLock.Lock()
 	defer n.addCipherLock.Unlock()
 	if es := n.emeCiphers.Load(); es != nil {
-		n.emeCiphers.Store(newEMESet(make([]*eme.EMECipher, len(es.ciphers))))
+		n.emeCiphers.Store(&emeSet{ciphers: make([]*eme.EMECipher, len(es.ciphers)), writeIdx: es.writeIdx})
 	}
 }
 
@@ -129,6 +151,9 @@ var ErrKeyMissing = errors.New("this mount has no name key for that key-ring ind
 // gocryptfs.diriv), so an unknown one is an error rather than a panic even on the encrypt side.
 func (n *NameTransform) emeCipher(keyIdx uint16) (*eme.EMECipher, error) {
 	es := n.emeCiphers.Load()
+	if int(keyIdx) >= len(es.ciphers) && n.learn != nil && n.learn(keyIdx) {
+		es = n.emeCiphers.Load()
+	}
 	if int(keyIdx) >= len(es.ciphers) {
 		return nil, fmt.Errorf("%w: names are encrypted under index %d, but this mount holds %d key(s)",
 			ErrKeyMissing, keyIdx, len(es.ciphers))
@@ -136,7 +161,7 @@ func (n *NameTransform) emeCipher(keyIdx uint16) (*eme.EMECipher, error) {
 	if c := es.ciphers[keyIdx]; c != nil {
 		return c, nil
 	}
-	return nil, fmt.Errorf("%w: index %d could not be unwrapped at mount", ErrKeyMissing, keyIdx)
+	return nil, fmt.Errorf("%w: index %d could not be unwrapped", ErrKeyMissing, keyIdx)
 }
 
 // DecryptName calls decryptName to try and decrypt a base64-encoded encrypted

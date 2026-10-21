@@ -2,12 +2,14 @@ package fusefrontend
 
 import (
 	"context"
+	"errors"
 	"syscall"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 
+	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
 	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
@@ -46,6 +48,10 @@ func (n *Node) readlink(dirfd int, cName string) (out []byte, errno syscall.Errn
 	}
 	// Symlinks are encrypted like file contents (GCM) and base64-encoded
 	target, err := rn.decryptSymlinkTarget(cTarget)
+	if errors.Is(err, contentenc.ErrKeyMissing) {
+		tlog.Info.Printf("Readlink %q: %v", cName, err)
+		return nil, syscall.EIO
+	}
 	if err != nil {
 		tlog.Warn.Printf("Readlink %q: decrypting target failed: %v", cName, err)
 		return nil, syscall.EIO

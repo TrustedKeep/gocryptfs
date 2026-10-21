@@ -27,6 +27,8 @@ type mountInfo struct {
 	Pid int
 	// List of open FDs of the running gocrypts process. Set by Mount().
 	Fds []string
+	// Closed once the gocryptfs process has exited. Set by Mount().
+	Exited <-chan error
 }
 
 // Mount CIPHERDIR "c" on PLAINDIR "p"
@@ -91,6 +93,7 @@ func Mount(c string, p string, showOutput bool, extraArgs ...string) error {
 	// Wait for exit or usr1
 	go func() {
 		chanExit <- cmd.Wait()
+		close(chanExit)
 	}()
 	select {
 	case err := <-chanExit:
@@ -102,7 +105,7 @@ func Mount(c string, p string, showOutput bool, extraArgs ...string) error {
 	}
 
 	// Save PID and open FDs
-	MountInfo[p] = mountInfo{pid, ListFds(pid, "")}
+	MountInfo[p] = mountInfo{pid, ListFds(pid, ""), chanExit}
 	return nil
 }
 
@@ -157,6 +160,7 @@ func UnmountErr(dir string) (err error) {
 	var fdsNow []string
 	pid := MountInfo[dir].Pid
 	fds := MountInfo[dir].Fds
+	exited := MountInfo[dir].Exited
 	if pid <= 0 && runtime.GOOS == "linux" {
 		// The FD leak check only works on Linux.
 		fmt.Printf("UnmountErr: %q was not found in MountInfo, cannot check for FD leaks\n", dir)
@@ -189,6 +193,14 @@ func UnmountErr(dir string) (err error) {
 		cmd.Stderr = os.Stderr
 		err = cmd.Run()
 		if err == nil {
+			// The process still writes to the cipherdir after the unmount returns.
+			if exited != nil {
+				select {
+				case <-exited:
+				case <-time.After(10 * time.Second):
+					return fmt.Errorf("gocryptfs pid=%d dir=%q did not exit within 10s of unmount", pid, dir)
+				}
+			}
 			if len(fdsNow) > len(fds)+maxCacheFds {
 				return fmt.Errorf("fd leak in gocryptfs process? pid=%d dir=%q, fds:\nold=%v \nnew=%v", pid, dir, fds, fdsNow)
 			}

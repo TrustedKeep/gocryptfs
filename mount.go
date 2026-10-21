@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/cipher"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -29,6 +30,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/rfjakob/eme"
 
+	"github.com/rfjakob/gocryptfs/v2/internal/backingfs"
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
 	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
@@ -37,7 +39,6 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/fusefrontend"
 	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
 	"github.com/rfjakob/gocryptfs/v2/internal/openfiletable"
-	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
 	"github.com/rfjakob/gocryptfs/v2/internal/tkc"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
@@ -75,14 +76,52 @@ func doMount(args *argContainer) {
 	}
 	// Before anything that a second mount would collide on, so this is the error it reports. The wait
 	// covers the previous mount of this filesystem, which exits a moment after its unmount returns.
-	ringLock, err := configfile.LockKeyRing(args.config, time.Second)
+	ringLock, err := configfile.LockKeyRing(args.cipherdir, args.sharedstorage, time.Second)
 	if errors.Is(err, configfile.ErrKeyRingInUse) {
-		tlog.Fatal.Printf("%s is already mounted by another TKFS process", args.cipherdir)
+		if args.sharedstorage {
+			tlog.Fatal.Printf("%s is mounted by a TKFS process without -sharedstorage", args.cipherdir)
+		} else {
+			tlog.Fatal.Printf("%s is already mounted by another TKFS process; mounts that share it all need -sharedstorage",
+				args.cipherdir)
+		}
 		os.Exit(exitcodes.AlreadyMounted)
 	} else if err != nil {
-		tlog.Warn.Printf("Cannot lock the key ring, so a second mount of this filesystem would not be refused: %v", err)
+		tlog.Warn.Printf("Cannot lock the cipherdir, so mixing shared and exclusive mounts would not be refused: %v", err)
 	}
 	defer ringLock.Close()
+	if args.sharedstorage {
+		if err := backingfs.CheckShared(args.cipherdir); err != nil {
+			tlog.Fatal.Printf("-sharedstorage: %v", err)
+			os.Exit(exitcodes.Usage)
+		}
+	}
+	args._mountID = hex.EncodeToString(cryptocore.RandBytes(16))
+	nodeID := cf.NodeID
+	if args.nodeID != "" {
+		nodeID = args.nodeID
+	}
+	// The NodeID lock lives in the ring's directory, so a writable mount creates it first.
+	if !args.ro {
+		if err := configfile.CreateKeyRingDir(args.cipherdir); err != nil {
+			tlog.Fatal.Printf("Cannot create the key ring: %v", err)
+			code := exitcodes.WriteConf
+			if e := (exitcodes.Err{}); errors.As(err, &e) {
+				code = e.Code()
+			}
+			os.Exit(code)
+		}
+	}
+	if args.sharedstorage && !args.ro {
+		nodeLock, err := configfile.LockNodeID(args.cipherdir, nodeID, time.Second)
+		if errors.Is(err, configfile.ErrNodeIDInUse) {
+			tlog.Fatal.Printf("Another mount of %s is using NodeID %q; give each -sharedstorage mount its own -node-id",
+				args.cipherdir, nodeID)
+			os.Exit(exitcodes.AlreadyMounted)
+		} else if err != nil {
+			tlog.Warn.Printf("Cannot lock NodeID %q, so a second mount using it would not be refused: %v", nodeID, err)
+		}
+		defer nodeLock.Close()
+	}
 
 	// We cannot mount "/home/user/.cipher" at "/home/user" because the mount
 	// will hide ".cipher" also for us.
@@ -147,7 +186,9 @@ func doMount(args *argContainer) {
 	security.Memlock()
 	// The instance's identity lives in the key ring, which is not loaded until initFuseFrontend, so
 	// the connector is built without one and is handed it there.
-	tkc.Connect(cf.GatewayHost, args.gatewayCertDir, cf.NodeID, cf.MockKMS, cf.MockAWS, cf.IsSearch, args.sharedstorage)
+	tkc.Connect(tkc.ConnectOptions{GatewayHost: cf.GatewayHost, GatewayCertDir: args.gatewayCertDir, NodeID: nodeID,
+		MountID: args._mountID, MockStoreID: cf.NodeID, MockKMS: cf.MockKMS, MockAWS: cf.MockAWS, Search: cf.IsSearch,
+		SharedStorage: args.sharedstorage})
 
 	// Initialize gocryptfs (read config file, ask for password, ...)
 	fs, rotator, wipeKeys := initFuseFrontend(args)
@@ -163,6 +204,7 @@ func doMount(args *argContainer) {
 		opThreshold: autoRotateThreshold(args),
 		mountpoint:  args.mountpoint,
 		exit:        os.Exit,
+		stop:        make(chan struct{}),
 	}
 	// Registered after the wipe so it runs before it: a mount that lived less than one interval
 	// would otherwise contribute nothing to the budget its writes spent.
@@ -425,9 +467,13 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, rotator *k
 	}
 	// The first mount of a filesystem generates its data key; later mounts unwrap every retained
 	// key-ring entry, so data written under a superseded key stays readable.
-	keyRing, err := configfile.LoadKeyRing(args.config)
+	keyRing, err := configfile.LoadKeyRing(args.cipherdir)
 	if err != nil {
 		tlog.Fatal.Printf("Cannot read key ring: %v", err)
+		exitcodes.Exit(err)
+	}
+	if err := configfile.CheckFormat(args.cipherdir, confFile, args._mountID, args.ro); err != nil {
+		tlog.Fatal.Printf("%v", err)
 		exitcodes.Exit(err)
 	}
 	var freshKey []byte
@@ -444,7 +490,7 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, rotator *k
 		}
 		freshKey = generateInitialDataKey(args, keyRing, frontendArgs.PlaintextNames, frontendArgs.DeterministicNames)
 	}
-	// A mint has already adopted the identity. Every later mount gets it here, or its next generate
+	// Every mount takes its identity from the ring, a first mount's included, or its next generate
 	// would mint a second KEK.
 	if err := tkc.DataKey().AdoptIdentity(keyRing.KekID()); err != nil {
 		tlog.Fatal.Printf("%v", err)
@@ -460,7 +506,8 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, rotator *k
 	tlog.Debug.Printf("frontendArgs: %s", tlog.JSONDump(frontendArgs))
 	rootNode = fusefrontend.NewRootNode(frontendArgs, cEnc, nameTransform)
 
-	if rotator, err = newKeyRotator(args.config, keyRing, cryptoBackend, IVBits, cEnc, nameTransform); err != nil {
+	if rotator, err = newKeyRotator(args._mountID, keyRing, ks.holes, args.ro, cryptoBackend, IVBits, cEnc,
+		nameTransform); err != nil {
 		tlog.Fatal.Printf("%v", err)
 		os.Exit(exitcodes.Other)
 	}
@@ -471,16 +518,16 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, rotator *k
 		var rotate func() (uint16, error)
 		//a read only mount will never rotate
 		if !args.ro {
-			rotate = rotator.rotate
+			rotate = func() (uint16, error) { return rotator.rotate(rotateTrigger{manual: true}) }
 		}
-		go ctlsocksrv.Serve(args._ctlsockFd, rootNode.(ctlsocksrv.Interface), rotate, ks.holes)
+		go ctlsocksrv.Serve(args._ctlsockFd, rootNode.(ctlsocksrv.Interface), rotate, rotator.keyHoles)
 	}
 	return rootNode, rotator, func() {
 		// Names first: cEnc.Wipe() forces the one GC, and it can only collect the EME key
 		// schedules if their references are already gone.
 		nameTransform.Wipe()
 		cEnc.Wipe()
-		// Release the data-key connector (network connections / bbolt handle).
+		// Release the data-key connector's network connections.
 		if err := tkc.DataKey().Close(); err != nil {
 			tlog.Warn.Printf("Error closing data-key connector: %v", err)
 		}
@@ -538,7 +585,12 @@ func buildKeySets(kr *configfile.KeyRing, freshKey []byte, backend cryptocore.AE
 		idx := uint16(i)
 		key := freshKey
 		if idx != activeIdx || key == nil {
-			if key, err = unwrapDataKey(tkc.DataKey(), idx, e); err != nil {
+			if e.Missing() {
+				err = errors.New("its entry is missing from the key ring")
+			} else {
+				key, err = unwrapDataKey(tkc.DataKey(), idx, e)
+			}
+			if err != nil {
 				// The refusal is the mount's, not the entry's, so it is never a hole.
 				if errors.Is(err, tkc.ErrSharedStorageRefused) {
 					tlog.Fatal.Printf("Failed to unwrap key-ring index %d: %v", idx, err)
@@ -586,68 +638,87 @@ func keyServiceExit(err error, code int) int {
 	return code
 }
 
-// generateInitialDataKey mints the data key for a freshly initialized filesystem, persists it in
-// keyRing and returns its plaintext. It also writes the root gocryptfs.diriv, which needs the ring
-// index and so cannot be written by -init.
+// generateInitialDataKey mints the data key for a freshly initialized filesystem and publishes it as
+// the ring's entry 0, with the root gocryptfs.diriv. It returns the plaintext, or nil when another
+// mount won entry 0 and keyRing now holds that mount's entry instead.
 func generateInitialDataKey(args *argContainer, keyRing *configfile.KeyRing, plaintextNames, deterministicNames bool) []byte {
-	ensureCipherdirFresh(args)
+	if stray := cipherdirStray(args); stray != "" {
+		// A peer that wins entry 0 publishes it before it serves, so its payload implies entry 0.
+		if _, err := keyRing.Refresh(); err != nil {
+			exitcodes.Exit(err)
+		}
+		if len(keyRing.Keys) > 0 {
+			return nil
+		}
+		tlog.Fatal.Printf("Cipherdir %q contains %q but there is no key ring; refusing to generate a new key over existing data",
+			args.cipherdir, stray)
+		os.Exit(exitcodes.CipherDir)
+	}
 	dk, err := tkc.DataKey().GenerateTKFSDataKey()
 	if err != nil {
 		tlog.Fatal.Printf("Failed to generate the initial data key: %v", err)
 		os.Exit(keyServiceExit(err, exitcodes.Other))
 	}
-	idx, err := keyRing.Append(configfile.KeyRingEntry{
-		KeyID:      dk.KeyID,
-		Ciphertext: dk.Ciphertext,
-		CreatedAt:  dk.CreatedAt,
-	})
-	if err != nil {
-		tlog.Fatal.Printf("Failed to add the initial data key to the key ring: %v", err)
-		os.Exit(exitcodes.Other)
-	}
-	// Before the ring: once a ring is on disk, no later mount comes back here to write it.
+	// Before the ring: once entry 0 is on disk, no later mount comes back here to write it.
 	if !plaintextNames {
-		if err := writeRootDirIV(args.cipherdir, idx, deterministicNames); err != nil {
+		if err := publishRootDirIV(args, deterministicNames); err != nil {
 			tlog.Fatal.Printf("Failed to create the root %s: %v", nametransform.DirIVFilename, err)
 			os.Exit(exitcodes.Init)
 		}
 	}
 	// Persisted before use: nothing may be encrypted under a key that is not recoverable from disk.
-	if err := keyRing.WriteFile(); err != nil {
+	won, err := keyRing.Publish(0, configfile.KeyRingEntry{
+		KeyID:      dk.KeyID,
+		Ciphertext: dk.Ciphertext,
+		CreatedAt:  dk.CreatedAt,
+	}, args._mountID)
+	if err != nil {
 		tlog.Fatal.Printf("Failed to persist the initial key-ring entry: %v", err)
 		os.Exit(exitcodes.WriteConf)
 	}
-	return dk.Plaintext
+	if won {
+		return dk.Plaintext
+	}
+	// Its KEK is left orphaned in the key service, as a retried mint's already is.
+	clear(dk.Plaintext)
+	tlog.Info.Printf("Another mount initialized this filesystem first; using its key")
+	if _, err := keyRing.Refresh(); err != nil {
+		exitcodes.Exit(err)
+	}
+	return nil
 }
 
-// writeRootDirIV creates and syncs gocryptfs.diriv in the cipherdir root, stamped with keyIdx. A
-// leftover one is discarded first: no ring existed, so no name on disk depends on the old IV.
-func writeRootDirIV(cipherdir string, keyIdx uint16, deterministicNames bool) error {
-	// Open cipherdir (following symlinks)
-	dirfd, err := syscall.Open(cipherdir, syscall.O_DIRECTORY|syscallcompat.O_PATH, 0)
-	if err != nil {
-		return err
+// publishRootDirIV creates the cipherdir root's gocryptfs.diriv, stamped with index 0, unless another
+// first mount already did. The diriv does not depend on the key, so either mount's serves both.
+func publishRootDirIV(args *argContainer, deterministicNames bool) error {
+	path := filepath.Join(args.cipherdir, nametransform.DirIVFilename)
+	for attempt := 0; attempt < 2; attempt++ {
+		_, err := configfile.PublishExclusive(path, nametransform.DirIVRecord(0, deterministicNames),
+			nametransform.DirIVPerms, configfile.KeyRingDir(args.cipherdir), args._mountID)
+		if err != nil {
+			return err
+		}
+		record, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		_, keyIdx, err := nametransform.CheckDirIVRecord(record, deterministicNames)
+		if err == nil && keyIdx == 0 {
+			return nil
+		}
+		// What a crashed earlier first mount left half-written; no name depends on it yet.
+		tlog.Info.Printf("Replacing a malformed root %s (%v)", nametransform.DirIVFilename, err)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
-	defer syscall.Close(dirfd)
-	syscallcompat.Unlinkat(dirfd, nametransform.DirIVFilename, 0)
-	if err := nametransform.WriteDirIVAt(dirfd, keyIdx, deterministicNames); err != nil {
-		return err
-	}
-	fd, err := syscallcompat.Openat(dirfd, nametransform.DirIVFilename, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
-	if err != nil {
-		return err
-	}
-	defer syscall.Close(fd)
-	return syscall.Fsync(fd)
+	return fmt.Errorf("the root %s stays malformed", nametransform.DirIVFilename)
 }
 
-// ensureCipherdirFresh refuses to mint a new key over existing data: a missing key ring is only
-// legitimate while the cipherdir still holds nothing but the files a first mount is allowed to find
-// there — the config -init wrote, and whatever a previous first mount got as far as creating.
-// Encrypted payload with no key ring means the ring was deleted, the cipherdir was restored from a
-// pre-first-mount backup, or it was tampered with — generating a fresh key would leave the existing
-// files permanently undecryptable while new writes silently succeed, so fail closed instead.
-func ensureCipherdirFresh(args *argContainer) {
+// cipherdirStray returns a name in the cipherdir other than those a first mount may find there: the
+// config, the key ring and the root diriv. With no key ring, one means the ring was deleted or the
+// cipherdir restored or tampered with, and a fresh key would leave that data undecryptable.
+func cipherdirStray(args *argContainer) string {
 	entries, err := os.ReadDir(args.cipherdir)
 	if err != nil {
 		tlog.Fatal.Printf("Cannot list cipherdir: %v", err)
@@ -655,14 +726,12 @@ func ensureCipherdirFresh(args *argContainer) {
 	}
 	for _, e := range entries {
 		switch e.Name() {
-		case configfile.ConfDefaultName, configfile.KeyRingFileName,
-			configfile.KeyRingTmpFileName, nametransform.DirIVFilename:
+		case configfile.ConfDefaultName, configfile.KeyRingFileName, nametransform.DirIVFilename:
 			continue
 		}
-		tlog.Fatal.Printf("Cipherdir %q contains %q but there is no key ring; refusing to generate a new key over existing data",
-			args.cipherdir, e.Name())
-		os.Exit(exitcodes.CipherDir)
+		return e.Name()
 	}
+	return ""
 }
 
 type RootInoer interface {

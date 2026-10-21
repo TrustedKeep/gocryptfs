@@ -57,7 +57,7 @@ func TestDeterministicNames(t *testing.T) {
 	}
 	var foos []string
 	for _, m := range all {
-		if filepath.Base(m) != nametransform.DirIVFilename {
+		if filepath.Base(m) != nametransform.DirIVFilename && filepath.Base(filepath.Dir(m)) != configfile.KeyRingFileName {
 			foos = append(foos, m)
 		}
 	}

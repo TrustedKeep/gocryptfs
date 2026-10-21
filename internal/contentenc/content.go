@@ -30,14 +30,14 @@ const (
 )
 
 // keySet is an immutable snapshot of the content keys this mount holds. A nil entry is a hole:
-// a ring entry whose key the key service would not return at mount.
+// a ring entry whose key the key service would not return.
 type keySet struct {
 	// aeads is indexed by key-ring index, so aeads[i] belongs to the ring's i-th entry.
 	aeads []cipher.AEAD
-	// ops counts the nonces drawn under writeIdx since this snapshot was published. A rotation
-	// flushes the outgoing count and starts a fresh counter, so one is enough.
+	// ops counts the nonces drawn under writeIdx. Each change of write key gets a fresh counter, and
+	// whoever holds the old one can still read the draws that landed on it late.
 	ops *atomic.Uint64
-	// writeIdx is the newest index, the one new content is encrypted under.
+	// writeIdx is the index new content is encrypted under.
 	writeIdx uint16
 }
 
@@ -48,6 +48,9 @@ func newKeySet(aeads []cipher.AEAD) *keySet {
 	return &keySet{aeads: aeads, ops: new(atomic.Uint64), writeIdx: uint16(len(aeads) - 1)}
 }
 
+// ErrKeyMissing reports content under a key-ring index this mount holds no key for.
+var ErrKeyMissing = errors.New("this mount has no content key for that key-ring index")
+
 // ContentEnc is used to encipher and decipher file content.
 type ContentEnc struct {
 	// cryptoCore is the core the mount was built with. Only IVLen and IVGenerator are read from
@@ -57,8 +60,11 @@ type ContentEnc struct {
 	// keys is read on every block by many goroutines and grows while mounted, so rotation
 	// swaps in a whole new snapshot instead of mutating one under the readers.
 	keys atomic.Pointer[keySet]
-	// addKeyLock serializes the read-copy-store in AddKey against a concurrent rotation.
+	// addKeyLock serializes the read-copy-store of every snapshot change.
 	addKeyLock sync.Mutex
+	// learn, if set, is asked to fetch a key-ring index this mount does not hold yet, and reports
+	// whether it now does. Set before the filesystem serves.
+	learn func(keyIdx uint16) bool
 	// plainBS is the plaintext block size. Usually 4096 bytes.
 	plainBS uint64
 	// cipherBS is the ciphertext block size. Usually 4128 bytes.
@@ -134,25 +140,51 @@ func (be *ContentEnc) WriteKeyIdx() uint16 {
 	return be.keys.Load().writeIdx
 }
 
-// AddKey installs a newly rotated key as the write key and returns its index. Copy-on-write:
-// in-flight readers keep the snapshot they loaded. This is rotation's entry point on the
-// content side.
-func (be *ContentEnc) AddKey(aead cipher.AEAD) uint16 {
+// InstallKey adds the key at keyIdx, which must be the next index, without making it the write key.
+// Copy-on-write: in-flight readers keep the snapshot they loaded.
+func (be *ContentEnc) InstallKey(keyIdx uint16, aead cipher.AEAD) error {
 	be.addKeyLock.Lock()
 	defer be.addKeyLock.Unlock()
 	old := be.keys.Load()
+	if int(keyIdx) != len(old.aeads) {
+		return fmt.Errorf("installing content key %d, but %d are held", keyIdx, len(old.aeads))
+	}
 	aeads := make([]cipher.AEAD, len(old.aeads), len(old.aeads)+1)
 	copy(aeads, old.aeads)
-	ks := newKeySet(append(aeads, aead))
-	be.keys.Store(ks)
-	return ks.writeIdx
+	be.keys.Store(&keySet{aeads: append(aeads, aead), ops: old.ops, writeIdx: old.writeIdx})
+	return nil
 }
 
-// OpCount is how many nonces this mount has drawn under the current write key, which is what
-// auto-rotation compares against its threshold. It restarts at every rotation and at every mount;
-// the running total lives in the key ring.
-func (be *ContentEnc) OpCount() uint64 {
-	return be.keys.Load().ops.Load()
+// SetWriteKey makes keyIdx, a held key at or past the current one, the write key and returns its
+// fresh op counter.
+func (be *ContentEnc) SetWriteKey(keyIdx uint16) (*atomic.Uint64, error) {
+	be.addKeyLock.Lock()
+	defer be.addKeyLock.Unlock()
+	old := be.keys.Load()
+	if int(keyIdx) >= len(old.aeads) || old.aeads[keyIdx] == nil || keyIdx < old.writeIdx {
+		return nil, fmt.Errorf("content key %d cannot become the write key (held: %d, write key: %d)",
+			keyIdx, len(old.aeads), old.writeIdx)
+	}
+	ks := &keySet{aeads: old.aeads, ops: new(atomic.Uint64), writeIdx: keyIdx}
+	be.keys.Store(ks)
+	return ks.ops, nil
+}
+
+// OpCounter returns the write key's index and the counter of nonces drawn under it.
+func (be *ContentEnc) OpCounter() (uint16, *atomic.Uint64) {
+	ks := be.keys.Load()
+	return ks.writeIdx, ks.ops
+}
+
+// SetKeyLearner sets the function asked for an index this mount does not hold.
+func (be *ContentEnc) SetKeyLearner(learn func(keyIdx uint16) bool) {
+	be.learn = learn
+}
+
+// EnsureKey reports whether content under keyIdx can be written, learning the key if need be.
+func (be *ContentEnc) EnsureKey(keyIdx uint16) error {
+	_, err := be.aeadForKey(keyIdx)
+	return err
 }
 
 // aeadForKey selects the content AEAD for a key-ring index. On the read path keyIdx comes from a
@@ -160,12 +192,16 @@ func (be *ContentEnc) OpCount() uint64 {
 // error, not a panic.
 func (be *ContentEnc) aeadForKey(keyIdx uint16) (cipher.AEAD, error) {
 	ks := be.keys.Load()
+	if int(keyIdx) >= len(ks.aeads) && be.learn != nil && be.learn(keyIdx) {
+		ks = be.keys.Load()
+	}
 	if int(keyIdx) >= len(ks.aeads) {
-		return nil, fmt.Errorf("content is encrypted under key-ring index %d, but this mount holds %d key(s)", keyIdx, len(ks.aeads))
+		return nil, fmt.Errorf("%w: content is encrypted under key-ring index %d, but this mount holds %d key(s)",
+			ErrKeyMissing, keyIdx, len(ks.aeads))
 	}
 	aead := ks.aeads[keyIdx]
 	if aead == nil {
-		return nil, fmt.Errorf("key-ring index %d could not be unwrapped at mount, so this content is unreadable", keyIdx)
+		return nil, fmt.Errorf("%w: key-ring index %d could not be unwrapped, so this content is unreadable", ErrKeyMissing, keyIdx)
 	}
 	return aead, nil
 }
@@ -351,9 +387,7 @@ func (be *ContentEnc) doEncryptBlock(plaintext []byte, blockNo uint64, fileID []
 	if len(nonce) != be.cryptoCore.IVLen {
 		log.Panic("wrong nonce length")
 	}
-	// Writes always use a key the mount holds (WriteKeyIdx()), so an unresolvable index here
-	// is a caller bug, not a property of the data — unlike on the decrypt side, where it is
-	// the header talking.
+	// Callers resolve the index first (EnsureKey), so an unresolvable one here is a caller bug.
 	aead, err := be.aeadForKey(keyIdx)
 	if err != nil {
 		log.Panicf("doEncryptBlock: %v", err)
@@ -408,7 +442,7 @@ func (be *ContentEnc) Wipe() {
 	be.addKeyLock.Lock()
 	defer be.addKeyLock.Unlock()
 	if ks := be.keys.Load(); ks != nil {
-		be.keys.Store(newKeySet(make([]cipher.AEAD, len(ks.aeads))))
+		be.keys.Store(&keySet{aeads: make([]cipher.AEAD, len(ks.aeads)), ops: ks.ops, writeIdx: ks.writeIdx})
 	}
 	be.cryptoCore.Wipe()
 }

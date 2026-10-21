@@ -3,6 +3,7 @@ package tkc
 import (
 	"bytes"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -63,6 +64,9 @@ func TestMockGatewayRegenerateRetainsOldKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateTKFSDataKey (first): %v", err)
 	}
+	if err := gw.AdoptIdentity(k1.KeyID); err != nil {
+		t.Fatal(err)
+	}
 	k2, err := gw.GenerateTKFSDataKey()
 	if err != nil {
 		t.Fatalf("GenerateTKFSDataKey (second): %v", err)
@@ -111,6 +115,86 @@ func TestMockGatewayPersistsAcrossReopen(t *testing.T) {
 	}
 	if !bytes.Equal(pt, dk.Plaintext) {
 		t.Error("unwrapped key after reopen does not match")
+	}
+}
+
+// Mounts of one filesystem are separate processes on one store. Each can generate while the other is
+// open, unwraps the other's keys, and stamps every key later than any key either generated before it.
+func TestMockGatewaySharedStore(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gw.db")
+	a := newMockGatewayConnector("node-A", dbPath)
+	defer a.Close()
+	b := newMockGatewayConnector("node-A", dbPath)
+	defer b.Close()
+
+	first, err := a.GenerateTKFSDataKey()
+	if err != nil {
+		t.Fatalf("GenerateTKFSDataKey: %v", err)
+	}
+	for _, gw := range []*mockGatewayConnector{a, b} {
+		if err := gw.AdoptIdentity(first.KeyID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keys := []TKFSDataKey{first}
+	for _, gw := range []*mockGatewayConnector{b, a, b, b, a} {
+		dk, err := gw.GenerateTKFSDataKey()
+		if err != nil {
+			t.Fatalf("GenerateTKFSDataKey: %v", err)
+		}
+		if dk.KeyID != first.KeyID {
+			t.Errorf("KeyID = %q, want the shared identity %q", dk.KeyID, first.KeyID)
+		}
+		if last := keys[len(keys)-1].CreatedAt; !dk.CreatedAt.After(last) {
+			t.Errorf("CreatedAt %v after %v, want strictly increasing across connectors", dk.CreatedAt, last)
+		}
+		keys = append(keys, dk)
+	}
+	for i, dk := range keys {
+		for _, gw := range []*mockGatewayConnector{a, b} {
+			pt, err := gw.UnwrapTKFSDataKey(dk.KeyID, dk.Ciphertext)
+			if err != nil {
+				t.Fatalf("key %d: UnwrapTKFSDataKey: %v", i, err)
+			}
+			if !bytes.Equal(pt, dk.Plaintext) {
+				t.Errorf("key %d: unwrapped key does not match", i)
+			}
+		}
+	}
+}
+
+// Concurrent generates from connectors sharing a store wait for each other's lock and never share a
+// stamp.
+func TestMockGatewaySharedStoreConcurrent(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gw.db")
+	const perConnector = 5
+	var mu sync.Mutex
+	seen := map[time.Time]bool{}
+	var wg sync.WaitGroup
+	for range 2 {
+		gw := newMockGatewayConnector("node-A", dbPath)
+		defer gw.Close()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range perConnector {
+				dk, err := gw.GenerateTKFSDataKey()
+				if err != nil {
+					t.Errorf("GenerateTKFSDataKey: %v", err)
+					return
+				}
+				mu.Lock()
+				if seen[dk.CreatedAt] {
+					t.Errorf("two generates stamped %v", dk.CreatedAt)
+				}
+				seen[dk.CreatedAt] = true
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if len(seen) != 2*perConnector {
+		t.Errorf("%d distinct stamps, want %d", len(seen), 2*perConnector)
 	}
 }
 

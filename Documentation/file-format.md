@@ -8,31 +8,33 @@ Non-empty files contain a *Header* and one or more *Data blocks*.
 Key-ring indices
 ----------------
 
-The `KR` key-ring file next to `gocryptfs.conf` holds one entry per data key the filesystem has
-ever been given. Rotation appends an entry and switches new writes to it; nothing already on disk
-is re-encrypted, so old objects stay readable under the key that wrote them. One gateway KEK wraps every
-entry of a filesystem — it is minted once, on the first generate, and every rotation names it again — so
-`KeyID` repeats across the whole ring and never identifies an entry; `Ciphertext`, the wrapped data key, is
-what does. That repeated `KeyID` is also the filesystem's **identity**: it is the id of the KEK, which is
-what the instance reports to the gateway as its `KekID`, so `KR` and not `gocryptfs.conf` is where a
-filesystem's identity lives. Every entry naming the same KEK is an invariant the ring is validated
-against at load. Rotation is triggered by
-the `-ctlsock` `Rotate` command, by a rekey the heartbeat carries back from the key service, or by the active
-entry's `OpCount` — a persisted count of the encrypt operations performed under the current key,
-which the mount accumulates and flushes on the heartbeat timer and once more at unmount. The count is
-also checked before a mount serves anything, so a count inherited at or past the threshold rotates first.
-An entry's `CreatedAt` is the key service's time for its key, returned by the generate that produced it
-and never taken from the local clock. The heartbeat reports the active entry's, and the key service
-judges a pending rekey against it: any key created after the request satisfies it, and none before does.
+The `KR` key-ring directory in the cipherdir root holds one entry per data key the filesystem has
+ever been given, `KR/NNNNN` for ring index NNNNN: a JSON object `{KeyID, Ciphertext, CreatedAt}`, created
+once with `link(2)` and never rewritten or removed, so mounts sharing the cipherdir never overwrite each
+other. Rotation adds an entry and switches new writes to it; nothing already on disk is re-encrypted, so old
+objects stay readable under the key that wrote them. One gateway KEK wraps every entry of a filesystem — it is
+minted once, on the first generate, and every rotation names it again — so `KeyID` repeats across the whole
+ring and never identifies an entry; `Ciphertext`, the wrapped data key, is what does. That repeated `KeyID` is
+also the filesystem's **identity**: it is the id of the KEK, which is what the instance reports to the gateway
+as its `KekID`, so `KR` and not `gocryptfs.conf` is where a filesystem's identity lives. Every entry
+naming the same KEK is an invariant the ring is validated against at load. An index missing below the newest
+is a hole: what was written under it is unreadable.
 
-`KR.tmp` is reserved alongside `KR` and `gocryptfs.conf`: the ring is replaced atomically, so it exists
-in the cipherdir root for the length of every write. Anything that enumerates that directory has to skip
-all three, and `-plaintextnames` reserves all three names in the root.
+Rotation is triggered by the `-ctlsock` `Rotate` command, by a rekey the heartbeat carries back from the key
+service, or by the active entry's op count: the encrypt operations performed under it, which each mount
+records in its own shard `KR/ops/NNNNN.<mountID>` on the heartbeat timer and at unmount, and which are summed
+over every mount. An entry's `CreatedAt` is the key service's time for its key, returned by the generate that
+produced it and never taken from the local clock. The heartbeat reports the active entry's, and the key
+service judges a pending rekey against it: any key created after the request satisfies it, and none before does.
+
+`KR/format` records the config's format-defining fields at the first mount, and a mount whose config disagrees
+is refused. `KR/xattr.lock` and `KR/nodes/<SHA-256 of NodeID>` are lock targets, the second keeping two live
+writable `-sharedstorage` mounts from sharing a NodeID, and `KR/.tmp.*` files are staging. `KR` and `gocryptfs.conf`
+are the reserved names in the cipherdir root, and `-plaintextnames` reserves both.
 
 Every encrypted object therefore carries an explicit **key-ring index**, a big-endian `uint16`,
-which is the entry's **position** in `KR`. There is no trial decryption anywhere, and a missing
-index is an error, never a default of 0. Because an index is a position, entries are only ever
-appended: removing or reordering one would silently remap every object written under a later key.
+which names the entry's file in `KR`. There is no trial decryption anywhere, and a missing
+index is an error, never a default of 0. Entries are only ever added, never renamed.
 A ring therefore holds at most 65,536 entries; a rotation into a full ring fails, and a larger ring
 is refused at load.
 

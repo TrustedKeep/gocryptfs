@@ -24,15 +24,15 @@ type Interface interface {
 type ctlSockHandler struct {
 	fs     Interface
 	rotate func() (uint16, error)
-	holes  []uint16
+	holes  func() []uint16
 	socket *net.UnixListener
 }
 
 // Serve serves incoming connections on "sock". This call blocks so you
 // probably want to run it in a new goroutine.
 //
-// "rotate" is nil on a read-only mount; "holes" are the indices that failed to unwrap at mount.
-func Serve(sock net.Listener, fs Interface, rotate func() (uint16, error), holes []uint16) {
+// "rotate" is nil on a read-only mount; "holes" lists the indices this mount holds no key for.
+func Serve(sock net.Listener, fs Interface, rotate func() (uint16, error), holes func() []uint16) {
 	handler := ctlSockHandler{
 		fs:     fs,
 		rotate: rotate,
@@ -107,7 +107,7 @@ func (ch *ctlSockHandler) handleRequest(in *ctlsock.RequestStruct, conn *net.Uni
 		if in.Rotate {
 			ch.handleRotate(conn)
 		} else {
-			writeResponse(conn, ctlsock.ResponseStruct{KeyHoles: ch.holes})
+			writeResponse(conn, ctlsock.ResponseStruct{KeyHoles: ch.holes()})
 		}
 		return
 	}

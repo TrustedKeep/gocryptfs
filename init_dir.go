@@ -44,7 +44,7 @@ func isDir(dir string) error {
 // initDir handles "gocryptfs -init". It prepares a directory for use as a gocryptfs storage
 // directory: the cipherdir must be empty, and it creates gocryptfs.conf. It does not contact the
 // key service and writes no key ring: the first mount generates the data key, creates the
-// key-ring file and — because the root gocryptfs.diriv has to name the key its filenames use —
+// key ring and — because the root gocryptfs.diriv has to name the key its filenames use —
 // writes that too (mount.go).
 func initDir(args *argContainer) {
 	err := isEmptyDir(args.cipherdir)

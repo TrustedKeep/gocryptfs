@@ -263,14 +263,16 @@ func TestGatewayConnectorHeartbeat(t *testing.T) {
 	defer ts.Close()
 
 	g := newTestGWConnector(ts, "node-1")
+	g.mountID = "mount-1"
 	g.identity.adopt("instance-1")
 
 	resp, err := g.Heartbeat(7, testCreatedAt)
 	if err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
-	if got.NodeID != "node-1" || got.KekID != "instance-1" || got.KeyIdx != 7 || !got.KeyCreatedAt.Equal(testCreatedAt) {
-		t.Errorf("request = %+v, want the node, instance, key-ring index and key stamp", got)
+	if got.NodeID != "node-1" || got.MountID != "mount-1" || got.KekID != "instance-1" || got.KeyIdx != 7 ||
+		!got.KeyCreatedAt.Equal(testCreatedAt) {
+		t.Errorf("request = %+v, want the node, mount, instance, key-ring index and key stamp", got)
 	}
 	if resp.Command != model.TKFSCommandRekey {
 		t.Errorf("response = %+v, want the command passed through", resp)
@@ -346,11 +348,9 @@ func TestGatewayConnectorLoadRejectsEmptyCA(t *testing.T) {
 	}
 }
 
-// A cipherdir that has never mounted has no identity, so its first generate must go out with an empty
-// KekID — that is what asks the gateway to mint a KEK — and the connector must then adopt the
-// returned KeyID as its identity. Without the adoption, the heartbeat would register the instance as ""
-// and every blocklist entry naming it would be inert.
-func TestGatewayConnectorAdoptsTheMintedIdentity(t *testing.T) {
+// A first generate goes out with an empty KekID, which asks the gateway to mint a KEK. The
+// connector does not adopt the minted id itself: a mount adopts it only after winning the ring's entry 0.
+func TestGatewayConnectorLeavesTheMintedIdentityToTheCaller(t *testing.T) {
 	var gen model.TKFSDataKeyGenerateRequest
 	var beat model.TKFSHeartbeatRequest
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -382,8 +382,11 @@ func TestGatewayConnectorAdoptsTheMintedIdentity(t *testing.T) {
 	if gen.KekID != "" {
 		t.Errorf("first generate sent KekID = %q, want empty so the gateway mints one", gen.KekID)
 	}
-	if got := g.identity.get(); got != "kek-minted" {
-		t.Fatalf("identity after mint = %q, want kek-minted", got)
+	if got := g.identity.get(); got != "" {
+		t.Fatalf("identity after mint = %q, want none until the caller adopts it", got)
+	}
+	if err := g.AdoptIdentity("kek-minted"); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := g.Heartbeat(1, testCreatedAt); err != nil {
 		t.Fatal(err)

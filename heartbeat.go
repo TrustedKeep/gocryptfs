@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -26,6 +27,10 @@ const heartbeatFailureLimit = 3
 // trying for a clean unmount. A stale mountpoint is an operator cleanup problem; a filesystem still
 // serving after the key service can no longer vouch for it is a security failure.
 const forcefulUnmountGrace = 10 * time.Second
+
+// ringRefreshInterval is how often a mount looks for key-ring entries other mounts published. A mount
+// lags a sibling's rotation by at most this, and learns at once when it meets the new index.
+const ringRefreshInterval = 10 * time.Second
 
 // defaultRotateOpThreshold is how many encrypt operations one data key covers before the mount
 // rotates to a fresh one — about 4.4 TB at the default block size. A quarter of NIST's 2^32 bound
@@ -51,9 +56,8 @@ func autoRotateThreshold(args *argContainer) uint64 {
 	return resolveRotateOpThreshold(args.rotateOpThreshold)
 }
 
-// keyServiceMonitor is the mount's periodic key-service work: the heartbeat that keeps its
-// authorization current, reports its key-ring index and collects any rekey asked of it, and the
-// op-counter flush that drives auto-rotation. They share one timer and neither needs its own goroutine.
+// keyServiceMonitor is the mount's periodic key-service work: the heartbeat, which reports its key-ring
+// index and collects any rekey, the op-counter flush that drives auto-rotation, and the key-ring refresh.
 type keyServiceMonitor struct {
 	// hb is nil unless the connector has a heartbeat route to beat to. That is what keeps
 	// heartbeat-death away from -mock-kms and every integration mount: a filesystem that
@@ -71,6 +75,9 @@ type keyServiceMonitor struct {
 	exit       func(code int)
 
 	failures int
+	// stop ends the background loops before the final flush, which runs once.
+	stop      chan struct{}
+	finalOnce sync.Once
 }
 
 // verifyKeyService sends the first heartbeat, before anything is mounted. The heartbeat is what bounds
@@ -80,7 +87,8 @@ func (m *keyServiceMonitor) verifyKeyService() {
 	if m.hb == nil {
 		return
 	}
-	resp, err := m.hb.Heartbeat(m.rotator.writeKey())
+	idx, created := m.rotator.writeKey()
+	resp, err := m.hb.Heartbeat(idx, created)
 	switch {
 	case errors.Is(err, tkc.ErrNotImplemented):
 		tlog.Fatal.Printf("The key service does not implement the heartbeat route, so this mount would run with " +
@@ -93,7 +101,7 @@ func (m *keyServiceMonitor) verifyKeyService() {
 		tlog.Fatal.Printf("The first heartbeat did not reach the key service: %v", err)
 	case resp.Command == model.TKFSCommandRekey:
 		// A short mount never reaches the first scheduled beat.
-		m.rekey()
+		m.rekey(idx)
 	}
 	if err != nil {
 		m.exit(keyServiceExit(err, exitcodes.Revoked))
@@ -102,6 +110,7 @@ func (m *keyServiceMonitor) verifyKeyService() {
 
 // startKeyServiceMonitor runs the monitor in the background, once the filesystem is serving.
 func startKeyServiceMonitor(m *keyServiceMonitor) {
+	go m.watchRing()
 	if m.hb == nil && m.opThreshold == 0 {
 		return
 	}
@@ -110,7 +119,11 @@ func startKeyServiceMonitor(m *keyServiceMonitor) {
 
 func (m *keyServiceMonitor) run() {
 	for {
-		time.Sleep(heartbeatInterval)
+		select {
+		case <-m.stop:
+			return
+		case <-time.After(heartbeatInterval):
+		}
 		if m.hb != nil {
 			m.beat()
 		}
@@ -118,16 +131,46 @@ func (m *keyServiceMonitor) run() {
 	}
 }
 
+// watchRing learns the entries sibling mounts publish. A key the key service refuses, or a head that
+// stays unlearnable, ends the mount: either way it would go on writing under a key it should have left.
+func (m *keyServiceMonitor) watchRing() {
+	for {
+		select {
+		case <-m.stop:
+			return
+		case err := <-m.rotator.refused:
+			m.shutdownNow(fmt.Sprintf("The key service refused a key another mount published: %v", err),
+				keyServiceExit(err, exitcodes.Revoked))
+			return
+		case <-time.After(ringRefreshInterval):
+		}
+		if err := m.rotator.refresh(); err != nil {
+			tlog.Info.Printf("Refreshing the key ring: %v", err)
+		}
+		// A read-only mount draws no nonces, so writing under an old key costs it nothing.
+		if !m.readOnly && m.rotator.headStuck(heartbeatInterval) {
+			m.shutdownNow("The newest key-ring entry, published by another mount, has not unwrapped for a "+
+				"heartbeat interval", exitcodes.RotateFailed)
+			return
+		}
+	}
+}
+
 // beat sends one heartbeat and acts on the answer, including any rekey it brings back.
 func (m *keyServiceMonitor) beat() {
-	resp, err := m.hb.Heartbeat(m.rotator.writeKey())
+	// Report the head, not a key a sibling has already rotated away from.
+	if err := m.rotator.refresh(); err != nil {
+		tlog.Info.Printf("Heartbeat: refreshing the key ring: %v", err)
+	}
+	idx, created := m.rotator.writeKey()
+	resp, err := m.hb.Heartbeat(idx, created)
 	if die, reason := m.classify(err); die {
 		m.shutdownNow("Heartbeat: "+reason, keyServiceExit(err, exitcodes.Revoked))
 		return
 	}
 	switch resp.Command {
 	case model.TKFSCommandRekey:
-		m.rekey()
+		m.rekey(idx)
 	case model.TKFSCommandNone:
 	default:
 		// An unrecognized command means carry on. The unambiguous "stop" is the 403, not a
@@ -136,32 +179,44 @@ func (m *keyServiceMonitor) beat() {
 	}
 }
 
-// rekey carries out a rotation the key service asked for and reports the new index at once, so what an
-// operator watches moves within seconds rather than at the next tick.
-func (m *keyServiceMonitor) rekey() {
+// rekeyRounds bounds how often one rekey directive rotates. Mounts that adopt each other's entry satisfy
+// it together, so a second round only happens when a key from before the request was adopted.
+const rekeyRounds = 3
+
+// rekey carries out a rotation the key service asked for of a mount that reported index reported, and
+// reports the new index at once, so what an operator watches moves within seconds rather than at the
+// next tick.
+func (m *keyServiceMonitor) rekey(reported uint16) {
 	if m.readOnly {
 		// The directive stays pending, for a writable mount of this instance to collect.
 		tlog.Info.Printf("Heartbeat: rekey requested, but a read-only mount cannot rotate")
 		return
 	}
-	idx, err := m.rotator.rotate()
-	if err != nil {
-		// Same rule as the counter-driven rotation: it succeeds or the mount ends. A filesystem
-		// told its key should change must not go on writing under the old one.
-		m.shutdownNow(fmt.Sprintf("Heartbeat: the key service asked for a rekey and it failed: %v", err),
-			keyServiceExit(err, exitcodes.RotateFailed))
-		return
-	}
-	tlog.Info.Printf("Heartbeat: rekey requested; rotated to key-ring index %d", idx)
-	// A report, not a liveness check: an outage here spends none of the three-strike budget, but a
-	// refusal still ends the mount.
-	_, err = m.hb.Heartbeat(m.rotator.writeKey())
-	switch {
-	case errors.Is(err, tkc.ErrDenied), errors.Is(err, tkc.ErrNotImplemented):
-		_, reason := m.classify(err)
-		m.shutdownNow("Heartbeat: "+reason, keyServiceExit(err, exitcodes.Revoked))
-	case err != nil:
-		tlog.Info.Printf("Heartbeat: reporting key-ring index %d failed: %v.", idx, err)
+	for round := 1; round <= rekeyRounds; round++ {
+		idx, err := m.rotator.rotate(rotateTrigger{pastIdx: reported})
+		if err != nil {
+			// Same rule as the counter-driven rotation: it succeeds or the mount ends. A filesystem
+			// told its key should change must not go on writing under the old one.
+			m.shutdownNow(fmt.Sprintf("Heartbeat: the key service asked for a rekey and it failed: %v", err),
+				keyServiceExit(err, exitcodes.RotateFailed))
+			return
+		}
+		tlog.Info.Printf("Heartbeat: rekey requested; writing under key-ring index %d", idx)
+		// A report, not a liveness check: an outage here spends none of the three-strike budget, but a
+		// refusal still ends the mount.
+		resp, err := m.hb.Heartbeat(m.rotator.writeKey())
+		switch {
+		case errors.Is(err, tkc.ErrDenied), errors.Is(err, tkc.ErrNotImplemented):
+			_, reason := m.classify(err)
+			m.shutdownNow("Heartbeat: "+reason, keyServiceExit(err, exitcodes.Revoked))
+			return
+		case err != nil:
+			tlog.Info.Printf("Heartbeat: reporting key-ring index %d failed: %v.", idx, err)
+			return
+		case resp.Command != model.TKFSCommandRekey:
+			return
+		}
+		reported = idx
 	}
 }
 
@@ -211,44 +266,51 @@ func (m *keyServiceMonitor) shutdownNow(reason string, code int) {
 			tlog.Fatal.Printf("Unmount still failing: %v.", err)
 		}
 	}
+	// The exit below skips doMount's teardown, which may still be on its way to this flush.
+	m.flushOpCountsAtUnmount()
 	m.exit(code)
 }
 
-// flushOpCounts persists this mount's encrypt-op counter into the key ring and rotates when the
-// active key has crossed the threshold. Either step failing ends the mount: continuing would go on
-// drawing nonces under a key whose budget nothing can account for any more, and the usual cause —
-// an unreachable key service — is one the heartbeat would end the mount over regardless.
+// flushOpCounts persists this mount's encrypt-op counts and rotates when the write key's count, summed
+// over every mount, has crossed the threshold. Either step failing ends the mount: continuing would go
+// on drawing nonces under a key whose budget nothing can account for any more.
 func (m *keyServiceMonitor) flushOpCounts() {
 	if m.rotator == nil || m.opThreshold == 0 {
 		return
 	}
-	due, err := m.rotator.flushOpCounts(m.opThreshold)
+	due, head, err := m.rotator.flushOpCounts(m.opThreshold)
 	if err != nil {
-		m.shutdownNow(fmt.Sprintf("Cannot persist this mount's key operation count: %v", err), exitcodes.RotateFailed)
+		m.shutdownNow(fmt.Sprintf("Cannot persist this mount's key operation count: %v", err), exitcodes.OpCountFailed)
 		return
 	}
 	if !due {
 		return
 	}
-	idx, err := m.rotator.rotate()
+	idx, err := m.rotator.rotate(rotateTrigger{pastIdx: head})
 	if err != nil {
 		m.shutdownNow(fmt.Sprintf("The active key passed %d operations but rotating away from it failed: %v",
 			m.opThreshold, err), keyServiceExit(err, exitcodes.RotateFailed))
 		return
 	}
-	tlog.Info.Printf("Auto-rotated to key-ring index %d: the previous key passed %d operations", idx, m.opThreshold)
+	tlog.Info.Printf("Writing under key-ring index %d: index %d passed %d operations", idx, head, m.opThreshold)
 }
 
-// flushOpCountsAtUnmount persists the counter one last time on the way out, so a mount that lived
-// less than one interval still contributes the budget its writes spent.
-//
-// It must run before any Wipe(), which publishes a fresh zeroed counter that would make the delta
-// underflow.
+// flushOpCountsAtUnmount stops the background loops and persists the counts one last time, so a mount
+// that lived less than one interval still contributes the budget its writes spent. Nothing writes the
+// cipherdir after it.
 func (m *keyServiceMonitor) flushOpCountsAtUnmount() {
-	if m.rotator == nil || m.opThreshold == 0 {
-		return
-	}
-	if _, err := m.rotator.flushOpCounts(m.opThreshold); err != nil {
-		tlog.Info.Printf("Could not persist the key operation count at unmount: %v", err)
-	}
+	m.finalOnce.Do(func() {
+		if m.stop != nil {
+			close(m.stop)
+		}
+		if m.rotator == nil {
+			return
+		}
+		if m.opThreshold > 0 {
+			if _, _, err := m.rotator.flushOpCounts(m.opThreshold); err != nil {
+				tlog.Info.Printf("Could not persist the key operation count at unmount: %v", err)
+			}
+		}
+		m.rotator.close()
+	})
 }

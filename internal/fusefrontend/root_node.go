@@ -37,6 +37,9 @@ type RootNode struct {
 	// xattrKeyIdxLock serializes stamping an inode's xattr key-index marker on its first encrypted
 	// xattr, so two concurrent first sets cannot stamp two different indices.
 	xattrKeyIdxLock sync.Mutex
+	// xattrLockFile is where -sharedstorage mounts lock the same stamp against each other.
+	xattrLockMu   sync.Mutex
+	xattrLockFile *os.File
 	// MitigatedCorruptions is used to report data corruption that is internally
 	// mitigated by ignoring the corrupt item. For example, when OpenDir() finds
 	// a corrupt filename, we still return the other valid filenames.
@@ -155,7 +158,7 @@ func (rn *RootNode) isFiltered(child string) bool {
 	}
 	// gocryptfs.conf and the key ring in the root directory are forbidden
 	switch child {
-	case configfile.ConfDefaultName, configfile.KeyRingFileName, configfile.KeyRingTmpFileName:
+	case configfile.ConfDefaultName, configfile.KeyRingFileName:
 		tlog.Info.Printf("The name /%s is reserved when -plaintextnames is used\n", child)
 		return true
 	}

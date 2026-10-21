@@ -68,18 +68,21 @@ const (
 	// HealthCheck - the health-check port could not be bound. Usually another mount already
 	// holds it; pass -health-check-port to move it, or a negative value to opt out.
 	HealthCheck = 31
-	// AlreadyMounted - another gocryptfs process already has this filesystem mounted. A key ring
-	// has one writer, so a second mount is refused rather than left to race the first.
+	// AlreadyMounted - a mount without -sharedstorage met another mount of this filesystem on this
+	// host, in either order, or a writable -sharedstorage mount met a live one using its NodeID.
 	AlreadyMounted = 32
 	// Revoked - the key service withdrew this instance's authorization (a 403 on any key-service call)
 	// or would not answer a heartbeat at all. The mountpoint may be left dead if it was busy.
 	Revoked = 33
 	// RotateFailed - a rotation the op counter or a rekey demanded failed other than by a refusal, or
-	// the op count could not be persisted.
+	// the newest key another mount published would not unwrap for a heartbeat interval.
 	RotateFailed = 34
 	// SharedStorageRefused - the gateway requires instance binding, which a -sharedstorage mount cannot
 	// keep. Remount without -sharedstorage, or through a gateway that does not require binding.
 	SharedStorageRefused = 35
+	// OpCountFailed - this mount's key operation count could not be persisted, so the rotation
+	// threshold could no longer be enforced.
+	OpCountFailed = 36
 )
 
 // Err wraps an error with an associated numeric exit code

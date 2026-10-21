@@ -63,8 +63,8 @@ Example:
     $ gocryptfs -info my_cipherdir
     FeatureFlags:      GCMIV128 DirIV EMENames LongNames Raw64
 
-There is no key material to strip: the wrapped data key lives in the separate
-`KR` key-ring file, not in the config.
+There is no key material to strip: the wrapped data keys live in the `KR`
+key-ring directory in the cipherdir, not in the config.
 
 #### -init
 Initialize encrypted directory.
@@ -356,6 +356,16 @@ Store names that are longer than 175 bytes in extra files (default true).
 This flag is only useful when recovering very old gocryptfs filesystems (gocryptfs v0.8 and earlier)
 using "-masterkey". It is ignored (stays at the default) otherwise.
 
+#### -node-id string
+Identify this mount to the key service, which records it and lets an
+administrator block by it. "-init" records a NodeID in the config (a random one
+by default), and a mount uses that unless "-node-id" overrides it.
+
+With "-sharedstorage", every mount of a cipherdir running at the same time needs
+its own NodeID: a writable mount using a live writable mount's NodeID is refused
+(exit code 32). On NFS, the NodeID of a mount whose host crashed stays taken
+until the server's lock lease runs out, about 90 seconds.
+
 #### -nodev
 See `-dev, -nodev`.
 
@@ -411,8 +421,9 @@ Limitation: Mounted single files (yes this is possible) are NOT hidden.
 #### -rotate-op-threshold int
 Encrypt operations under one data key before the mount rotates to a fresh one
 (default 1073741824, i.e. 2^30, which is roughly 4.4 TB at the default 4 KiB
-block size). The count is persisted in the key ring against the active entry, so
-it spans mounts rather than restarting with each one. It is checked on the
+block size). Each mount persists its count in the key ring, and the counts of
+every mount of the filesystem are summed against the active entry, so the
+budget spans mounts rather than restarting with each one. It is checked on the
 heartbeat timer and once before the filesystem is served, so a count earlier
 mounts left at or past the threshold rotates before this one writes anything.
 It is flushed once more at unmount so a mount shorter than one interval still
@@ -427,10 +438,10 @@ its original key, which no later rotation can bound.
 rotation, and a negative one is a usage error. `-ro` suppresses it, because a
 read-only mount performs no encrypt operations and may not write the cipherdir.
 
-**Failing to keep the count ends the mount** (**exit code 34**, or 33 when the
-key service refuses the rotation, 35 for a `-sharedstorage` refusal) rather
-than carrying on under a key whose budget nothing can account for: either the
-counter could not be persisted, or the threshold was crossed and the rotation failed. The
+**Failing to keep the count ends the mount** rather than carrying on under a key
+whose budget nothing can account for: **exit code 36** if the counter could not
+be persisted, **exit code 34** if the threshold was crossed and the rotation failed
+(33 when the key service refuses the rotation, 35 for a `-sharedstorage` refusal). The
 usual causes are an unreachable gateway — which the heartbeat would end the mount
 over in any case — and an unwritable cipherdir.
 
@@ -465,7 +476,8 @@ Enable work-arounds so gocryptfs works better when the backing
 storage directory is concurrently accessed by multiple gocryptfs
 instances.
 
-At the moment, it does two things:
+It makes changes to the backing storage show up immediately, and lets several
+mounts share it (see below). In detail:
 
 1. Disable stat() caching so changes to the backing storage show up
    immediately.
@@ -482,8 +494,19 @@ gocryptfs on shared storage does not receive as much testing as the
 usual (exclusive) use-case. Please test your workload in advance
 and report any problems you may hit.
 
-It does not permit a second mount of a mounted filesystem: its key ring has one
-writer, so a second mount on the same host is refused (exit code 32).
+With it, several gocryptfs processes may mount one cipherdir at once, on one
+host or on several hosts sharing the storage. Each picks up keys the others
+rotate to, within 10 seconds or as soon as it meets one. Concurrent writes to
+*different* files are safe; concurrent writes to the *same* file are not.
+
+Every mount of the cipherdir must pass "-sharedstorage": a mount without it is
+refused next to any other on the same host, and refuses them (exit code 32).
+The backing storage must be a local filesystem or NFS version 4.1 or later,
+mounted "hard" with server-side locking and close-to-open consistency; anything
+else is refused, and so is every platform but Linux. Every mount
+needs a config file of the same format and its own NodeID (see "-node-id"), and on one host
+its own "-ctlsock" path and "-health-check-port". Encrypted extended attributes are not available on AWS EFS,
+which does not support xattrs.
 
 It cannot be used with instance binding, which pins a filesystem to one
 machine. A gateway that requires binding refuses a `-sharedstorage` mount
@@ -906,10 +929,11 @@ EXIT CODES
 24: could not write gocryptfs.conf (on "-init" or "-password")  
 26: fsck found errors  
 31: the health-check port could not be bound  
-32: the filesystem is already mounted by another gocryptfs process  
+32: a mount without -sharedstorage met another mount of the filesystem on this host, or a writable -sharedstorage mount met a live one using its NodeID  
 33: the key service withdrew this instance's authorization or would not answer a heartbeat  
-34: the key operation counter could not be persisted, or a rotation failed other than by a refusal — the op threshold's or a rekey's  
+34: a rotation failed other than by a refusal — the op threshold's or a rekey's — or the newest key another mount published would not unwrap for a heartbeat interval  
 35: a gateway that requires instance binding refused this `-sharedstorage` mount  
+36: the key operation counter could not be persisted  
 other: please check the error message
 
 A systemd unit should set `RestartPreventExitStatus=33 35`, so a revoked or

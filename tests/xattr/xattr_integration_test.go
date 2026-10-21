@@ -227,8 +227,7 @@ func lsCipherdir(t *testing.T, dir string) map[string]bool {
 	out := make(map[string]bool)
 	for _, e := range entries {
 		switch e.Name() {
-		case nametransform.DirIVFilename, configfile.ConfDefaultName,
-			configfile.KeyRingFileName, configfile.KeyRingTmpFileName:
+		case nametransform.DirIVFilename, configfile.ConfDefaultName, configfile.KeyRingFileName:
 			continue
 		}
 		out[e.Name()] = true

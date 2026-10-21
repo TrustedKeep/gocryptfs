@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -211,6 +212,10 @@ func (f *File) doRead(dst []byte, off uint64, length uint64) ([]byte, syscall.Er
 	plaintext, err := f.rootNode.contentEnc.DecryptBlocks(ciphertext, firstBlockNo, fileID, keyIdx)
 	f.rootNode.contentEnc.CReqPool.Put(ciphertext)
 	if err != nil {
+		if errors.Is(err, contentenc.ErrKeyMissing) {
+			tlog.Info.Printf("doRead %d: %v", f.qIno.Ino, err)
+			return nil, syscall.EIO
+		}
 		corruptBlockNo := firstBlockNo + f.rootNode.contentEnc.PlainOffToBlockNo(uint64(len(plaintext)))
 		tlog.Warn.Printf("doRead %d: corrupt block #%d: %v", f.qIno.Ino, corruptBlockNo, err)
 		return nil, syscall.EIO
@@ -291,6 +296,11 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 			f.fileTableEntry.ID = fileID
 			f.fileTableEntry.KeyIdx = keyIdx
 		}
+	}
+	// The header can name a key a sibling mount published, or one this mount holds a hole for.
+	if err := f.rootNode.contentEnc.EnsureKey(f.fileTableEntry.KeyIdx); err != nil {
+		tlog.Info.Printf("doWrite %d: %v", f.qIno.Ino, err)
+		return 0, syscall.EIO
 	}
 	// Handle payload data
 	dataBuf := bytes.NewBuffer(data)

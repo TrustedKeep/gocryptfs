@@ -2,7 +2,9 @@ package nametransform
 
 import (
 	"bytes"
+	"errors"
 	"os"
+	"slices"
 	"sync"
 	"syscall"
 	"testing"
@@ -14,12 +16,18 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
 )
 
+// newTestEMECipher builds a name cipher from a master key whose first byte is seed.
+func newTestEMECipher(seed byte) *eme.EMECipher {
+	key := make([]byte, cryptocore.KeyLen)
+	key[0] = seed
+	return cryptocore.New(key, cryptocore.BackendGoGCM, contentenc.DefaultIVBits).EMECipher
+}
+
+// newDirIVTestInstance holds keys name keys; index i is newTestEMECipher(i+1).
 func newDirIVTestInstance(deterministicNames bool, keys int) *NameTransform {
 	ciphers := make([]*eme.EMECipher, keys)
 	for i := range ciphers {
-		key := make([]byte, cryptocore.KeyLen)
-		key[0] = byte(i + 1)
-		ciphers[i] = cryptocore.New(key, cryptocore.BackendGoGCM, contentenc.DefaultIVBits).EMECipher
+		ciphers[i] = newTestEMECipher(byte(i + 1))
 	}
 	return New(ciphers, true, 0, true, nil, deterministicNames)
 }
@@ -126,18 +134,190 @@ func TestNamesPerKeyIdx(t *testing.T) {
 		t.Error("an index the mount has no key for must be an error")
 	}
 
-	// AddCipher is rotation's entry point: it must become the write key without disturbing
-	// the ones already there.
-	key := make([]byte, cryptocore.KeyLen)
-	key[0] = 9
-	if got := n.AddCipher(cryptocore.New(key, cryptocore.BackendGoGCM, contentenc.DefaultIVBits).EMECipher); got != 2 {
-		t.Errorf("AddCipher returned %d, want 2", got)
+	// Rotation installs the next key, then makes it the write key; neither step disturbs the
+	// keys already there.
+	if err := n.InstallCipher(2, newTestEMECipher(9)); err != nil {
+		t.Fatal(err)
+	}
+	if got := n.WriteKeyIdx(); got != 1 {
+		t.Errorf("WriteKeyIdx after InstallCipher = %d, want 1", got)
+	}
+	if err := n.SetWriteCipher(2); err != nil {
+		t.Fatal(err)
 	}
 	if got := n.WriteKeyIdx(); got != 2 {
 		t.Errorf("WriteKeyIdx = %d, want 2", got)
 	}
 	if got, err := n.DecryptName(c0, iv, 0); err != nil || got != "file" {
-		t.Errorf("index 0 stopped working after AddCipher: got %q, err %v", got, err)
+		t.Errorf("index 0 stopped working after a rotation: got %q, err %v", got, err)
+	}
+}
+
+// Name keys arrive at explicit indices, in order, and the write key only moves forward onto a held
+// key. Refused calls change nothing.
+func TestInstallAndSetWriteCipher(t *testing.T) {
+	n := newDirIVTestInstance(false, 2)
+	c0 := n.emeCiphers.Load().ciphers[0]
+
+	for _, idx := range []uint16{1, 3} {
+		if err := n.InstallCipher(idx, newTestEMECipher(9)); err == nil {
+			t.Errorf("InstallCipher(%d) with two keys held succeeded, want an error", idx)
+		}
+	}
+	if c, err := n.emeCipher(0); err != nil || c != c0 {
+		t.Errorf("index 0 after refused installs: got (%v, %v), want the original cipher", c, err)
+	}
+	if err := n.InstallCipher(2, nil); err != nil {
+		t.Fatalf("installing a hole: %v", err)
+	}
+	c3 := newTestEMECipher(4)
+	if err := n.InstallCipher(3, c3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.emeCipher(2); !errors.Is(err, ErrKeyMissing) {
+		t.Errorf("index 2 is a hole: got %v, want ErrKeyMissing", err)
+	}
+	if c, err := n.emeCipher(3); err != nil || c != c3 {
+		t.Errorf("index 3: got (%v, %v), want the installed cipher", c, err)
+	}
+	if got := n.WriteKeyIdx(); got != 1 {
+		t.Errorf("installs moved the write key to %d, want 1", got)
+	}
+
+	for _, tc := range []struct {
+		idx  uint16
+		what string
+	}{{0, "backwards"}, {2, "a hole"}, {4, "out of range"}} {
+		if err := n.SetWriteCipher(tc.idx); err == nil {
+			t.Errorf("SetWriteCipher(%d), %s, succeeded", tc.idx, tc.what)
+		}
+	}
+	if got := n.WriteKeyIdx(); got != 1 {
+		t.Errorf("refused moves changed the write key to %d, want 1", got)
+	}
+	if err := n.SetWriteCipher(3); err != nil {
+		t.Fatal(err)
+	}
+	if got := n.WriteKeyIdx(); got != 3 {
+		t.Errorf("WriteKeyIdx = %d, want 3", got)
+	}
+}
+
+// The learner is asked only for an index past the held prefix, holes included in that prefix. A
+// learner that installs the key makes the lookup succeed; any other answer is ErrKeyMissing.
+func TestNameKeyLearner(t *testing.T) {
+	n := newDirIVTestInstance(false, 1)
+	if err := n.InstallCipher(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	c2 := newTestEMECipher(3)
+	var asked []uint16
+	n.SetKeyLearner(func(keyIdx uint16) bool {
+		asked = append(asked, keyIdx)
+		switch keyIdx {
+		case 2:
+			return n.InstallCipher(2, c2) == nil
+		case 9:
+			// Claims success without installing anything.
+			return true
+		}
+		return false
+	})
+
+	if _, err := n.emeCipher(0); err != nil {
+		t.Errorf("index 0: %v", err)
+	}
+	if _, err := n.emeCipher(1); !errors.Is(err, ErrKeyMissing) {
+		t.Errorf("hole at index 1: got %v, want ErrKeyMissing", err)
+	}
+	if len(asked) != 0 {
+		t.Fatalf("held indices asked the learner for %v, want nothing", asked)
+	}
+
+	if c, err := n.emeCipher(2); err != nil || c != c2 {
+		t.Errorf("index 2 via the learner: got (%v, %v), want the learned cipher", c, err)
+	}
+	if got := n.WriteKeyIdx(); got != 0 {
+		t.Errorf("learning index 2 moved the write key to %d, want it at 0", got)
+	}
+	if _, err := n.emeCipher(2); err != nil {
+		t.Errorf("index 2 once learned: %v", err)
+	}
+	if _, err := n.emeCipher(5); !errors.Is(err, ErrKeyMissing) {
+		t.Errorf("index 5, not learned: got %v, want ErrKeyMissing", err)
+	}
+	if _, err := n.emeCipher(9); !errors.Is(err, ErrKeyMissing) {
+		t.Errorf("index 9, learner claims success but installs nothing: got %v, want ErrKeyMissing", err)
+	}
+	if want := []uint16{2, 5, 9}; !slices.Equal(asked, want) {
+		t.Errorf("learner was asked for %v, want %v", asked, want)
+	}
+}
+
+// A lookup in a directory a sibling mount stamped with a newer index learns that index on the miss,
+// and one it cannot learn surfaces ErrKeyMissing through DecryptName.
+func TestDecryptNameLearnsSiblingKey(t *testing.T) {
+	sibling := newDirIVTestInstance(false, 2)
+	n := newDirIVTestInstance(false, 1)
+	iv := cryptocore.RandBytes(DirIVLen)
+	cName, err := sibling.EncryptName("file", iv, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := n.DecryptName(cName, iv, 1); !errors.Is(err, ErrKeyMissing) {
+		t.Errorf("without a learner: got %v, want ErrKeyMissing", err)
+	}
+	n.SetKeyLearner(func(keyIdx uint16) bool { return keyIdx == 1 && n.InstallCipher(1, newTestEMECipher(2)) == nil })
+	if got, err := n.DecryptName(cName, iv, 1); err != nil || got != "file" {
+		t.Errorf("with a learner: got %q, err %v", got, err)
+	}
+}
+
+// DirIVRecord and CheckDirIVRecord are the publish and accept halves of the root diriv: the index
+// survives in big-endian, and the all-zero rule holds in both directions.
+func TestDirIVRecord(t *testing.T) {
+	for _, deterministic := range []bool{false, true} {
+		for _, idx := range []uint16{0, 1, 0x1234, 0xffff} {
+			rec := DirIVRecord(idx, deterministic)
+			if len(rec) != DirIVFileLen {
+				t.Fatalf("deterministic=%v idx=%d: record is %d bytes, want %d", deterministic, idx, len(rec), DirIVFileLen)
+			}
+			if rec[DirIVLen] != byte(idx>>8) || rec[DirIVLen+1] != byte(idx) {
+				t.Errorf("deterministic=%v idx=%d: index bytes %x, want big-endian", deterministic, idx, rec[DirIVLen:])
+			}
+			iv, got, err := CheckDirIVRecord(rec, deterministic)
+			if err != nil {
+				t.Fatalf("deterministic=%v idx=%d: %v", deterministic, idx, err)
+			}
+			if got != idx || len(iv) != DirIVLen {
+				t.Errorf("deterministic=%v idx=%d: got index %d and a %d-byte IV", deterministic, idx, got, len(iv))
+			}
+			if allZero := bytes.Equal(iv, allZeroDirIV); allZero != deterministic {
+				t.Errorf("deterministic=%v idx=%d: all-zero IV = %v", deterministic, idx, allZero)
+			}
+			if _, _, err := CheckDirIVRecord(rec, !deterministic); err == nil {
+				t.Errorf("a record made with deterministic=%v was accepted with deterministic=%v", deterministic, !deterministic)
+			}
+		}
+	}
+	if bytes.Equal(DirIVRecord(0, false)[:DirIVLen], DirIVRecord(0, false)[:DirIVLen]) {
+		t.Error("two random-IV records share an IV")
+	}
+}
+
+// Anything but 18 bytes is refused, even when the IV part alone would pass.
+func TestCheckDirIVRecordLength(t *testing.T) {
+	for _, deterministic := range []bool{false, true} {
+		for _, l := range []int{0, DirIVLen, DirIVFileLen - 1, DirIVFileLen + 1} {
+			rec := make([]byte, l)
+			if !deterministic {
+				copy(rec, cryptocore.RandBytes(l))
+			}
+			if _, _, err := CheckDirIVRecord(rec, deterministic); err == nil {
+				t.Errorf("deterministic=%v: a %d-byte record was accepted", deterministic, l)
+			}
+		}
 	}
 }
 
@@ -161,7 +341,10 @@ func TestWipeConcurrent(t *testing.T) {
 	n.Wipe()
 	wg.Wait()
 
-	if _, err := n.emeCipher(0); err == nil {
-		t.Error("after a wipe every index must report a missing key")
+	if _, err := n.emeCipher(0); !errors.Is(err, ErrKeyMissing) {
+		t.Errorf("after a wipe every index must report a missing key: got %v", err)
+	}
+	if got := n.WriteKeyIdx(); got != 1 {
+		t.Errorf("WriteKeyIdx after a wipe = %d, want 1", got)
 	}
 }

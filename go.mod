@@ -38,3 +38,5 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 	software.sslmate.com/src/go-pkcs12 v0.6.0 // indirect
 )
+
+replace github.com/TrustedKeep/tkutils/v2 => /home/andrewlevin/go/src/github.com/TrustedKeep/tkutils/.claude/worktrees/feature-tkfs-v2-phase3.5-sharedstorage

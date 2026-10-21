@@ -55,6 +55,7 @@ const searchHTTPTimeout = 10 * time.Second
 // the same TKFS policy, so a filesystem reaches the same KEK whichever route it mounts through.
 type searchConnector struct {
 	nodeID   string
+	mountID  string
 	identity instanceIdentity
 	token    string
 	kmsHosts []string
@@ -166,8 +167,8 @@ func (s *searchConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	if err != nil {
 		return TKFSDataKey{}, fmt.Errorf("search generate: %w", err)
 	}
-	// On a mint this is where the filesystem learns who it is; on a rotation the id is the one we sent.
-	if err := s.identity.adopt(out.KeyID); err != nil {
+	// A rotation must come back under the KEK it named; a mint's id is adopted by the caller.
+	if err := s.identity.check(out.KeyID); err != nil {
 		clear(dek)
 		return TKFSDataKey{}, fmt.Errorf("search generate: %w", err)
 	}
@@ -204,6 +205,7 @@ func (s *searchConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]
 func (s *searchConnector) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
 	req := model.TKFSHeartbeatRequest{
 		NodeID:       s.nodeID,
+		MountID:      s.mountID,
 		KekID:        s.identity.get(),
 		KeyIdx:       keyIdx,
 		KeyCreatedAt: keyCreatedAt,

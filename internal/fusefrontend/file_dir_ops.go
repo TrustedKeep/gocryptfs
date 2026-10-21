@@ -138,11 +138,8 @@ func (f *File) Readdirent(ctx context.Context) (entry *fuse.DirEntry, errno sysc
 			// We want these as-is
 			return
 		}
-		if f.dirHandle.isRootDir && (cName == configfile.ConfDefaultName ||
-			cName == configfile.KeyRingFileName || cName == configfile.KeyRingTmpFileName) {
-			// silently ignore "gocryptfs.conf" and the key ring in the top level dir. KR.tmp
-			// too: it exists for the length of every ring write, and a listing that caught one
-			// would try to decrypt it as a filename and report corruption.
+		if f.dirHandle.isRootDir && (cName == configfile.ConfDefaultName || cName == configfile.KeyRingFileName) {
+			// silently ignore "gocryptfs.conf" and the key ring in the top level dir
 			continue
 		}
 		if f.rootNode.args.PlaintextNames {

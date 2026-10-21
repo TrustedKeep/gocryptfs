@@ -61,18 +61,35 @@ func (n *NameTransform) fdReadDirIV(fd *os.File) (iv []byte, keyIdx uint16, err 
 	if err != nil && err != io.EOF {
 		return nil, 0, fmt.Errorf("read failed: %v", err)
 	}
-	buf = buf[0:c]
-	if len(buf) != DirIVFileLen {
-		return nil, 0, fmt.Errorf("wanted %d bytes, got %d", DirIVFileLen, len(buf))
+	return CheckDirIVRecord(buf[0:c], n.deterministicNames)
+}
+
+// CheckDirIVRecord validates the content of a gocryptfs.diriv and splits it into IV and key index.
+func CheckDirIVRecord(record []byte, deterministicNames bool) (iv []byte, keyIdx uint16, err error) {
+	if len(record) != DirIVFileLen {
+		return nil, 0, fmt.Errorf("wanted %d bytes, got %d", DirIVFileLen, len(record))
 	}
-	iv = buf[:DirIVLen]
-	if bytes.Equal(iv, allZeroDirIV) != n.deterministicNames {
-		if n.deterministicNames {
+	iv = record[:DirIVLen]
+	if bytes.Equal(iv, allZeroDirIV) != deterministicNames {
+		if deterministicNames {
 			return nil, 0, fmt.Errorf("diriv is not all-zero but -deterministic-names is in effect")
 		}
 		return nil, 0, fmt.Errorf("diriv is all-zero")
 	}
-	return iv, binary.BigEndian.Uint16(buf[DirIVLen:]), nil
+	return iv, binary.BigEndian.Uint16(record[DirIVLen:]), nil
+}
+
+// DirIVPerms is the mode of every gocryptfs.diriv, for one published from outside this package.
+const DirIVPerms = dirivPerms
+
+// DirIVRecord returns the content of a new gocryptfs.diriv stamped with keyIdx.
+func DirIVRecord(keyIdx uint16, deterministicNames bool) []byte {
+	record := make([]byte, DirIVFileLen)
+	if !deterministicNames {
+		copy(record, cryptocore.RandBytes(DirIVLen))
+	}
+	binary.BigEndian.PutUint16(record[DirIVLen:], keyIdx)
+	return record
 }
 
 // WriteDirIVAt - create a new gocryptfs.diriv file in the directory opened at
@@ -82,11 +99,7 @@ func (n *NameTransform) fdReadDirIV(fd *os.File) (iv []byte, keyIdx uint16, err 
 // and also the automated tests.
 // deterministicNames writes an all-zero IV.
 func WriteDirIVAt(dirfd int, keyIdx uint16, deterministicNames bool) error {
-	record := make([]byte, DirIVFileLen)
-	if !deterministicNames {
-		copy(record, cryptocore.RandBytes(DirIVLen))
-	}
-	binary.BigEndian.PutUint16(record[DirIVLen:], keyIdx)
+	record := DirIVRecord(keyIdx, deterministicNames)
 	// 0400 permissions: gocryptfs.diriv should never be modified after creation.
 	// Don't use "os.WriteFile", it causes trouble on NFS:
 	// https://github.com/rfjakob/gocryptfs/commit/7d38f80a78644c8ec4900cc990bfb894387112ed

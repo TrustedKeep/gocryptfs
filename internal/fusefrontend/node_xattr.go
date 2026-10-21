@@ -12,6 +12,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 
+	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
 	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
@@ -79,6 +80,10 @@ func (n *Node) Getxattr(ctx context.Context, attr string, dest []byte) (uint32, 
 			return 0, errno
 		}
 		data, err = rn.decryptXattrValue(cData)
+		if errors.Is(err, contentenc.ErrKeyMissing) {
+			tlog.Info.Printf("GetXAttr: %v", err)
+			return minus1, syscall.EIO
+		}
 		if err != nil {
 			tlog.Warn.Printf("GetXAttr: %v", err)
 			return minus1, syscall.EIO
@@ -248,6 +253,14 @@ func (n *Node) xattrKeyIdxForSet() (uint16, syscall.Errno) {
 	rn := n.rootNode()
 	rn.xattrKeyIdxLock.Lock()
 	defer rn.xattrKeyIdxLock.Unlock()
+	if rn.args.SharedStorage {
+		// Another mount may be stamping the same inode under a different write key.
+		unlock, errno := n.lockXattrStamp()
+		if errno != 0 {
+			return 0, errno
+		}
+		defer unlock()
+	}
 	if keyIdx, ok, errno := n.xattrKeyIdx(); errno != 0 || ok {
 		return keyIdx, errno
 	}

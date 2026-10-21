@@ -83,23 +83,24 @@ func TestFiltered(t *testing.T) {
 	}
 }
 
-// The key ring and its staging file are reserved in the root like gocryptfs.conf: the mount would
-// otherwise let its user delete the ring or block its next write.
+// The key ring is reserved in the root like gocryptfs.conf: the mount would otherwise let its user
+// delete the ring, or reach its entries through it.
 func TestKeyRingFiltered(t *testing.T) {
-	for _, name := range []string{configfile.KeyRingFileName, configfile.KeyRingTmpFileName} {
-		p := pDir + "/" + name
-		if err := os.WriteFile(p, []byte("foo"), 0600); err == nil {
-			t.Errorf("creating %q should have failed but didn't", name)
-		}
-		if err := os.Mkdir(p, 0700); err == nil {
-			t.Errorf("mkdir %q should have failed but didn't", name)
-		}
-		if err := os.Remove(p); err == nil {
-			t.Errorf("removing %q should have failed but didn't", name)
-		}
+	p := pDir + "/" + configfile.KeyRingFileName
+	if err := os.WriteFile(p, []byte("foo"), 0600); err == nil {
+		t.Errorf("creating %q should have failed but didn't", p)
 	}
-	if _, err := os.Stat(cDir + "/" + configfile.KeyRingFileName); err != nil {
-		t.Errorf("key ring: %v", err)
+	if err := os.Mkdir(p, 0700); err == nil {
+		t.Errorf("mkdir %q should have failed but didn't", p)
+	}
+	if err := os.Remove(p); err == nil {
+		t.Errorf("removing %q should have failed but didn't", p)
+	}
+	if _, err := os.Stat(p + "/00000"); err == nil {
+		t.Errorf("ring entry %q is reachable through the mount", p+"/00000")
+	}
+	if fi, err := os.Stat(configfile.KeyRingDir(cDir)); err != nil || !fi.IsDir() {
+		t.Errorf("key ring: %v, %v", fi, err)
 	}
 }
 

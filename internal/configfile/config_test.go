@@ -184,7 +184,7 @@ func TestCreateAssignsNoIdentity(t *testing.T) {
 		t.Errorf("NodeID = %q, want the one that was passed in", cf.NodeID)
 	}
 	// No ring, so no identity — "no keys yet" and "no identity yet" are the same fact.
-	kr, err := LoadKeyRing(conf)
+	kr, err := LoadKeyRing(filepath.Dir(conf))
 	if err != nil {
 		t.Fatal(err)
 	}

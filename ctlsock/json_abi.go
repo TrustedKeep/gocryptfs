@@ -24,10 +24,8 @@ type ResponseStruct struct {
 	// KeyIdx is the key-ring index of the newly generated key, in response to Rotate. A
 	// rotation never produces index 0, so its absence means "not a rotation response".
 	KeyIdx uint16 `json:",omitempty"`
-	// KeyHoles are the key-ring indices this mount could not unwrap at mount time, in response
-	// to Status. Everything written under them fails with EIO, those directories will not list
-	// and those symlinks and xattr values will not decrypt, until the mount is remounted with
-	// the key service reachable. Absent when there are none.
+	// KeyHoles are the key-ring indices this mount holds no key for, in response to Status: missing
+	// entries, and keys that would not unwrap. Everything written under them fails with EIO.
 	KeyHoles []uint16 `json:",omitempty"`
 	// ErrNo is the error number as defined in errno.h.
 	// 0 means success and -1 means that the error number is not known

@@ -56,9 +56,11 @@ var (
 type gwConnector struct {
 	host   string // gateway host:port
 	nodeID string // travels in each request so the gateway can record and block by node
+	// mountID travels on the heartbeat, so keep can tell two processes reporting one NodeID apart.
+	mountID string
 	// identity travels in each request both so a blocklist entry naming one instance is enforceable
 	// on every call, not just on the heartbeat, and because it names the KEK to wrap under. It is
-	// empty until the first generate mints one; see instanceIdentity.
+	// empty until AdoptIdentity sets it; see instanceIdentity.
 	identity instanceIdentity
 	certDir  string
 	client   *http.Client
@@ -206,9 +208,8 @@ func (g *gwConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 	if err != nil {
 		return TKFSDataKey{}, fmt.Errorf("gateway generate: %w", err)
 	}
-	// On a mint this is where the filesystem learns who it is; on a rotation this is the check that
-	// the id we sent is the one that came back.
-	if err := g.identity.adopt(out.KeyID); err != nil {
+	// A rotation must come back under the KEK it named; a mint's id is adopted by the caller.
+	if err := g.identity.check(out.KeyID); err != nil {
 		clear(dek)
 		return TKFSDataKey{}, fmt.Errorf("gateway generate: %w", err)
 	}
@@ -248,6 +249,7 @@ func (g *gwConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]byte
 func (g *gwConnector) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
 	req := model.TKFSHeartbeatRequest{
 		NodeID:        g.nodeID,
+		MountID:       g.mountID,
 		KekID:         g.identity.get(),
 		KeyIdx:        keyIdx,
 		KeyCreatedAt:  keyCreatedAt,

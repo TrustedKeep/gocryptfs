@@ -4,16 +4,18 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/pkg/xattr"
 
@@ -628,7 +630,7 @@ func backingDirs(t *testing.T, cDir string, want int) []string {
 	}
 	var dirs []string
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() && e.Name() != configfile.KeyRingFileName {
 			dirs = append(dirs, e.Name())
 		}
 	}
@@ -636,17 +638,6 @@ func backingDirs(t *testing.T, cDir string, want int) []string {
 		t.Fatalf("want %d backing directories in %q, have %v", want, cDir, dirs)
 	}
 	return dirs
-}
-
-// waitForTeardown returns once the process that mounted cDir has exited, which is after its teardown
-// flush: it holds the key-ring lock until then.
-func waitForTeardown(t *testing.T, cDir string) {
-	t.Helper()
-	f, err := configfile.LockKeyRing(filepath.Join(cDir, configfile.ConfDefaultName), 10*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
 }
 
 // mountAndWrite mounts cDir with "-rotate-op-threshold=1", writes one file and unmounts.
@@ -658,12 +649,40 @@ func mountAndWrite(t *testing.T, cDir, pDir string) {
 		t.Fatal(err)
 	}
 	test_helpers.UnmountPanic(pDir)
-	waitForTeardown(t, cDir)
+}
+
+// opCounts sums the op-count shards of every mount, per ring index.
+func opCounts(t *testing.T, cDir string) map[uint16]uint64 {
+	t.Helper()
+	dir := filepath.Join(configfile.KeyRingDir(cDir), "ops")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[uint16]uint64{}
+	for _, e := range entries {
+		idxStr, _, ok := strings.Cut(e.Name(), ".")
+		idx, err := strconv.ParseUint(idxStr, 10, 16)
+		if !ok || err != nil {
+			t.Errorf("unexpected file %q among the op-count shards", e.Name())
+			continue
+		}
+		js, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var shard struct{ Count uint64 }
+		if err := json.Unmarshal(js, &shard); err != nil {
+			t.Fatalf("shard %q: %v", e.Name(), err)
+		}
+		counts[uint16(idx)] += shard.Count
+	}
+	return counts
 }
 
 // Every mount here lives far under one heartbeat interval, so without the flush in doMount's
-// teardown the ring would come back with OpCount 0. That flush only credits: even a threshold of 1
-// must not rotate on the way out.
+// teardown its shard would come back empty. That flush only credits: even a threshold of 1 must not
+// rotate on the way out.
 func TestShortMountCreditsItsOps(t *testing.T) {
 	cDir := test_helpers.InitFS(t, "-mock-kms")
 	os.Chmod(cDir, 0777)
@@ -673,8 +692,8 @@ func TestShortMountCreditsItsOps(t *testing.T) {
 	if len(kr.Keys) != 1 {
 		t.Errorf("ring has %d entries, want 1: the teardown flush must never rotate", len(kr.Keys))
 	}
-	if len(kr.Keys) > 0 && kr.Keys[0].OpCount == 0 {
-		t.Error("OpCount = 0; a mount shorter than one interval must still credit what it wrote")
+	if n := opCounts(t, cDir)[0]; n == 0 {
+		t.Error("op count under index 0 is 0; a mount shorter than one interval must still credit what it wrote")
 	}
 }
 
@@ -715,52 +734,78 @@ func TestRotateAfterRemount(t *testing.T) {
 // corruptEntry flips a bit in ring entry idx's wrapped key, so it no longer unwraps.
 func corruptEntry(t *testing.T, cDir string, idx int) {
 	t.Helper()
-	waitForTeardown(t, cDir)
-	kr, err := configfile.LoadKeyRing(filepath.Join(cDir, configfile.ConfDefaultName))
+	path := filepath.Join(configfile.KeyRingDir(cDir), fmt.Sprintf("%05d", idx))
+	js, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ct := kr.Keys[idx].Ciphertext
-	ct[len(ct)-1] ^= 1
-	if err := kr.WriteFile(); err != nil {
+	var e configfile.KeyRingEntry
+	if err := json.Unmarshal(js, &e); err != nil {
+		t.Fatal(err)
+	}
+	e.Ciphertext[len(e.Ciphertext)-1] ^= 1
+	if js, err = json.Marshal(e); err != nil {
+		t.Fatal(err)
+	}
+	// Entries are read-only, so replace rather than rewrite.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, js, 0400); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// An entry that will not unwrap leaves a hole: the mount serves everything else, the hole's files
-// fail with EIO, and ctlsock Status names it.
-func TestKeyRingHole(t *testing.T) {
-	cDir := test_helpers.InitFS(t, "-mock-kms")
-	os.Chmod(cDir, 0777)
-	pDir, sock := mountWithCtlsock(t, cDir)
-	var files []string
-	for i := range 3 {
-		fn := filepath.Join(pDir, fmt.Sprintf("gen%d.txt", i))
-		if err := os.WriteFile(fn, []byte("content"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		files = append(files, fn)
-		if i < 2 {
-			rotate(t, sock)
-		}
+// removeEntry deletes ring entry idx from disk.
+func removeEntry(t *testing.T, cDir string, idx int) {
+	t.Helper()
+	if err := os.Remove(filepath.Join(configfile.KeyRingDir(cDir), fmt.Sprintf("%05d", idx))); err != nil {
+		t.Fatal(err)
 	}
-	test_helpers.UnmountPanic(pDir)
-	corruptEntry(t, cDir, 1)
+}
 
-	// Reading the hole's file is logged at Warn, which -wpanic would turn into a crash.
-	test_helpers.MountOrFatal(t, cDir, pDir, "-ctlsock="+sock, "-mock-kms", "-extpass=echo test", "-wpanic=0")
-	defer test_helpers.UnmountPanic(pDir)
-	resp := test_helpers.QueryCtlSock(t, sock, ctlsock.RequestStruct{Status: true})
-	if !slices.Equal(resp.KeyHoles, []uint16{1}) {
-		t.Errorf("KeyHoles = %v, want [1]", resp.KeyHoles)
-	}
-	for i, fn := range files {
-		_, err := os.ReadFile(fn)
-		if i == 1 && !errors.Is(err, syscall.EIO) {
-			t.Errorf("read of the file under the hole: %v, want EIO", err)
-		} else if i != 1 && err != nil {
-			t.Errorf("read %q: %v", fn, err)
+// An entry that will not unwrap, or is gone from disk, leaves a hole: the mount serves everything
+// else, the hole's files fail with EIO, and ctlsock Status names it.
+func TestKeyRingHole(t *testing.T) {
+	for _, damage := range []struct {
+		name string
+		fn   func(*testing.T, string, int)
+	}{
+		{"corrupt", corruptEntry},
+		{"deleted", removeEntry},
+	} {
+		cDir := test_helpers.InitFS(t, "-mock-kms")
+		os.Chmod(cDir, 0777)
+		pDir, sock := mountWithCtlsock(t, cDir)
+		var files []string
+		for i := range 3 {
+			fn := filepath.Join(pDir, fmt.Sprintf("gen%d.txt", i))
+			if err := os.WriteFile(fn, []byte("content"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			files = append(files, fn)
+			if i < 2 {
+				rotate(t, sock)
+			}
 		}
+		test_helpers.UnmountPanic(pDir)
+		damage.fn(t, cDir, 1)
+
+		// Reading the hole's file is logged at Warn, which -wpanic would turn into a crash.
+		test_helpers.MountOrFatal(t, cDir, pDir, "-ctlsock="+sock, "-mock-kms", "-extpass=echo test", "-wpanic=0")
+		resp := test_helpers.QueryCtlSock(t, sock, ctlsock.RequestStruct{Status: true})
+		if !slices.Equal(resp.KeyHoles, []uint16{1}) {
+			t.Errorf("%s: KeyHoles = %v, want [1]", damage.name, resp.KeyHoles)
+		}
+		for i, fn := range files {
+			_, err := os.ReadFile(fn)
+			if i == 1 && !errors.Is(err, syscall.EIO) {
+				t.Errorf("%s: read of the file under the hole: %v, want EIO", damage.name, err)
+			} else if i != 1 && err != nil {
+				t.Errorf("%s: read %q: %v", damage.name, fn, err)
+			}
+		}
+		test_helpers.UnmountPanic(pDir)
 	}
 }
 
@@ -796,7 +841,7 @@ func TestKeyRingHoleThatCannotBeServedIsFatal(t *testing.T) {
 }
 
 // The ring write is outside the kernel's read-only enforcement, so a -ro mount must refuse a rotation
-// rather than rewrite KR.
+// and leave KR as it found it.
 func TestReadOnlyMountRefusesRotate(t *testing.T) {
 	cDir := test_helpers.InitFS(t, "-mock-kms")
 	pDir := cDir + ".mnt"
@@ -804,22 +849,43 @@ func TestReadOnlyMountRefusesRotate(t *testing.T) {
 	// The first mount has to be writable to persist the initial key.
 	test_helpers.MountOrFatal(t, cDir, pDir, "-mock-kms", "-extpass=echo test")
 	test_helpers.UnmountPanic(pDir)
-	before, err := os.ReadFile(filepath.Join(cDir, "KR"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := ringSnapshot(t, cDir)
 
 	test_helpers.MountOrFatal(t, cDir, pDir, "-ro", "-ctlsock="+sock, "-mock-kms", "-extpass=echo test")
-	defer test_helpers.UnmountPanic(pDir)
 	resp := test_helpers.QueryCtlSock(t, sock, ctlsock.RequestStruct{Rotate: true})
 	if resp.ErrNo == 0 {
 		t.Errorf("rotate on a -ro mount succeeded (index %d)", resp.KeyIdx)
 	}
-	after, err := os.ReadFile(filepath.Join(cDir, "KR"))
+	if err := os.WriteFile(filepath.Join(pDir, "f"), nil, 0600); err == nil {
+		t.Error("write on a -ro mount succeeded")
+	}
+	test_helpers.UnmountPanic(pDir)
+	if after := ringSnapshot(t, cDir); !maps.Equal(before, after) {
+		t.Errorf("a -ro mount changed the key ring:\nbefore %v\nafter  %v", before, after)
+	}
+}
+
+// ringSnapshot maps every file under KR to its content and mtime.
+func ringSnapshot(t *testing.T, cDir string) map[string]string {
+	t.Helper()
+	snap := map[string]string{}
+	err := filepath.WalkDir(configfile.KeyRingDir(cDir), func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		js, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		snap[path] = fmt.Sprintf("%s@%d", js, fi.ModTime().UnixNano())
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(before, after) {
-		t.Error("a -ro mount rewrote the key ring")
-	}
+	return snap
 }

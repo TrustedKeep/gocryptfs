@@ -50,14 +50,16 @@ func TestSearchConnectorHeartbeat(t *testing.T) {
 		}
 		return jsonResponse(http.StatusOK, model.TKFSHeartbeatResponse{Command: model.TKFSCommandRekey}), nil
 	})
+	s.mountID = "mount-1"
 	s.identity.adopt("instance-1")
 
 	resp, err := s.Heartbeat(7, testCreatedAt)
 	if err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
-	if got.NodeID != "node-1" || got.KekID != "instance-1" || got.KeyIdx != 7 || !got.KeyCreatedAt.Equal(testCreatedAt) {
-		t.Errorf("request = %+v, want the node, instance, key-ring index and key stamp", got)
+	if got.NodeID != "node-1" || got.MountID != "mount-1" || got.KekID != "instance-1" || got.KeyIdx != 7 ||
+		!got.KeyCreatedAt.Equal(testCreatedAt) {
+		t.Errorf("request = %+v, want the node, mount, instance, key-ring index and key stamp", got)
 	}
 	if resp.Command != model.TKFSCommandRekey {
 		t.Errorf("response = %+v, want the command passed through", resp)

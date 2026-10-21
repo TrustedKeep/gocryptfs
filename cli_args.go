@@ -49,6 +49,8 @@ type argContainer struct {
 	_configCustom bool
 	// _ctlsockFd stores the control socket file descriptor (ctlsock stores the path)
 	_ctlsockFd net.Listener
+	// _mountID names this process's files in the key ring.
+	_mountID string
 	// _forceOwner is, if non-nil, a parsed, validated Owner (as opposed to the string above)
 	_forceOwner *fuse.Owner
 

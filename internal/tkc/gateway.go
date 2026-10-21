@@ -36,10 +36,9 @@ type TKFSDataKey struct {
 	CreatedAt time.Time
 }
 
-// instanceIdentity is a connector's TKFS identity: the id of the KEK that wraps this filesystem's data
-// keys. It is empty on a cipherdir that has never mounted, and is established either by the generate
-// that mints that KEK or by the key ring a later mount reads it back from. Guarded because the
-// heartbeat goroutine reads it while a ctlsock-driven rotation can be inside generate.
+// instanceIdentity is a connector's TKFS identity, the id of the KEK that wraps this filesystem's data
+// keys, set by AdoptIdentity once the key ring names it. Guarded because the heartbeat goroutine reads
+// it while a ctlsock-driven rotation can be inside generate.
 type instanceIdentity struct {
 	mu sync.RWMutex
 	id string
@@ -51,9 +50,8 @@ func (i *instanceIdentity) get() string {
 	return i.id
 }
 
-// adopt records an identity learned from a mint or from the key ring. Adopting the same id again is
-// how a rotation looks; a different one means the key service answered under a KEK this filesystem
-// does not use, which is an error rather than a silently kept first value.
+// adopt records the identity read from the key ring. A different id from the one held is an error
+// rather than a silently kept first value.
 func (i *instanceIdentity) adopt(id string) error {
 	if id == "" {
 		return nil
@@ -65,6 +63,17 @@ func (i *instanceIdentity) adopt(id string) error {
 		return nil
 	}
 	if i.id != id {
+		return fmt.Errorf("this filesystem's identity is KEK %q, but %q was offered", i.id, id)
+	}
+	return nil
+}
+
+// check confirms a generate answered under the KEK this filesystem uses. A mint has nothing to compare
+// yet, and its caller adopts the minted id only after winning the ring's first entry.
+func (i *instanceIdentity) check(id string) error {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	if i.id != "" && i.id != id {
 		return fmt.Errorf("this filesystem's identity is KEK %q, but %q was offered", i.id, id)
 	}
 	return nil
@@ -83,8 +92,7 @@ type DataKeyConnector interface {
 	// AdoptIdentity tells the connector this filesystem's identity, read back from its key ring.
 	// A non-empty id that contradicts one already held is an error.
 	AdoptIdentity(id string) error
-	// Close releases the connector's resources: network connections for the real
-	// connectors, the bbolt handle for the mock. Called from the unmount teardown.
+	// Close releases the connector's network connections. Called from the unmount teardown.
 	Close() error
 }
 

@@ -79,8 +79,8 @@ rotate the way file content does — forward, as inodes get their first xattr.
 The index is in the marker's *name*, not its value, because `Listxattr` and `Setxattr` must work without
 read permission (upstream's `TestList0000File`, `TestSet0200File`), and listing names needs none. An inode
 with encrypted names but no marker is corrupt: its names are refused, not decrypted under a guessed index.
-A mutex around the stamping keeps two concurrent first sets from stamping two indices, which one process
-per filesystem (§15.1) makes sufficient.
+A mutex around the stamping keeps two concurrent first sets from stamping two indices; under
+`-sharedstorage`, Phase 3.5 adds a cross-mount lock (`phase-3.5-sharedstorage.md` §7).
 
 An earlier revision pinned xattr names to ring index 0 in every mode instead: correct, but they never
 rotated.
@@ -652,7 +652,8 @@ carries the audit action (`NewAction(r, "...").Start()` + `defer action.Complete
 admin mutation does.
 
 `GET <versionPrefix>/tkfsdatakey/instance/:kekID` proxies keep's registry record, which is where that
-index is read back. gatehouse exposed no instance read at all before, so without it a pulled rekey would be
+index is read back. *(Superseded by Phase 3.5, `phase-3.5-sharedstorage.md` §10: keep keeps one record per
+mount, an instance is the mounts under its KEK id, and one mount record can be deleted on its own.)* gatehouse exposed no instance read at all before, so without it a pulled rekey would be
 unobservable from the admin plane. Beside it, also `RequireAdmin` and proxied to keep:
 `GET <versionPrefix>/tkfsdatakey/instances` lists the registry, and
 `DELETE <versionPrefix>/tkfsdatakey/instance/:kekID` forgets one record along with any rekey pending
@@ -748,7 +749,9 @@ cross-gateway-visible store in this codebase besides the optional Redis credenti
 where every other object that has to be visible from any gateway already lives — the TKFS trust set
 included — for exactly this reason.
 
-**One keep object per instance, keyed by `KekID` — not a single registry object.** keep's existing
+**One keep object per instance, keyed by `KekID` — not a single registry object.** *(Superseded by Phase 3.5,
+`phase-3.5-sharedstorage.md` §10: one object per mount, keyed by `KekID` and NodeID, upserted with a read
+for `FirstSeen`.)* keep's existing
 policy write lock is explicitly process-local and is justified by the traffic being low-contention
 admin-plane writes (keep `web/tkfspolicy.go`, `tkfsPolicyWriteMu`: it serializes them "within this
 process").
@@ -959,8 +962,8 @@ keyspaces while the DN was a component, so flipping a filesystem between `-searc
 a second KEK and refused every earlier entry. Both now name the KEK by the same id, so the two agree. And
 shared storage no longer assumes a shared DN: hosts mounting one cipherdir in turn under *different* cert
 DNs used to compose different keyspaces and each append entries the other could not unwrap. They now share
-the identity, because they share the `KR` that carries it. (Mounting it on two hosts at once is still
-unsupported; see the one-mount rule in §15.1.) What replaces both is the soft-isolation cost
+the identity, because they share the `KR` that carries it. (Mounting it on several hosts at once is
+Phase 3.5's `-sharedstorage`.) What replaces both is the soft-isolation cost
 above — the same property that makes the routes agree makes an asserted identity sufficient to reach a
 KEK.
 
@@ -1365,7 +1368,9 @@ Things that were not visible from code reading and change the picture rather tha
   model changed underneath: a ring written before this phase names a KEK minted under the old scoped path,
   which no longer resolves. Re-`init` and copy the data across; consistent with §0.9.
 
-- **A second mount of a mounted filesystem is refused.** Two writers that cannot see each other both append
+- **A second mount of a mounted filesystem is refused.** *(Superseded by Phase 3.5,
+  `phase-3.5-sharedstorage.md`: the ring is a directory of write-once entries, `-sharedstorage` mounts
+  coexist, and only a non-shared mount still refuses others.)* Two writers that cannot see each other both append
   at the same index and the ring is rewritten whole, so the loser keeps stamping an index whose key is in no
   ring; two racing first mounts each generate, and one key ends up in no ring at all. Every mount holds an
   exclusive `flock` on the key ring's directory for the life of the process (the ring itself is replaced by
