@@ -71,7 +71,7 @@ func Twice(extpass []string, passfile []string) ([]byte, error) {
 // Exits on read error or empty result.
 func readPasswordTerminal(prompt string) ([]byte, error) {
 	fd := int(os.Stdin.Fd())
-	fmt.Fprintf(os.Stderr, prompt)
+	fmt.Fprint(os.Stderr, prompt)
 	// term.ReadPassword removes the trailing newline
 	p, err := term.ReadPassword(fd)
 	if err != nil {
