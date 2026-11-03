@@ -11,6 +11,7 @@ package tkc
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -111,3 +112,48 @@ var ErrSharedStorageRefused = fmt.Errorf("%w: it requires instance binding, whic
 // instance — a build that predates a route still serves the ones it has — so it is neither a refusal
 // nor an outage.
 var ErrNotImplemented = errors.New("the key service does not implement this route")
+
+// ErrUnauthenticated wraps an HTTP 401: the key service did not accept this instance's credentials
+// (a search mount's tenant token).
+var ErrUnauthenticated = errors.New("the key service did not accept this instance's credentials")
+
+// certRejectionAlerts are the TLS alerts a server sends when it will not accept the client
+// certificate. Go reports a peer's alert only as text ("remote error: tls: ..."), with no type to
+// match on.
+var certRejectionAlerts = []string{
+	"remote error: tls: bad certificate",
+	// Also matches "unknown certificate authority". certificate_unknown and unsupported_certificate are
+	// what OpenSSL-, BoringSSL- and Java-based TLS terminators send for a rejected client certificate.
+	"remote error: tls: unknown certificate",
+	"remote error: tls: unsupported certificate",
+	"remote error: tls: certificate required",
+	"remote error: tls: revoked certificate",
+	"remote error: tls: expired certificate",
+	"remote error: tls: access denied",
+}
+
+// ErrCertRejected wraps a transport error that was a TLS alert refusing this instance's client
+// certificate. Connectors tag it where the request failed (see transportErr), so text in a response
+// body, such as a proxy repeating its own upstream TLS failure in a 5xx, is never mistaken for one.
+var ErrCertRejected = errors.New("the key service refused this instance's client certificate")
+
+// transportErr wraps a failed request's transport error, tagging it ErrCertRejected when it is a TLS
+// alert refusing the client certificate.
+func transportErr(err error) error {
+	msg := err.Error()
+	for _, alert := range certRejectionAlerts {
+		if strings.Contains(msg, alert) {
+			return fmt.Errorf("%w: %w", ErrCertRejected, err)
+		}
+	}
+	return err
+}
+
+// CredentialsRejected reports whether err shows the key service rejecting this instance's
+// credentials, as opposed to being unreachable: a 401, or a TLS alert refusing the client
+// certificate, which is what removing the instance's CA from the gateway's trust set produces. A
+// restart presents the same credentials and gets the same answer, so a mount that dies on one exits
+// as revoked, not as an outage.
+func CredentialsRejected(err error) bool {
+	return errors.Is(err, ErrUnauthenticated) || errors.Is(err, ErrCertRejected)
+}

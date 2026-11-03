@@ -201,3 +201,18 @@ func TestWipeConcurrent(t *testing.T) {
 		t.Error("a block must not decrypt after a wipe")
 	}
 }
+
+// CheckKey says whether this mount can use a key-ring index: not a hole, and not past the ring.
+func TestCheckKey(t *testing.T) {
+	cc := cryptocore.New(make([]byte, cryptocore.KeyLen), cryptocore.BackendGoGCM, DefaultIVBits)
+	ce := New(cc, []cipher.AEAD{cc.AEADCipher, nil}, DefaultBS)
+	if err := ce.CheckKey(0); err != nil {
+		t.Errorf("held key: %v", err)
+	}
+	if err := ce.CheckKey(1); err == nil {
+		t.Error("a hole must not be usable")
+	}
+	if err := ce.CheckKey(2); err == nil {
+		t.Error("an index past the ring must not be usable")
+	}
+}

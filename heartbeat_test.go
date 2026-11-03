@@ -80,6 +80,8 @@ func loadRing(t *testing.T, r *keyRotator) *configfile.KeyRing {
 type fakeHeartbeater struct {
 	answer model.TKFSHeartbeatResponse
 	err    error
+	// failFirst, if set, makes only the first failFirst beats answer err; later ones answer answer.
+	failFirst int
 	// laterErr, if set, answers every beat after the first.
 	laterErr error
 	reported []uint16
@@ -91,6 +93,9 @@ func (f *fakeHeartbeater) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (mode
 	f.stamps = append(f.stamps, keyCreatedAt)
 	if f.laterErr != nil && len(f.reported) > 1 {
 		return model.TKFSHeartbeatResponse{}, f.laterErr
+	}
+	if f.failFirst > 0 && len(f.reported) > f.failFirst {
+		return f.answer, nil
 	}
 	return f.answer, f.err
 }
@@ -174,16 +179,40 @@ func TestHeartbeatClassify(t *testing.T) {
 	})
 }
 
-// A gateway that cannot answer a heartbeat cannot revoke this instance either, so a beat that finds
-// the route gone ends the mount rather than serving on with revocation quietly off.
-func TestHeartbeatMissingRouteKills(t *testing.T) {
+// The pre-mount heartbeat showed the key service has the route, so a 404/501 at runtime is a proxy, a
+// load balancer or one node mid-deploy: an outage that spends the three-strike budget, not an unmount.
+func TestHeartbeatMissingRouteIsAnOutage(t *testing.T) {
 	m := &keyServiceMonitor{}
-	die, reason := m.classify(fmt.Errorf("gateway: %w", tkc.ErrNotImplemented))
-	if !die {
-		t.Error("a missing route must end the mount")
+	missing := fmt.Errorf("gateway: %w", tkc.ErrNotImplemented)
+	for i := 1; i < heartbeatFailureLimit; i++ {
+		if die, _ := m.classify(missing); die {
+			t.Fatalf("missing route %d must not end the mount", i)
+		}
 	}
-	if reason == "" {
-		t.Error("a missing route should carry a reason to log")
+	if die, reason := m.classify(missing); !die || reason == "" {
+		t.Errorf("missing route %d must end the mount with a reason, got %v %q", heartbeatFailureLimit, die, reason)
+	}
+}
+
+// Three failed beats in a row end the mount with 36, an outage a restart may get past, not 33, which
+// a systemd unit is told never to restart.
+func TestHeartbeatOutageExitsUnreachable(t *testing.T) {
+	for _, err := range []error{errors.New("connection refused"), fmt.Errorf("gateway: %w", tkc.ErrNotImplemented)} {
+		hb := &fakeHeartbeater{err: err}
+		m, srv, code := newTestMonitor(t, newTestRotator(t, ""), hb)
+		for i := 1; i < heartbeatFailureLimit; i++ {
+			m.beat()
+			if *code != -1 {
+				t.Fatalf("%v: beat %d exited %d", err, i, *code)
+			}
+		}
+		m.beat()
+		if *code != exitcodes.KeyServiceUnreachable {
+			t.Errorf("%v: exit code = %d, want %d", err, *code, exitcodes.KeyServiceUnreachable)
+		}
+		if srv.unmounts != 1 {
+			t.Errorf("%v: unmounts = %d, want 1", err, srv.unmounts)
+		}
 	}
 }
 
@@ -256,7 +285,7 @@ func TestHeartbeatRekeyReportRefusalExits(t *testing.T) {
 	}{
 		{"403", fmt.Errorf("gateway: %w", tkc.ErrDenied), exitcodes.Revoked},
 		{"sharedstorage", fmt.Errorf("gateway: %w", tkc.ErrSharedStorageRefused), exitcodes.SharedStorageRefused},
-		{"missing route", fmt.Errorf("gateway: %w", tkc.ErrNotImplemented), exitcodes.Revoked},
+		{"missing route", fmt.Errorf("gateway: %w", tkc.ErrNotImplemented), -1},
 		{"outage", errors.New("connection refused"), -1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -273,12 +302,38 @@ func TestHeartbeatRekeyReportRefusalExits(t *testing.T) {
 	}
 }
 
-// A rekey whose rotation fails other than by a refusal ends the mount with 34.
+// failGenerate makes the rotator's key generation fail as an outage would, until the returned func is called.
+func failGenerate(r *keyRotator) (restore func()) {
+	r.generate = func() (tkc.TKFSDataKey, error) { return tkc.TKFSDataKey{}, errors.New("503 Service Unavailable") }
+	return func() { r.generate = nil }
+}
+
+// A rekey whose rotation fails as an outage is retried: the directive stays pending, so each tick brings
+// it back. Only heartbeatFailureLimit ticks in a row with a failure end the mount, with 34.
+func TestHeartbeatRekeyOutageRetries(t *testing.T) {
+	r := newTestRotator(t, "")
+	failGenerate(r)
+	hb := &fakeHeartbeater{answer: model.TKFSHeartbeatResponse{Command: model.TKFSCommandRekey}}
+	m, srv, code := newTestMonitor(t, r, hb)
+	for i := 1; i < heartbeatFailureLimit; i++ {
+		m.tick()
+		if *code != -1 || srv.unmounts != 0 {
+			t.Fatalf("failed rotation %d ended the mount: code %d", i, *code)
+		}
+	}
+	m.tick()
+	if *code != exitcodes.RotateFailed {
+		t.Errorf("exit code = %d, want %d", *code, exitcodes.RotateFailed)
+	}
+}
+
+// A rotation that fails after the key service answered is not retried: here the key service wrapped the
+// new key under a KEK other than this filesystem's, and a retry would only mint another.
 func TestHeartbeatRekeyFailureExits(t *testing.T) {
 	r := newTestRotator(t, "not-this-instances-kek")
 	hb := &fakeHeartbeater{answer: model.TKFSHeartbeatResponse{Command: model.TKFSCommandRekey}}
 	m, srv, code := newTestMonitor(t, r, hb)
-	m.beat()
+	m.tick()
 	if *code != exitcodes.RotateFailed {
 		t.Errorf("exit code = %d, want %d", *code, exitcodes.RotateFailed)
 	}
@@ -332,11 +387,16 @@ func TestVerifyKeyService(t *testing.T) {
 		wantKeys     int
 		wantReported []uint16
 	}{
-		{"missing route", fakeHeartbeater{err: fmt.Errorf("gateway: %w", tkc.ErrNotImplemented)}, false, exitcodes.Revoked, 1, []uint16{0}},
+		// A missing route and an outage are retried; refusals are not.
+		{"missing route", fakeHeartbeater{err: fmt.Errorf("gateway: %w", tkc.ErrNotImplemented)}, false, exitcodes.KeyServiceUnreachable, 1, []uint16{0, 0, 0, 0}},
+		{"certificate rejected", fakeHeartbeater{err: fmt.Errorf("gateway: %w", tkc.ErrCertRejected)}, false, exitcodes.Revoked, 1, []uint16{0, 0, 0, 0}},
+		// A rejected token is a decision, like a 403: not retried.
+		{"token rejected", fakeHeartbeater{err: fmt.Errorf("search: %w", tkc.ErrUnauthenticated)}, false, exitcodes.Revoked, 1, []uint16{0}},
 		{"refused", fakeHeartbeater{err: fmt.Errorf("gateway: %w", tkc.ErrDenied)}, false, exitcodes.Revoked, 1, []uint16{0}},
 		{"sharedstorage refused", fakeHeartbeater{err: fmt.Errorf("gateway: %w", tkc.ErrSharedStorageRefused)}, false,
 			exitcodes.SharedStorageRefused, 1, []uint16{0}},
-		{"unreachable", fakeHeartbeater{err: errors.New("connection refused")}, false, exitcodes.Revoked, 1, []uint16{0}},
+		{"unreachable", fakeHeartbeater{err: errors.New("connection refused")}, false, exitcodes.KeyServiceUnreachable, 1, []uint16{0, 0, 0, 0}},
+		{"recovers on a retry", fakeHeartbeater{err: errors.New("503"), failFirst: 2}, false, -1, 1, []uint16{0, 0, 0}},
 		{"answered", fakeHeartbeater{}, false, -1, 1, []uint16{0}},
 		{"rekey", fakeHeartbeater{answer: rekey}, false, -1, 2, []uint16{0, 1}},
 		{"rekey on -ro", fakeHeartbeater{answer: rekey}, true, -1, 1, []uint16{0}},
@@ -347,6 +407,9 @@ func TestVerifyKeyService(t *testing.T) {
 			m, _, code := newTestMonitor(t, r, &c.hb)
 			m.srv = nil
 			m.readOnly = c.readOnly
+			prevDelay := firstHeartbeatRetryDelay
+			firstHeartbeatRetryDelay = 0
+			t.Cleanup(func() { firstHeartbeatRetryDelay = prevDelay })
 			m.verifyKeyService()
 			if *code != c.wantCode {
 				t.Errorf("exit code = %d, want %d", *code, c.wantCode)
@@ -370,5 +433,177 @@ func TestResolveRotateOpThreshold(t *testing.T) {
 	}
 	if got := resolveRotateOpThreshold(1000); got != 1000 {
 		t.Errorf("1000 = %d, want 1000", got)
+	}
+}
+
+// A rotation the op counter demands is retried at the next flush on an outage, and only
+// heartbeatFailureLimit failures in a row end the mount.
+func TestFlushOpCountsRetriesAFailedRotation(t *testing.T) {
+	r := newTestRotator(t, "")
+	failGenerate(r)
+	m, srv, code := newTestMonitor(t, r, nil)
+	m.opThreshold = 1
+	for i := 1; i <= heartbeatFailureLimit; i++ {
+		r.cEnc.EncryptBlock(make([]byte, 16), 0, nil, r.cEnc.WriteKeyIdx())
+		m.tick()
+		if i < heartbeatFailureLimit && (*code != -1 || srv.unmounts != 0) {
+			t.Fatalf("failed rotation %d ended the mount: code %d", i, *code)
+		}
+	}
+	if *code != exitcodes.RotateFailed {
+		t.Errorf("exit code = %d, want %d", *code, exitcodes.RotateFailed)
+	}
+}
+
+// A refusal during a demanded rotation still ends the mount at once.
+func TestRotationRefusalEndsTheMount(t *testing.T) {
+	m, srv, code := newTestMonitor(t, newTestRotator(t, ""), nil)
+	m.rotationFailed("rekey", fmt.Errorf("gateway: %w", tkc.ErrDenied))
+	if *code != exitcodes.Revoked || srv.unmounts != 1 {
+		t.Errorf("exit code %d, %d unmounts; want %d and 1", *code, srv.unmounts, exitcodes.Revoked)
+	}
+}
+
+// A filesystem made with the mock key store mounts only when the mount command asks for the mock too.
+func TestCheckMockKMS(t *testing.T) {
+	if err := checkMockKMS(false, false); err != nil {
+		t.Errorf("a real key store: %v", err)
+	}
+	if err := checkMockKMS(true, false); err == nil {
+		t.Error("a mock config without -mock-kms must be refused")
+	}
+	if err := checkMockKMS(true, true); err != nil {
+		t.Errorf("a mock config with -mock-kms: %v", err)
+	}
+}
+
+// A rekey and the op counter failing in the same tick are one strike, not two.
+func TestRotationFailuresCountOncePerTick(t *testing.T) {
+	r := newTestRotator(t, "")
+	failGenerate(r)
+	hb := &fakeHeartbeater{answer: model.TKFSHeartbeatResponse{Command: model.TKFSCommandRekey}}
+	m, _, code := newTestMonitor(t, r, hb)
+	m.opThreshold = 1
+	for i := 1; i < heartbeatFailureLimit; i++ {
+		r.cEnc.EncryptBlock(make([]byte, 16), 0, nil, r.cEnc.WriteKeyIdx())
+		m.tick()
+		if *code != -1 {
+			t.Fatalf("tick %d ended the mount with %d; both failures in one tick are one strike", i, *code)
+		}
+	}
+	if m.rotateFailures != heartbeatFailureLimit-1 {
+		t.Errorf("rotateFailures = %d, want %d", m.rotateFailures, heartbeatFailureLimit-1)
+	}
+}
+
+// A tick with no failed rotation, such as after a -ctlsock Rotate settled what was demanded, clears the
+// count, so a later outage starts a fresh three strikes.
+func TestRotationFailureCountResetsWhenNothingFails(t *testing.T) {
+	r := newTestRotator(t, "")
+	restore := failGenerate(r)
+	hb := &fakeHeartbeater{answer: model.TKFSHeartbeatResponse{Command: model.TKFSCommandRekey}}
+	m, _, code := newTestMonitor(t, r, hb)
+	m.tick()
+	m.tick()
+	hb.answer = model.TKFSHeartbeatResponse{}
+	m.tick()
+	if m.rotateFailures != 0 {
+		t.Fatalf("rotateFailures = %d after a quiet tick, want 0", m.rotateFailures)
+	}
+	hb.answer = model.TKFSHeartbeatResponse{Command: model.TKFSCommandRekey}
+	m.tick()
+	if *code != -1 {
+		t.Errorf("one new failure after the reset ended the mount with %d", *code)
+	}
+	restore()
+}
+
+// A rekey the pre-mount heartbeat brings back is carried out before anything is served, so failing it
+// ends the mount even when it is an outage.
+func TestVerifyKeyServiceRekeyFailureIsFatal(t *testing.T) {
+	r := newTestRotator(t, "")
+	failGenerate(r)
+	hb := &fakeHeartbeater{answer: model.TKFSHeartbeatResponse{Command: model.TKFSCommandRekey}}
+	m, _, code := newTestMonitor(t, r, hb)
+	m.srv = nil
+	m.verifyKeyService()
+	if *code != exitcodes.RotateFailed {
+		t.Errorf("exit code = %d, want %d", *code, exitcodes.RotateFailed)
+	}
+}
+
+// A mount that dies of failures that were the key service rejecting its credentials exits as revoked,
+// which a systemd unit does not restart; any other outage exits 36, which it does.
+func TestOutageExit(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want int
+	}{
+		{errors.New("connection refused"), exitcodes.KeyServiceUnreachable},
+		{fmt.Errorf("gateway: %w", tkc.ErrNotImplemented), exitcodes.KeyServiceUnreachable},
+		{fmt.Errorf("gateway: %w", tkc.ErrCertRejected), exitcodes.Revoked},
+		// Text alone is not a rejection: a 5xx body can quote an upstream TLS failure.
+		{errors.New(`HTTP 502: dial upstream: remote error: tls: bad certificate`), exitcodes.KeyServiceUnreachable},
+		{fmt.Errorf("search: not authorized (HTTP 401): %w", tkc.ErrUnauthenticated), exitcodes.Revoked},
+	} {
+		if got := outageExit(c.err); got != c.want {
+			t.Errorf("outageExit(%v) = %d, want %d", c.err, got, c.want)
+		}
+	}
+}
+
+// The pre-mount retries stop once another wait would pass firstHeartbeatBudget, however many attempts
+// are left, so a slow key service cannot hold the mount past systemd's start timeout.
+func TestFirstHeartbeatStopsAtItsBudget(t *testing.T) {
+	prevDelay, prevBudget := firstHeartbeatRetryDelay, firstHeartbeatBudget
+	firstHeartbeatRetryDelay, firstHeartbeatBudget = time.Millisecond, 0
+	t.Cleanup(func() { firstHeartbeatRetryDelay, firstHeartbeatBudget = prevDelay, prevBudget })
+	hb := &fakeHeartbeater{err: errors.New("connection refused")}
+	m, _, code := newTestMonitor(t, newTestRotator(t, ""), hb)
+	m.srv = nil
+	m.verifyKeyService()
+	if len(hb.reported) != 1 {
+		t.Errorf("attempts = %d, want 1 once the budget is spent", len(hb.reported))
+	}
+	if *code != exitcodes.KeyServiceUnreachable {
+		t.Errorf("exit code = %d, want %d", *code, exitcodes.KeyServiceUnreachable)
+	}
+}
+
+// A tick whose heartbeat failed clears nothing: it could not learn whether the rekey is still pending,
+// so a key service alternating failed beats and failed rotations still reaches three strikes.
+func TestFailedHeartbeatDoesNotClearRotationFailures(t *testing.T) {
+	r := newTestRotator(t, "")
+	failGenerate(r)
+	rekey := model.TKFSHeartbeatResponse{Command: model.TKFSCommandRekey}
+	hb := &fakeHeartbeater{answer: rekey}
+	m, _, code := newTestMonitor(t, r, hb)
+	for i := 1; i <= heartbeatFailureLimit; i++ {
+		hb.err = nil
+		m.tick() // heartbeat answers, rotation fails
+		if i == heartbeatFailureLimit {
+			break
+		}
+		hb.err = errors.New("connection refused")
+		m.tick() // heartbeat fails: must not clear the rotation strikes
+	}
+	if *code != exitcodes.RotateFailed {
+		t.Errorf("exit code = %d, want %d after %d failed rotations between failed beats",
+			*code, exitcodes.RotateFailed, heartbeatFailureLimit)
+	}
+}
+
+// Before mounting, a key already past its op budget must not start serving, so a failed rotation ends
+// the mount even as an outage.
+func TestFlushOpCountsBeforeMountRotationFailureIsFatal(t *testing.T) {
+	r := newTestRotator(t, "")
+	failGenerate(r)
+	m, _, code := newTestMonitor(t, r, nil)
+	m.srv = nil
+	m.opThreshold = 1
+	r.cEnc.EncryptBlock(make([]byte, 16), 0, nil, r.cEnc.WriteKeyIdx())
+	m.flushOpCountsBeforeMount()
+	if *code != exitcodes.RotateFailed {
+		t.Errorf("exit code = %d, want %d", *code, exitcodes.RotateFailed)
 	}
 }

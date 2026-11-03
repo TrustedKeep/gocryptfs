@@ -230,8 +230,10 @@ func (s *searchConnector) Close() error {
 
 // post sends body as JSON to a KMS data-key route, trying the configured hosts in random order
 // until one answers. Each request carries the tenant token in addition to the mTLS client cert.
-// A 401/403/404 is returned immediately (retrying other hosts will not fix an authorization failure
-// or a route this build does not serve); transport and 5xx errors fall through to the next host.
+// A 401/403 is returned immediately: another host will not fix an authorization failure. A 404/501
+// falls through to the next host like a transport or 5xx error, since one keep node without the
+// route, or a proxy in front of it, says nothing about the others; ErrNotImplemented is returned
+// only when every host answered that way.
 func (s *searchConnector) post(path string, body, out any) error {
 	if s.client == nil {
 		return fmt.Errorf("search client not initialized")
@@ -241,6 +243,10 @@ func (s *searchConnector) post(path string, body, out any) error {
 		return err
 	}
 	var lastErr error
+	// credErr is the first credential rejection seen. It is returned over lastErr, so whether this
+	// instance was rejected does not depend on which host the random order happened to try last.
+	var credErr error
+	notImplemented := 0
 	for _, idx := range rand.Perm(len(s.kmsHosts)) {
 		host := s.kmsHosts[idx]
 		url := fmt.Sprintf("https://%s:%d%s", host, searchKMSPort, path)
@@ -252,7 +258,10 @@ func (s *searchConnector) post(path string, body, out any) error {
 		req.Header.Set(kmsclient.HeaderTenantToken, s.token)
 		resp, err := s.client.Do(req)
 		if err != nil {
-			lastErr = fmt.Errorf("search %s @ %s: %w", path, host, err)
+			lastErr = fmt.Errorf("search %s @ %s: %w", path, host, transportErr(err))
+			if credErr == nil && CredentialsRejected(lastErr) {
+				credErr = lastErr
+			}
 			continue
 		}
 		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxGatewayResponseBytes))
@@ -267,10 +276,12 @@ func (s *searchConnector) post(path string, body, out any) error {
 			// spend a retry budget on it.
 			return fmt.Errorf("search %s: not authorized (HTTP 403): %w: %s", path, ErrDenied, bytes.TrimSpace(respBody))
 		case resp.StatusCode == http.StatusUnauthorized:
-			return fmt.Errorf("search %s: not authorized (HTTP 401): tenant token rejected: %s", path, bytes.TrimSpace(respBody))
+			return fmt.Errorf("search %s: not authorized (HTTP 401): tenant token rejected: %w: %s", path, ErrUnauthenticated, bytes.TrimSpace(respBody))
 		case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotImplemented:
-			// A route this keep does not serve
-			return fmt.Errorf("search %s: HTTP %d: %w: %s", path, resp.StatusCode, ErrNotImplemented, bytes.TrimSpace(respBody))
+			// A route this host does not serve; another may.
+			notImplemented++
+			lastErr = fmt.Errorf("search %s @ %s: HTTP %d: %s", path, host, resp.StatusCode, bytes.TrimSpace(respBody))
+			continue
 		case resp.StatusCode < 200 || resp.StatusCode >= 300:
 			lastErr = fmt.Errorf("search %s @ %s: HTTP %d: %s", path, host, resp.StatusCode, bytes.TrimSpace(respBody))
 			continue
@@ -279,6 +290,12 @@ func (s *searchConnector) post(path string, body, out any) error {
 			return fmt.Errorf("search %s: decoding response: %w", path, err)
 		}
 		return nil
+	}
+	if credErr != nil {
+		return credErr
+	}
+	if notImplemented == len(s.kmsHosts) {
+		return fmt.Errorf("%w: %v", ErrNotImplemented, lastErr)
 	}
 	return lastErr
 }

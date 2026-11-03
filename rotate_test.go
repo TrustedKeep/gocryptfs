@@ -147,6 +147,8 @@ func TestUnwrapDataKeyRetriesOutagesButNotRefusals(t *testing.T) {
 		{"recovers on the last attempt", errors.New("i/o timeout"), unwrapAttempts - 1, unwrapAttempts, false},
 		{"gives up after the budget", errors.New("connection refused"), unwrapAttempts + 5, unwrapAttempts, true},
 		{"a refusal is not retried", fmt.Errorf("gateway: %w", tkc.ErrDenied), 99, 1, true},
+		{"a rejected certificate is not retried", fmt.Errorf("gateway: %w", tkc.ErrCertRejected), 99, 1, true},
+		{"a 401 is not retried", fmt.Errorf("gateway: %w", tkc.ErrUnauthenticated), 99, 1, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -173,6 +175,13 @@ func TestKeyServiceExit(t *testing.T) {
 		{fmt.Errorf("gateway unwrap: %w", tkc.ErrDenied), exitcodes.Other, exitcodes.Revoked},
 		{fmt.Errorf("gateway generate: %w", tkc.ErrDenied), exitcodes.RotateFailed, exitcodes.Revoked},
 		{fmt.Errorf("gateway generate: %w", tkc.ErrSharedStorageRefused), exitcodes.RotateFailed, exitcodes.SharedStorageRefused},
+		// A first mount meets rejected credentials on generate or unwrap, before any heartbeat.
+		{fmt.Errorf("gateway generate: %w", tkc.ErrCertRejected), exitcodes.Other, exitcodes.Revoked},
+		{fmt.Errorf("gateway unwrap: %w", tkc.ErrCertRejected), exitcodes.Other, exitcodes.Revoked},
+		{fmt.Errorf("gateway unwrap: %w", tkc.ErrUnauthenticated), exitcodes.Other, exitcodes.Revoked},
+		{fmt.Errorf("gateway generate: %w", tkc.ErrCertRejected), exitcodes.RotateFailed, exitcodes.Revoked},
+		// Text alone is not a rejection: a 5xx body can quote an upstream TLS failure.
+		{errors.New(`HTTP 502: dial upstream: remote error: tls: bad certificate`), exitcodes.Other, exitcodes.Other},
 		{errors.New("connection refused"), exitcodes.Other, exitcodes.Other},
 		{errors.New("connection refused"), exitcodes.RotateFailed, exitcodes.RotateFailed},
 	} {

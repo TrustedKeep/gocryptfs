@@ -3,7 +3,7 @@ module github.com/rfjakob/gocryptfs/v2
 go 1.24.0
 
 require (
-	github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20261003010429-76be46815e7f
+	github.com/TrustedKeep/tkutils/v2 v2.16.3-0.20261103155832-419a384c738d
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/google/uuid v1.6.0
 	github.com/hanwen/go-fuse/v2 v2.8.0
@@ -24,6 +24,7 @@ require (
 	github.com/aws/smithy-go v1.25.1 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/fullsailor/pkcs7 v0.0.0-20190404230743-d7302db945fa // indirect
+	github.com/julienschmidt/httprouter v1.3.0 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect

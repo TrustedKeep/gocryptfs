@@ -1,17 +1,22 @@
 package test_helpers
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
 )
 
 // gocryptfs may hold up to maxCacheFds open for caching
@@ -40,6 +45,11 @@ func Mount(c string, p string, showOutput bool, extraArgs ...string) error {
 	// after, so a test that wants the endpoint can pass its own -health-check-port and win.
 	args := []string{"-q", "-wpanic", "-nosyslog", "-fg", "-health-check-port=-1", fmt.Sprintf("-notifypid=%d", os.Getpid())}
 	args = append(args, extraArgs...)
+	// A mock-key-store filesystem only mounts with -mock-kms (see checkMockKMS), and most tests create
+	// theirs with the mock, so add it for them rather than at every call site.
+	if usesMockKMS(c) && !slices.ContainsFunc(extraArgs, func(a string) bool { return strings.HasPrefix(strings.TrimLeft(a, "-"), "mock-kms") }) {
+		args = append(args, "-mock-kms")
+	}
 	if _, isset := os.LookupEnv("FUSEDEBUG"); isset {
 		fmt.Println("FUSEDEBUG is set, enabling -fusedebug")
 		args = append(args, "-fusedebug")
@@ -262,4 +272,15 @@ func ListFds(pid int, prefix string) []string {
 	}
 	out = append(out, fmt.Sprintf("(filtered: %s)", strings.Join(filtered, ", ")))
 	return out
+}
+
+// usesMockKMS reports whether the filesystem in cipherdir c was created with the mock key store,
+// reading its default config file.
+func usesMockKMS(c string) bool {
+	data, err := os.ReadFile(filepath.Join(c, configfile.ConfDefaultName))
+	if err != nil {
+		return false
+	}
+	var cf struct{ MockKMS bool }
+	return json.Unmarshal(data, &cf) == nil && cf.MockKMS
 }

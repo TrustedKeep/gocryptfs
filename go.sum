@@ -1,5 +1,5 @@
-github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20261003010429-76be46815e7f h1:+GPbbdQaA8m8BdaXbTMYwgLHz3B+T6eqCOQ1FCou8pc=
-github.com/TrustedKeep/tkutils/v2 v2.16.2-0.20261003010429-76be46815e7f/go.mod h1:KgOXuvs+vE340q5fX/09WNGAZmYtuMTYTZ6KWht1Fcs=
+github.com/TrustedKeep/tkutils/v2 v2.16.3-0.20261103155832-419a384c738d h1:M5hhZ0WadSXStUtFdgSzbR4AkPfI+gKpStNgFequ9T8=
+github.com/TrustedKeep/tkutils/v2 v2.16.3-0.20261103155832-419a384c738d/go.mod h1:KgOXuvs+vE340q5fX/09WNGAZmYtuMTYTZ6KWht1Fcs=
 github.com/aws/aws-sdk-go-v2 v1.41.7 h1:DWpAJt66FmnnaRIOT/8ASTucrvuDPZASqhhLey6tLY8=
 github.com/aws/aws-sdk-go-v2 v1.41.7/go.mod h1:4LAfZOPHNVNQEckOACQx60Y8pSRjIkNZQz1w92xpMJc=
 github.com/aws/aws-sdk-go-v2/config v1.31.12 h1:pYM1Qgy0dKZLHX2cXslNacbcEFMkDMl+Bcj5ROuS6p8=
@@ -61,6 +61,8 @@ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/hanwen/go-fuse/v2 v2.8.0 h1:wV8rG7rmCz8XHSOwBZhG5YcVqcYjkzivjmbaMafPlAs=
 github.com/hanwen/go-fuse/v2 v2.8.0/go.mod h1:yE6D2PqWwm3CbYRxFXV9xUd8Md5d6NG0WBs5spCswmI=
+github.com/julienschmidt/httprouter v1.3.0 h1:U0609e9tgbseu3rBINet9P48AI/D3oJs4dN7jwJOQ1U=
+github.com/julienschmidt/httprouter v1.3.0/go.mod h1:JR6WtHb+2LUe8TCKY3cZOxFyyO8IZAc4RVcycCCAKdM=
 github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0SNc=
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/mitchellh/go-ps v1.0.0 h1:i6ampVEEF4wQFF+bkYfwYgY+F/uYJDktmvLPf7qIgjc=

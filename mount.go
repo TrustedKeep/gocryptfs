@@ -73,6 +73,10 @@ func doMount(args *argContainer) {
 	if err != nil {
 		exitcodes.Exit(err)
 	}
+	if err := checkMockKMS(cf.MockKMS, args.mockKMS); err != nil {
+		tlog.Fatal.Printf("%v", err)
+		os.Exit(exitcodes.Usage)
+	}
 	// Before anything that a second mount would collide on, so this is the error it reports. The wait
 	// covers the previous mount of this filesystem, which exits a moment after its unmount returns.
 	ringLock, err := configfile.LockKeyRing(args.config, time.Second)
@@ -171,7 +175,7 @@ func doMount(args *argContainer) {
 	// instance either, and a fatal exit here leaves no mountpoint behind.
 	m.verifyKeyService()
 	// Also before mounting, so a count earlier mounts left past the threshold rotates now.
-	m.flushOpCounts()
+	m.flushOpCountsBeforeMount()
 
 	// Initialize go-fuse FUSE server
 	srv := initGoFuse(fs, args)
@@ -506,12 +510,12 @@ const unwrapAttempts = 3
 // unwrapRetryDelay is the wait before the first retry, doubled after each one. Tests shorten it.
 var unwrapRetryDelay = 500 * time.Millisecond
 
-// unwrapDataKey unwraps one ring entry, retrying anything but a refusal (ErrDenied): that is the key
-// service deciding, and asking again would only repeat the answer.
+// unwrapDataKey unwraps one ring entry, retrying anything but a refusal (ErrDenied, or rejected
+// credentials): that is the key service deciding, and asking again would only repeat the answer.
 func unwrapDataKey(dk tkc.DataKeyConnector, idx uint16, e configfile.KeyRingEntry) (key []byte, err error) {
 	for attempt := 1; ; attempt++ {
 		key, err = dk.UnwrapTKFSDataKey(e.KeyID, e.Ciphertext)
-		if err == nil || errors.Is(err, tkc.ErrDenied) || attempt >= unwrapAttempts {
+		if err == nil || errors.Is(err, tkc.ErrDenied) || tkc.CredentialsRejected(err) || attempt >= unwrapAttempts {
 			return key, err
 		}
 		delay := unwrapRetryDelay << (attempt - 1)
@@ -574,12 +578,15 @@ func buildKeySets(kr *configfile.KeyRing, freshKey []byte, backend cryptocore.AE
 }
 
 // keyServiceExit is the exit code for a key-service failure that ends the mount: a refusal is a revocation,
-// or SharedStorageRefused for -sharedstorage, and anything else exits code.
+// or SharedStorageRefused for -sharedstorage, and anything else exits code. Rejected credentials (a 401,
+// or a TLS alert refusing the client certificate) count as a refusal: a restart presents the same
+// credentials, so they exit as revoked, which a systemd unit does not restart, wherever the mount meets
+// them. A first mount meets them on generate or unwrap, before its first heartbeat.
 func keyServiceExit(err error, code int) int {
 	switch {
 	case errors.Is(err, tkc.ErrSharedStorageRefused):
 		return exitcodes.SharedStorageRefused
-	case errors.Is(err, tkc.ErrDenied):
+	case errors.Is(err, tkc.ErrDenied), tkc.CredentialsRejected(err):
 		return exitcodes.Revoked
 	}
 	return code
@@ -891,4 +898,21 @@ func getFusermountPath() (path string, err error) {
 	}
 
 	return "", fmt.Errorf("fusermount binary not found: %v", err)
+}
+
+// checkMockKMS refuses to mount a filesystem whose config selects the mock key store unless the mount
+// command asks for it too. The mock keeps plaintext KEKs in a local file and has no heartbeat or
+// revocation, so a production mount must never land on it because of a field in gocryptfs.conf alone,
+// whether it was created with -mock-kms or edited afterwards.
+func checkMockKMS(configMock, flagMock bool) error {
+	if !configMock {
+		return nil
+	}
+	if !flagMock {
+		return errors.New("this filesystem uses the mock key store, which is for development only: it keeps " +
+			"plaintext keys on local disk and has no revocation. Pass -mock-kms to mount it anyway")
+	}
+	// Info, not Warn: -wpanic turns a warning into a panic, and every test mount uses the mock.
+	tlog.Info.Printf("Mounting with the mock key store: for development only, with no revocation")
+	return nil
 }

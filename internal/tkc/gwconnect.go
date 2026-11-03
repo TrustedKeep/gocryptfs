@@ -292,7 +292,7 @@ func (g *gwConnector) post(path string, body, out any) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("gateway %s: %w", path, err)
+		return fmt.Errorf("gateway %s: %w", path, transportErr(err))
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxGatewayResponseBytes))
@@ -307,7 +307,7 @@ func (g *gwConnector) post(path string, body, out any) error {
 		// retrying it.
 		return fmt.Errorf("gateway %s: not authorized (HTTP 403): %w: %s", path, ErrDenied, bytes.TrimSpace(respBody))
 	case resp.StatusCode == http.StatusUnauthorized:
-		return fmt.Errorf("gateway %s: not authorized (HTTP 401): %s", path, bytes.TrimSpace(respBody))
+		return fmt.Errorf("gateway %s: not authorized (HTTP 401): %w: %s", path, ErrUnauthenticated, bytes.TrimSpace(respBody))
 	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotImplemented:
 		return fmt.Errorf("gateway %s: HTTP %d: %w: %s", path, resp.StatusCode, ErrNotImplemented, bytes.TrimSpace(respBody))
 	case resp.StatusCode < 200 || resp.StatusCode >= 300:

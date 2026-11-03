@@ -155,6 +155,15 @@ func (be *ContentEnc) OpCount() uint64 {
 	return be.keys.Load().ops.Load()
 }
 
+// CheckKey reports why content under key-ring index keyIdx cannot be encrypted or decrypted by this
+// mount, or nil when it can. A file's header names its own index, which may be a ring entry that
+// failed to unwrap at mount or one the mount never had, so a write to an existing file checks it
+// here first: doEncryptBlock treats an unusable index as a bug and panics.
+func (be *ContentEnc) CheckKey(keyIdx uint16) error {
+	_, err := be.aeadForKey(keyIdx)
+	return err
+}
+
 // aeadForKey selects the content AEAD for a key-ring index. On the read path keyIdx comes from a
 // file header and is therefore untrusted input, so an index this mount has no key for is an
 // error, not a panic.
@@ -351,9 +360,10 @@ func (be *ContentEnc) doEncryptBlock(plaintext []byte, blockNo uint64, fileID []
 	if len(nonce) != be.cryptoCore.IVLen {
 		log.Panic("wrong nonce length")
 	}
-	// Writes always use a key the mount holds (WriteKeyIdx()), so an unresolvable index here
-	// is a caller bug, not a property of the data — unlike on the decrypt side, where it is
-	// the header talking.
+	// Callers only encrypt under a key the mount holds: new content uses WriteKeyIdx(), and a
+	// write to an existing file checks its header's index with CheckKey first. An unresolvable
+	// index here is a caller bug, not a property of the data — unlike on the decrypt side,
+	// where it is the header talking.
 	aead, err := be.aeadForKey(keyIdx)
 	if err != nil {
 		log.Panicf("doEncryptBlock: %v", err)

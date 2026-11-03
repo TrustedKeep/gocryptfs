@@ -85,6 +85,73 @@ func TestSearchConnectorHeartbeat(t *testing.T) {
 	}
 }
 
+// One keep host without the route, or a proxy 404 in front of it, does not end the call: the next host
+// is tried, and ErrNotImplemented comes back only when every host answered 404/501.
+func TestSearchConnectorTriesTheNextHostOnA404(t *testing.T) {
+	s := newTestSearchConnector(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Hostname() == "kms-old" {
+			return jsonResponse(http.StatusNotFound, "404 page not found"), nil
+		}
+		return jsonResponse(http.StatusOK, model.TKFSHeartbeatResponse{}), nil
+	})
+	s.identity.adopt("instance-1")
+	s.kmsHosts = []string{"kms-old", "kms-1"}
+	for i := 0; i < 20; i++ { // hosts are tried in random order
+		if _, err := s.Heartbeat(0, testCreatedAt); err != nil {
+			t.Fatalf("one host without the route failed the call: %v", err)
+		}
+	}
+	s.kmsHosts = []string{"kms-old", "kms-old"}
+	if _, err := s.Heartbeat(0, testCreatedAt); !errors.Is(err, ErrNotImplemented) {
+		t.Errorf("every host 404 = %v, want ErrNotImplemented", err)
+	}
+}
+
+// When one host rejects this instance's certificate and another is unreachable, the rejection is what
+// comes back, whatever order the hosts were tried in: it decides the exit code systemd acts on.
+func TestSearchConnectorPrefersACredentialRejection(t *testing.T) {
+	s := newTestSearchConnector(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Hostname() == "kms-rejects" {
+			return nil, errors.New("remote error: tls: unknown certificate authority")
+		}
+		return nil, errors.New("dial tcp: i/o timeout")
+	})
+	s.identity.adopt("instance-1")
+	s.kmsHosts = []string{"kms-rejects", "kms-down"}
+	for i := 0; i < 20; i++ { // hosts are tried in random order
+		_, err := s.Heartbeat(0, testCreatedAt)
+		if !CredentialsRejected(err) {
+			t.Fatalf("attempt %d: err = %v, want the credential rejection", i, err)
+		}
+	}
+}
+
+// A TLS alert refusing the client certificate is a credential rejection only where the request failed:
+// every alert a server or terminator sends for it is recognized, and a 5xx body that quotes an upstream
+// TLS failure is not.
+func TestCredentialRejectionComesFromTheTransportOnly(t *testing.T) {
+	for _, alert := range []string{
+		"remote error: tls: bad certificate",
+		"remote error: tls: unknown certificate authority",
+		"remote error: tls: unknown certificate",
+		"remote error: tls: unsupported certificate",
+		"remote error: tls: certificate required",
+	} {
+		s := newTestSearchConnector(func(*http.Request) (*http.Response, error) { return nil, errors.New(alert) })
+		s.identity.adopt("instance-1")
+		if _, err := s.Heartbeat(0, testCreatedAt); !CredentialsRejected(err) {
+			t.Errorf("%q from the transport: CredentialsRejected = false", alert)
+		}
+	}
+	s := newTestSearchConnector(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusBadGateway, "dial upstream: remote error: tls: bad certificate"), nil
+	})
+	s.identity.adopt("instance-1")
+	if _, err := s.Heartbeat(0, testCreatedAt); err == nil || CredentialsRejected(err) {
+		t.Errorf("a 502 quoting a TLS error: err = %v, want an outage, not a credential rejection", err)
+	}
+}
+
 // The tenant token authenticates the call alongside the mTLS cert, so every route has to carry it.
 func TestSearchConnectorSendsTenantToken(t *testing.T) {
 	var token string

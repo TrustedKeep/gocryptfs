@@ -292,6 +292,13 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 			f.fileTableEntry.KeyIdx = keyIdx
 		}
 	}
+	// An existing file stays under the key its header names. If this mount cannot use that key (its
+	// ring entry failed to unwrap, or the index is past the ring), the write fails like a read of
+	// the file would, rather than reaching the encrypt path, which panics on it.
+	if err = f.rootNode.contentEnc.CheckKey(f.fileTableEntry.KeyIdx); err != nil {
+		tlog.Warn.Printf("doWrite %d: %v", f.qIno.Ino, err)
+		return 0, syscall.EIO
+	}
 	// Handle payload data
 	dataBuf := bytes.NewBuffer(data)
 	blocks := f.rootNode.contentEnc.ExplodePlainRange(uint64(off), uint64(len(data)))

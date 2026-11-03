@@ -422,3 +422,18 @@ func TestGatewayConnectorRejectsAnUnstampedKey(t *testing.T) {
 		t.Errorf("identity = %q after a refused mint, want none", got)
 	}
 }
+
+// A gateway 5xx whose body quotes an upstream TLS failure is an outage, not this instance's
+// credentials being rejected: only a failed request is checked for a TLS alert.
+func TestGatewayErrorBodyIsNotACredentialRejection(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "dial keep: remote error: tls: bad certificate", http.StatusBadGateway)
+	}))
+	defer ts.Close()
+	g := newTestGWConnector(ts, "node-1")
+	g.identity.adopt("instance-1")
+	_, err := g.Heartbeat(0, testCreatedAt)
+	if err == nil || CredentialsRejected(err) {
+		t.Errorf("err = %v, want an outage, not a credential rejection", err)
+	}
+}

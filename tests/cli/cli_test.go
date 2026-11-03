@@ -178,7 +178,8 @@ func TestMountBackground(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"-extpass", "echo test", dir, mnt}
+	// InitFS makes a mock-key-store filesystem, which only mounts with -mock-kms.
+	args := []string{"-extpass", "echo test", "-mock-kms", dir, mnt}
 	cmd := exec.Command(test_helpers.GocryptfsBinary, args...)
 	cmd.Stdout = pw
 	cmd.Stderr = pw
@@ -294,7 +295,7 @@ func TestIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(test_helpers.GocryptfsBinary,
-		"-q", "-nosyslog", "-fg", "-extpass", "echo test", "-i", "10ms", dir, mnt)
+		"-q", "-nosyslog", "-fg", "-extpass", "echo test", "-mock-kms", "-i", "10ms", dir, mnt)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err = cmd.Start()
