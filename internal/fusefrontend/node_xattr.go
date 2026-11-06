@@ -4,11 +4,15 @@ package fusefrontend
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 
+	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
 	"github.com/rfjakob/gocryptfs/v2/internal/tlog"
 )
 
@@ -18,6 +22,11 @@ const minus1 = ^uint32(0)
 // We store encrypted xattrs under this prefix plus the base64-encoded
 // encrypted original name.
 var xattrStorePrefix = "user.gocryptfs."
+
+// xattrKeyIdxPrefix names the per-inode marker "user.gocryptfs_keyidx.<n>": the key-ring index the
+// inode's xattr names are encrypted under, stamped by its first encrypted xattr. The index is in the
+// name so that Listxattr, which needs no read permission, can find it.
+const xattrKeyIdxPrefix = "user.gocryptfs_keyidx."
 
 // We get one read of this xattr for each write -
 // see https://github.com/rfjakob/gocryptfs/issues/515 for details.
@@ -54,7 +63,14 @@ func (n *Node) Getxattr(ctx context.Context, attr string, dest []byte) (uint32, 
 		}
 	} else {
 		// encrypted user xattr
-		cAttr, err := rn.encryptXattrName(attr)
+		keyIdx, ok, errno := n.xattrKeyIdx()
+		if errno != 0 {
+			return 0, errno
+		}
+		if !ok {
+			return 0, syscall.ENODATA
+		}
+		cAttr, err := rn.encryptXattrName(attr, keyIdx)
 		if err != nil {
 			return minus1, syscall.EIO
 		}
@@ -96,9 +112,13 @@ func (n *Node) Setxattr(ctx context.Context, attr string, data []byte, flags uin
 		return n.setXAttr(context, attr, data, flags)
 	}
 
-	cAttr, err := rn.encryptXattrName(attr)
+	keyIdx, errno := n.xattrKeyIdxForSet()
+	if errno != 0 {
+		return errno
+	}
+	cAttr, err := rn.encryptXattrName(attr, keyIdx)
 	if err != nil {
-		return syscall.EINVAL
+		return xattrNameErrno(err)
 	}
 	cData := rn.encryptXattrValue(data)
 	return n.setXAttr(nil, cAttr, cData, flags)
@@ -115,9 +135,16 @@ func (n *Node) Removexattr(ctx context.Context, attr string) syscall.Errno {
 		return n.removeXAttr(attr)
 	}
 
-	cAttr, err := rn.encryptXattrName(attr)
+	keyIdx, ok, errno := n.xattrKeyIdx()
+	if errno != 0 {
+		return errno
+	}
+	if !ok {
+		return syscall.ENODATA
+	}
+	cAttr, err := rn.encryptXattrName(attr, keyIdx)
 	if err != nil {
-		return syscall.EINVAL
+		return xattrNameErrno(err)
 	}
 	return n.removeXAttr(cAttr)
 }
@@ -130,6 +157,11 @@ func (n *Node) Listxattr(ctx context.Context, dest []byte) (uint32, syscall.Errn
 	if errno != 0 {
 		return 0, errno
 	}
+	keyIdx, haveKeyIdx, err := parseXattrKeyIdx(cNames)
+	if err != nil {
+		tlog.Warn.Printf("ListXAttr: %v", err)
+		return 0, syscall.EIO
+	}
 	rn := n.rootNode()
 	var buf bytes.Buffer
 	for _, curName := range cNames {
@@ -141,7 +173,15 @@ func (n *Node) Listxattr(ctx context.Context, dest []byte) (uint32, syscall.Errn
 		if !strings.HasPrefix(curName, xattrStorePrefix) {
 			continue
 		}
-		name, err := rn.decryptXattrName(curName)
+		if !haveKeyIdx {
+			tlog.Warn.Printf("ListXAttr: %q has no key-index marker to decrypt it under", curName)
+			rn.reportMitigatedCorruption(curName)
+			continue
+		}
+		name, err := rn.decryptXattrName(curName, keyIdx)
+		if errors.Is(err, nametransform.ErrKeyMissing) {
+			return 0, nameErrno(err)
+		}
 		if err != nil {
 			tlog.Warn.Printf("ListXAttr: invalid xattr name %q: %v", curName, err)
 			rn.reportMitigatedCorruption(curName)
@@ -163,4 +203,63 @@ func (n *Node) Listxattr(ctx context.Context, dest []byte) (uint32, syscall.Errn
 		return minus1, syscall.ERANGE
 	}
 	return uint32(copy(dest, buf.Bytes())), 0
+}
+
+// parseXattrKeyIdx finds the key-index marker among an inode's backing xattr names. ok is false when
+// there is none, which means the inode has no encrypted xattrs.
+func parseXattrKeyIdx(cNames []string) (keyIdx uint16, ok bool, err error) {
+	for _, cName := range cNames {
+		s, found := strings.CutPrefix(cName, xattrKeyIdxPrefix)
+		if !found {
+			continue
+		}
+		if ok {
+			return 0, false, fmt.Errorf("duplicate xattr key-index marker %q", cName)
+		}
+		v, err := strconv.ParseUint(s, 10, 16)
+		if err != nil {
+			return 0, false, fmt.Errorf("malformed xattr key-index marker %q", cName)
+		}
+		keyIdx, ok = uint16(v), true
+	}
+	return keyIdx, ok, nil
+}
+
+// xattrKeyIdx reads the inode's xattr key-index marker.
+func (n *Node) xattrKeyIdx() (keyIdx uint16, ok bool, errno syscall.Errno) {
+	cNames, errno := n.listXAttr()
+	if errno != 0 {
+		return 0, false, errno
+	}
+	keyIdx, ok, err := parseXattrKeyIdx(cNames)
+	if err != nil {
+		tlog.Warn.Printf("xattr: %v", err)
+		return 0, false, syscall.EIO
+	}
+	return keyIdx, ok, 0
+}
+
+// xattrKeyIdxForSet returns the inode's xattr key index, stamping the current write index on an
+// inode that has no marker yet.
+func (n *Node) xattrKeyIdxForSet() (uint16, syscall.Errno) {
+	if keyIdx, ok, errno := n.xattrKeyIdx(); errno != 0 || ok {
+		return keyIdx, errno
+	}
+	rn := n.rootNode()
+	rn.xattrKeyIdxLock.Lock()
+	defer rn.xattrKeyIdxLock.Unlock()
+	if keyIdx, ok, errno := n.xattrKeyIdx(); errno != 0 || ok {
+		return keyIdx, errno
+	}
+	keyIdx := rn.nameTransform.WriteKeyIdx()
+	return keyIdx, n.setXAttr(nil, xattrKeyIdxPrefix+strconv.Itoa(int(keyIdx)), nil, 0)
+}
+
+// xattrNameErrno maps an xattr-name encryption failure. A missing key is EIO, like every other
+// unreadable-under-this-mount path; anything else is a malformed name, which stays EINVAL.
+func xattrNameErrno(err error) syscall.Errno {
+	if errors.Is(err, nametransform.ErrKeyMissing) {
+		return syscall.EIO
+	}
+	return syscall.EINVAL
 }

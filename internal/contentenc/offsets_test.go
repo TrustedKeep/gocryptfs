@@ -1,20 +1,15 @@
 package contentenc
 
 import (
+	"crypto/cipher"
 	"fmt"
 	"testing"
-
-	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
 )
 
 // TestSizeToSize tests CipherSizeToPlainSize and PlainSizeToCipherSize
 func TestSizeToSize(t *testing.T) {
-	id, wrapped, err := createTKKeys()
-	if err != nil {
-		t.Fatalf("Couldn't set up tk: %v", err)
-	}
-	cc := cryptocore.New(cryptocore.BackendGoGCM, DefaultIVBits, 0, true, id, wrapped)
-	ce := New(cc, DefaultBS)
+	cc := newTestCore()
+	ce := New(cc, []cipher.AEAD{cc.AEADCipher}, DefaultBS)
 
 	const rangeMax = 10000
 

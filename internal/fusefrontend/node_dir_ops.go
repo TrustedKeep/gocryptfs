@@ -33,13 +33,12 @@ func haveDsstore(entries []fuse.DirEntry) bool {
 // mkdirWithIv - create a new directory and corresponding diriv file. dirfd
 // should be a handle to the parent directory, cName is the name of the new
 // directory and mode specifies the access permissions to use.
-// If DeterministicNames is set, the diriv file is NOT created.
+//
+// The new directory is stamped with the ring's current write index, so its filenames are
+// encrypted under the newest key. -deterministic-names takes the same path: it differs only in
+// getting an all-zero IV, and it needs the file to carry the index just as much.
 func (n *Node) mkdirWithIv(dirfd int, cName string, mode uint32, context *fuse.Context) error {
 	rn := n.rootNode()
-
-	if rn.args.DeterministicNames {
-		return syscallcompat.MkdiratUser(dirfd, cName, mode, context)
-	}
 
 	// Between the creation of the directory and the creation of gocryptfs.diriv
 	// the directory is inconsistent. Take the lock to prevent other readers
@@ -53,7 +52,7 @@ func (n *Node) mkdirWithIv(dirfd int, cName string, mode uint32, context *fuse.C
 	dirfd2, err := syscallcompat.Openat(dirfd, cName, syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscallcompat.O_PATH, 0)
 	if err == nil {
 		// Create gocryptfs.diriv
-		err = nametransform.WriteDirIVAt(dirfd2)
+		err = nametransform.WriteDirIVAt(dirfd2, rn.nameTransform.WriteKeyIdx(), rn.args.DeterministicNames)
 		syscall.Close(dirfd2)
 	}
 	if err != nil {
@@ -112,7 +111,7 @@ func (n *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.En
 		// Create ".name"
 		err := rn.nameTransform.WriteLongNameAt(dirfd, cName, name)
 		if err != nil {
-			return nil, fs.ToErrno(err)
+			return nil, nameErrno(err)
 		}
 		// Create directory & rollback .name file on error
 		err = rn.mkdirWithIv(dirfd, cName, mode, context)
@@ -172,15 +171,6 @@ func (n *Node) Rmdir(ctx context.Context, name string) (code syscall.Errno) {
 		// Unlinkat with AT_REMOVEDIR is equivalent to Rmdir
 		err := unix.Unlinkat(parentDirFd, cName, unix.AT_REMOVEDIR)
 		return fs.ToErrno(err)
-	}
-	if rn.args.DeterministicNames {
-		if err := unix.Unlinkat(parentDirFd, cName, unix.AT_REMOVEDIR); err != nil {
-			return fs.ToErrno(err)
-		}
-		if nametransform.IsLongContent(cName) {
-			nametransform.DeleteLongNameAt(parentDirFd, cName)
-		}
-		return 0
 	}
 	// Unless we are running as root, we need read, write and execute permissions
 	// to handle gocryptfs.diriv.

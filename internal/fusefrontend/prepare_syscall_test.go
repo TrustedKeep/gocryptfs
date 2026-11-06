@@ -10,12 +10,29 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 
+	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
 	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
 
+// initFSWithRootDirIV runs -init and then writes the root gocryptfs.diriv that a real first mount
+// would have created. These tests build a RootNode directly, so nothing else does it for them.
+func initFSWithRootDirIV(t *testing.T, extraArgs ...string) string {
+	t.Helper()
+	cipherdir := test_helpers.InitFS(t, extraArgs...)
+	dirfd, err := syscall.Open(cipherdir, syscall.O_DIRECTORY|syscallcompat.O_PATH, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Close(dirfd)
+	if err := nametransform.WriteDirIVAt(dirfd, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	return cipherdir
+}
+
 func TestPrepareAtSyscall(t *testing.T) {
-	cipherdir := test_helpers.InitFS(t)
+	cipherdir := initFSWithRootDirIV(t)
 	t.Logf("cipherdir = %q", cipherdir)
 	args := Args{
 		Cipherdir: cipherdir,

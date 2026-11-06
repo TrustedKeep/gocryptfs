@@ -32,11 +32,11 @@ func (rn *RootNode) EncryptPath(plainPath string) (cipherPath string, err error)
 	parts := strings.Split(plainPath, "/")
 	wd := dirfd
 	for i, part := range parts {
-		dirIV, err := rn.nameTransform.ReadDirIVAt(wd)
+		dirIV, keyIdx, err := rn.nameTransform.ReadDirIVAt(wd)
 		if err != nil {
 			return "", err
 		}
-		cPart, err := rn.nameTransform.EncryptAndHashName(part, dirIV)
+		cPart, err := rn.nameTransform.EncryptAndHashName(part, dirIV, keyIdx)
 		if err != nil {
 			return "", err
 		}
@@ -78,7 +78,7 @@ func (rn *RootNode) DecryptPath(cipherPath string) (plainPath string, err error)
 	parts := strings.Split(cipherPath, "/")
 	wd := dirfd
 	for i, part := range parts {
-		dirIV, err := rn.nameTransform.ReadDirIVAt(wd)
+		dirIV, keyIdx, err := rn.nameTransform.ReadDirIVAt(wd)
 		if err != nil {
 			return "", err
 		}
@@ -89,7 +89,7 @@ func (rn *RootNode) DecryptPath(cipherPath string) (plainPath string, err error)
 				return "", err
 			}
 		}
-		name, err := rn.nameTransform.DecryptName(longPart, dirIV)
+		name, err := rn.nameTransform.DecryptName(longPart, dirIV, keyIdx)
 		if err != nil {
 			return "", err
 		}

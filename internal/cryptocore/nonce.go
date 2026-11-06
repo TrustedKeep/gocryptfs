@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"log"
+	"sync"
 
 	"github.com/TrustedKeep/tkutils/v2/crypto"
 )
@@ -31,12 +32,26 @@ type nonceGenerator struct {
 	nonceChan chan []byte
 }
 
+var (
+	nonceGeneratorsLock sync.Mutex
+	nonceGenerators     = make(map[int]*nonceGenerator)
+)
+
+// newNonceGenerator returns the process-wide generator for "nonceLen"-byte nonces, creating it on
+// first use. Memoized because a mount builds one CryptoCore per key-ring entry, and a generator per
+// core would park N-1 goroutines on pre-generated nonces for keys nothing writes under.
 func newNonceGenerator(nonceLen int) *nonceGenerator {
+	nonceGeneratorsLock.Lock()
+	defer nonceGeneratorsLock.Unlock()
+	if ng := nonceGenerators[nonceLen]; ng != nil {
+		return ng
+	}
 	ng := &nonceGenerator{
 		nonceLen:  nonceLen,
 		nonceChan: make(chan []byte, 500),
 	}
 	go ng.gen()
+	nonceGenerators[nonceLen] = ng
 	return ng
 }
 

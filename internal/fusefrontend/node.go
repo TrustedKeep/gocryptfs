@@ -292,7 +292,7 @@ func (n *Node) Mknod(ctx context.Context, name string, mode, rdev uint32, out *f
 	if !rn.args.PlaintextNames && nametransform.IsLongContent(cName) {
 		err := rn.nameTransform.WriteLongNameAt(dirfd, cName, name)
 		if err != nil {
-			errno = fs.ToErrno(err)
+			errno = nameErrno(err)
 			return
 		}
 		// Create "gocryptfs.longfile." device node
@@ -348,7 +348,7 @@ func (n *Node) Link(ctx context.Context, target fs.InodeEmbedder, name string, o
 	if !rn.args.PlaintextNames && nametransform.IsLongContent(cName) {
 		err = rn.nameTransform.WriteLongNameAt(dirfd, cName, name)
 		if err != nil {
-			errno = fs.ToErrno(err)
+			errno = nameErrno(err)
 			return
 		}
 		// Create "gocryptfs.longfile." link
@@ -402,7 +402,7 @@ func (n *Node) Symlink(ctx context.Context, target, name string, out *fuse.Entry
 	if !rn.args.PlaintextNames && nametransform.IsLongContent(cName) {
 		err = rn.nameTransform.WriteLongNameAt(dirfd, cName, name)
 		if err != nil {
-			return nil, fs.ToErrno(err)
+			return nil, nameErrno(err)
 		}
 		// Create "gocryptfs.longfile." symlink
 		err = syscallcompat.SymlinkatUser(cTarget, dirfd, cName, ctx2)
@@ -480,7 +480,7 @@ func (n *Node) Rename(ctx context.Context, name string, newParent fs.InodeEmbedd
 		if err == syscall.EEXIST {
 			nameFileAlreadyThere = true
 		} else if err != nil {
-			return fs.ToErrno(err)
+			return nameErrno(err)
 		}
 	}
 	// Actual rename

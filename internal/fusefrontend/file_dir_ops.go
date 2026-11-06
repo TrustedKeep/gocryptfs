@@ -2,6 +2,7 @@ package fusefrontend
 
 import (
 	"context"
+	"errors"
 	"syscall"
 
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -17,6 +18,7 @@ func (n *Node) OpendirHandle(ctx context.Context, flags uint32) (fh fs.FileHandl
 	var fdDup int = -1
 	var file *File
 	var dirIV []byte
+	var dirKeyIdx uint16
 	var ds fs.DirStream
 	rn := n.rootNode()
 
@@ -48,7 +50,7 @@ func (n *Node) OpendirHandle(ctx context.Context, flags uint32) (fh fs.FileHandl
 
 	if !rn.args.PlaintextNames {
 		// Read the DirIV from disk
-		dirIV, err = rn.nameTransform.ReadDirIVAt(fd)
+		dirIV, dirKeyIdx, err = rn.nameTransform.ReadDirIVAt(fd)
 		if err != nil {
 			tlog.Warn.Printf("OpendirHandle: could not read %s: %v", nametransform.DirIVFilename, err)
 			errno = syscall.EIO
@@ -64,6 +66,7 @@ func (n *Node) OpendirHandle(ctx context.Context, flags uint32) (fh fs.FileHandl
 	file.dirHandle = &DirHandle{
 		ds:        ds,
 		dirIV:     dirIV,
+		dirKeyIdx: dirKeyIdx,
 		isRootDir: n.IsRoot(),
 	}
 
@@ -86,6 +89,8 @@ err_out:
 type DirHandle struct {
 	// Content of gocryptfs.diriv. nil if plaintextnames is used.
 	dirIV []byte
+	// Key-ring index from gocryptfs.diriv: the key this directory's entry names decrypt under.
+	dirKeyIdx uint16
 
 	isRootDir bool
 
@@ -133,15 +138,19 @@ func (f *File) Readdirent(ctx context.Context) (entry *fuse.DirEntry, errno sysc
 			// We want these as-is
 			return
 		}
-		if f.dirHandle.isRootDir && (cName == configfile.ConfDefaultName || cName == configfile.EnvSetUpFlag) {
-			// silently ignore "gocryptfs.conf" and "CEK" in the top level dir
+		if f.dirHandle.isRootDir && (cName == configfile.ConfDefaultName ||
+			cName == configfile.KeyRingFileName || cName == configfile.KeyRingTmpFileName) {
+			// silently ignore "gocryptfs.conf" and the key ring in the top level dir. KR.tmp
+			// too: it exists for the length of every ring write, and a listing that caught one
+			// would try to decrypt it as a filename and report corruption.
 			continue
 		}
 		if f.rootNode.args.PlaintextNames {
 			return
 		}
-		if !f.rootNode.args.DeterministicNames && cName == nametransform.DirIVFilename {
-			// silently ignore "gocryptfs.diriv" everywhere if dirIV is enabled
+		if cName == nametransform.DirIVFilename {
+			// silently ignore "gocryptfs.diriv" everywhere. Every directory has one,
+			// -deterministic-names included
 			continue
 		}
 		// Handle long file name
@@ -162,7 +171,14 @@ func (f *File) Readdirent(ctx context.Context) (entry *fuse.DirEntry, errno sysc
 			// ignore "gocryptfs.longname.*.name"
 			continue
 		}
-		name, err := f.rootNode.nameTransform.DecryptName(cName, f.dirHandle.dirIV)
+		name, err := f.rootNode.nameTransform.DecryptName(cName, f.dirHandle.dirIV, f.dirHandle.dirKeyIdx)
+		if errors.Is(err, nametransform.ErrKeyMissing) {
+			// Not corruption: the names are intact and this mount cannot read them. It
+			// applies to every entry here, since the index is the directory's, so fail the
+			// listing rather than reporting the whole directory to -fsck one name at a time.
+			tlog.Fatal.Printf("Readdirent %q: %v", cName, err)
+			return nil, syscall.EIO
+		}
 		if err != nil {
 			tlog.Warn.Printf("Readdirent: could not decrypt entry %q: %v",
 				cName, err)
