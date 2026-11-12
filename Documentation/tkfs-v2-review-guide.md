@@ -312,7 +312,13 @@ stateDiagram-v2
 
 Behind a gateway requiring binding, an unpaired instance's heartbeat or rotation is refused, so mounts already running when the flag goes on exit 33 and pair at their remount. A call proving another machine, or none, gets 403 and exit 33 (or 502, counted as an outage, while the gateway has not yet loaded its identity certs).
 
-What it does not close: anything that can read IMDS on the paired machine can replay its proof, since the signed document is static. Pairing is trust on first use, and Forget reopens it. `-search` mounts send no proof and are never paired. `-mock-aws` proves a fake machine for dev stacks.
+What it does not close:
+
+- **The proof can be replayed.** It is a static signed document with no nonce or expiry, so anyone who can read IMDS on the paired instance can replay it.
+- **A modified client can mount elsewhere.** Replay on another machine also needs a valid client cert and key plus the filesystem's key ring. With those, a modified client can mount there.
+- **Pairing is trust on first use.** An instance is bound to the first machine that mints or unwraps its key through a gateway that requires binding, and nothing checks that this is the intended machine. An admin Forget removes the binding, and the next machine to unwrap becomes the bound one.
+
+`-search` mounts send no proof and are never paired. `-mock-aws` proves a fake machine for dev stacks.
 
 ## Admin UI
 
