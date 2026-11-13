@@ -53,7 +53,7 @@ flowchart LR
   op --> adm -- "proxy" --> state
 ```
 
-Besides the mTLS check against the trusted CA set, gatehouse decides only instance binding, including refusing `-sharedstorage`, when `TKFSRequireBinding` is on. A `-search` mount (not drawn) calls keep directly on :7070 with a tenant token, skipping the gateway and the ACL; the blocklist still applies.
+Besides the mTLS check against the trusted CA set, gatehouse decides only instance binding, including refusing `-sharedstorage`, when `TKFSRequireBinding` is on. A `-search` mount (not drawn) calls keep directly on :7070 with a tenant token, skipping the gateway and the ACL; the blocklist still applies, and keep refuses a paired instance there.
 
 ## Phases
 
@@ -118,11 +118,11 @@ A historical entry that fails to unwrap leaves a hole: files written under it re
 
 ## Data-key service and authorization
 
-A call succeeds when three things hold: its client CA is trusted, its DN is in the ACL, and nothing in the blocklist names it. Binding adds a fourth on gateways that require it.
+A call succeeds when three things hold: its client CA is trusted, its DN is in the ACL, and nothing in the blocklist names it. Binding adds a fourth on gateways that require it, and the `-search` route refuses paired instances.
 
 - **Listener.** gatehouse serves `generate`, `unwrap` and `heartbeat` on a dedicated mTLS port, 7083 by default (`TKFSDataKeyPort`). Its client-CA pool is the operator's trusted CA set, not the tenant PKI. A supervisor starts the listener only while at least one CA exists, because an empty pool would fail open.
 - **keep decides.** gatehouse forwards to keep, where `tcv.TKFSPermissionCheck` checks the ACL and blocklist on every call. TKFS calls use `ServiceTKFS`, which skips keep's MCSE collection check.
-- **`-search` route.** TrustedSearch mounts call keep directly at `/keepsvc/tenantdatakey/*` on :7070 with a tenant token. keep skips the ACL there but applies the blocklist. The route is passed in by the handler, never read from the wire.
+- **`-search` route.** TrustedSearch mounts call keep directly at `/keepsvc/tenantdatakey/*` on :7070 with a tenant token. keep skips the ACL there but applies the blocklist and refuses paired instances. The route is passed in by the handler, never read from the wire.
 - **Hard and soft blocks.** The DN comes from the verified certificate, so a DN block is hard. A KekID block is hard for key access, because unwrap only works under the KEK that id names; it is soft only on heartbeats. NodeID is self-asserted, so a NodeID block only stops a cooperative instance.
 
 ```mermaid
@@ -292,11 +292,11 @@ sequenceDiagram
 
 ## Instance binding
 
-A gateway that requires binding pairs each instance with the first EC2 machine to mint or unwrap through it, then refuses calls from any other machine. A stolen client certificate plus a copied cipherdir therefore stops working elsewhere.
+A gateway that requires binding pairs each instance with the first EC2 machine to mint or unwrap through it, then refuses calls from any other machine; keep also refuses a paired instance on the `-search` route. A stolen client certificate plus a copied cipherdir therefore stops working elsewhere.
 
 - **Proof.** EC2's IMDS `rsa2048` signature: PKCS#7, RSA-2048 over SHA-256, which verifies under `fips140=only`. The client fetches it once per mount and sends it on generate, unwrap and heartbeat.
 - **Verification.** gatehouse verifies offline against identity certs an admin uploads, one per AWS region. None are built in, and a cert embedded in the proof is never trusted.
-- **The switch.** gatehouse startup config `UserData.TKFSRequireBinding` (docker: `TKFS_REQUIRE_BINDING`), off by default. It is per gateway, so a mixed fleet enforces only where it is set.
+- **The switch.** gatehouse startup config `UserData.TKFSRequireBinding` (docker: `TKFS_REQUIRE_BINDING`), off by default. It is per gateway, so a mixed fleet enforces only where it is set: a gateway without it serves a paired instance to any machine. Set it on every gateway in the tenant.
 - **The machine.** Account ID, region and EC2 instance ID. Image ID and private IP are shown to admins but not matched.
 - **The pairing.** Stored in keep at `tkfsb/<kekID>`, written only after keep authorizes the call. It never moves; an admin Forget deletes it with the instance record.
 
@@ -318,7 +318,7 @@ What it does not close:
 - **A modified client can mount elsewhere.** Replay on another machine also needs a valid client cert and key plus the filesystem's key ring. With those, a modified client can mount there.
 - **Pairing is trust on first use.** An instance is bound to the first machine that mints or unwraps its key through a gateway that requires binding, and nothing checks that this is the intended machine. An admin Forget removes the binding, and the next machine to unwrap becomes the bound one.
 
-`-search` mounts send no proof and are never paired. `-mock-aws` proves a fake machine for dev stacks.
+`-search` mounts send no proof, are never paired, and cannot use a paired instance's KEK. `-mock-aws` proves a fake machine for dev stacks.
 
 ## Admin UI
 
