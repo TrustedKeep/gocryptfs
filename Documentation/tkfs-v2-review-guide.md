@@ -229,7 +229,7 @@ sequenceDiagram
   G-->>T: no command
 ```
 
-A directive is satisfied once the instance reports an index past `PastIdx` and a key keep created after `RequestedAt`. Every timestamp in that rule is keep's, so the TKFS host's clock decides nothing (`KeyCreatedAt` is keep's stamp, relayed by the instance).
+A directive is satisfied once the instance reports an index other than `PastIdx` on a key keep created after `RequestedAt`. Every timestamp in that rule is keep's, so the TKFS host's clock decides nothing (`KeyCreatedAt` is keep's stamp, relayed by the instance).
 
 The heartbeat runs every 5 minutes and is not configurable, because it sets the revocation window. The first one goes out before the FUSE mount, so a refusal fails the mount with no mountpoint attached.
 
