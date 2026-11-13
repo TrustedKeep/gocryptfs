@@ -121,7 +121,7 @@ A historical entry that fails to unwrap leaves a hole: files written under it re
 A call succeeds when three things hold: its client CA is trusted, its DN is in the ACL, and nothing in the blocklist names it. Binding adds a fourth on gateways that require it, and the `-search` route refuses paired instances.
 
 - **Listener.** gatehouse serves `generate`, `unwrap` and `heartbeat` on a dedicated mTLS port, 7083 by default (`TKFSDataKeyPort`). Its client-CA pool is the operator's trusted CA set, not the tenant PKI. A supervisor starts the listener only while at least one CA exists, because an empty pool would fail open.
-- **keep decides.** gatehouse forwards to keep, where `tcv.TKFSPermissionCheck` checks the ACL and blocklist on every call. TKFS calls use `ServiceTKFS`, which skips keep's MCSE collection check.
+- **keep decides.** gatehouse forwards to keep, where `tcv.TKFSPermissionCheck` checks the ACL and blocklist on every call. TKFS calls use `ServiceTKFS`, which skips keep's MCSE collection check and resolves KEKs only in TKFS's own namespace.
 - **`-search` route.** TrustedSearch mounts call keep directly at `/keepsvc/tenantdatakey/*` on :7070 with a tenant token. keep skips the ACL there but applies the blocklist and refuses paired instances. The route is passed in by the handler, never read from the wire.
 - **Hard and soft blocks.** The DN comes from the verified certificate, so a DN block is hard. A KekID block is hard for key access, because unwrap only works under the KEK that id names; it is soft only on heartbeats. NodeID is self-asserted, so a NodeID block only stops a cooperative instance.
 
@@ -142,15 +142,16 @@ flowchart TD
 
 If the gateway cannot make the binding check (identity certs not loaded yet, or the pairing read fails) or cannot save a new pairing, it answers 502, which the client counts as an outage rather than a refusal.
 
-keep stores TKFS state per tenant in five objects:
+keep stores TKFS state per tenant under `tkfs`, in six objects:
 
 | keep path | Type | Holds | Read by |
 |---|---|---|---|
-| `tkfsca` | `TKFSTrustedCAs` | Client CA set | Every gateway, for the listener's trust pool |
-| `tkfs` | `TKFSPolicy` | ACL (a set of DNs), blocklist, identity certs | keep on every call; gateways fetch only the identity certs |
-| `tkfsi/<kekID>` | `TKFSInstance` | Registry record: DN, NodeID, key index, last seen, verified host, route | Rewritten by each heartbeat; read by a rekey request for `PastIdx`; shown in the admin UI |
-| `tkfsr/<kekID>` | `TKFSRekeyDirective` | Pending rekey: `PastIdx`, `RequestedAt` | Each heartbeat |
-| `tkfsb/<kekID>` | `TKFSBinding` | The machine an instance is paired with | Gateways requiring binding |
+| `tkfs/ca` | `TKFSTrustedCAs` | Client CA set | Every gateway, for the listener's trust pool |
+| `tkfs/p` | `TKFSPolicy` | ACL (a set of DNs), blocklist, identity certs | keep on every call; gateways fetch only the identity certs |
+| `tkfs/i/<kekID>` | `TKFSInstance` | Registry record: DN, NodeID, key index, last seen, verified host, route | Rewritten by each heartbeat; read by a rekey request for `PastIdx`; shown in the admin UI |
+| `tkfs/r/<kekID>` | `TKFSRekeyDirective` | Pending rekey: `PastIdx`, `RequestedAt` | Each heartbeat |
+| `tkfs/b/<kekID>` | `TKFSBinding` | The machine an instance is paired with | Gateways requiring binding |
+| `tkfs/k/<kekID>` | `TenantKek` | The instance's KEK, kept apart from MCSE's `kek/key` so neither service can name the other's | Every generate and unwrap |
 
 The CA set is kept apart from the policy so that a policy which fails to decode cannot tear down the listener. It still fails every heartbeat in the tenant as an outage (keep 500, gateway 502), because keep reads the policy on each one, so every mount drops after three beats; no admin route can rewrite an undecodable policy.
 
@@ -298,7 +299,7 @@ A gateway that requires binding pairs each instance with the first EC2 machine t
 - **Verification.** gatehouse verifies offline against identity certs an admin uploads, one per AWS region. None are built in, and a cert embedded in the proof is never trusted.
 - **The switch.** gatehouse startup config `UserData.TKFSRequireBinding` (docker: `TKFS_REQUIRE_BINDING`), off by default. It is per gateway, so a mixed fleet enforces only where it is set: a gateway without it serves a paired instance to any machine. Set it on every gateway in the tenant.
 - **The machine.** Account ID, region and EC2 instance ID. Image ID and private IP are shown to admins but not matched.
-- **The pairing.** Stored in keep at `tkfsb/<kekID>`, written only after keep authorizes the call. It never moves; an admin Forget deletes it with the instance record.
+- **The pairing.** Stored in keep at `tkfs/b/<kekID>`, written only after keep authorizes the call. It never moves; an admin Forget deletes it with the instance record.
 
 ```mermaid
 stateDiagram-v2
@@ -362,7 +363,7 @@ Start in gocryptfs `mount.go` and follow the key from `KR` to the cipher cores; 
 | gocryptfs | `internal/contentenc/`, `internal/nametransform/diriv.go`, `names.go`, `internal/fusefrontend/node_xattr.go`, `root_node.go` | Explicit key index on every object; no default of 0; 18-byte diriv; xattr marker |
 | gocryptfs | `internal/tkc/`: `gateway.go`, `gwconnect.go`, `search_connect.go`, `machine.go`, `mock_gwconnect.go` | Transit unwrap, error mapping to `ErrDenied`, identity proof fetch |
 | tkutils | `model/`: `tkfsdatakey.go`, `transit.go`, `tkfspolicy.go`, `tkfsidentity.go`; `awsidentity/` | Wire types; RSA-OAEP transit; blocklist matching; PKCS#7 verify and its 8 KiB cap |
-| keep | `tcv/tkfs.go`, `tcv/object_keywrap.go`, `tenants/tenant_mgr_tkfs*.go`, `tenant_mgr_keywrap.go` (`ensureKek`), `tenant_mgr_paths.go` | The single `TKFSPermissionCheck`; one KEK per instance resolved by id, never through `kek/curr` |
+| keep | `tcv/tkfs.go`, `tcv/object_keywrap.go`, `tenants/tenant_mgr_tkfs*.go` (`TKFSKekWrap`, `TKFSKekUnwrap`), `tenant_mgr_paths.go` | The single `TKFSPermissionCheck`; one KEK per instance, resolved by id only under `tkfs/k/`, never in MCSE's `kek/key` |
 | keep | `web/tkfspolicy.go`, `tkfscas.go`, `tkfsinstance.go`, `tkfsbinding.go`, `tenantdatakey.go` | Admin routes; heartbeat upsert and rekey directive; `-search` route keeps the blocklist |
 | gatehouse | `management/tkfsdatakey.go`, `tkfsbinding.go`, `tkfsrekey.go`, `tkfsdatakey_admin.go`, `ctx/tkfscas.go`, `ctx/tkfsidentitycerts.go` | Listener supervisor; binding check order; key zeroized on every error path |
 | gatehouse | `cobblestone/src/app/tkfs/` | The four admin tabs |
