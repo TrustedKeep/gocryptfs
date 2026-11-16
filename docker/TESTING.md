@@ -13,7 +13,7 @@ policy change immediately, and it picks up a queued rekey at once.
 
 1. **No trusted CA.** `mount.sh a` fails: the data-key listener only runs while a TKFS trusted CA exists.
 2. **Trusted CA.** On **Trusted CAs**, add `tkfs_ca.crt`. It is listed by fingerprint, and the listener
-   starts within about a minute.
+   starts within about 15 seconds.
 3. **DN not allowed.** `mount.sh a` is refused.
 4. **Allowed DN.** On **Access Control**, allow `CN=tkfs_host1,O=TK-DEV`. Now `mount.sh a` mounts, and **a**
    shows as Active on **Instances**.

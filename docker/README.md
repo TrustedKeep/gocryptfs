@@ -14,8 +14,9 @@ checkout; each is tagged `:local_dev`, which the stack runs:
   `docker/README.md`;
 - keep, with keep's `docker/build_images.sh`.
 
-`build.sh` builds the `tkfs-mount:local_dev` image from this checkout, in the same ECR builder and runner
-images as gatehouse, so it needs the same ECR login. Like gatehouse's `build_images.sh`, it reaches the private
+`build.sh` builds the `tkfs-mount:local_dev` image from this checkout in ECR's
+`trustedkeep/builder:<go.mod major.minor>` and `trustedkeep/runner:latest`, so it needs the same ECR login
+as gatehouse. Like gatehouse's `build_images.sh`, it reaches the private
 TrustedKeep modules through your SSH agent, or `GH_TOKEN` when that is set. `certs.sh` and `mount.sh` run it
 for you; it uses the build cache, so a rebuild with no change takes seconds.
 
@@ -38,6 +39,9 @@ Here:
 ./mount.sh a              # as tkfs_host1, in its own terminal
 ./mount.sh b tkfs_host2
 ```
+
+Mounts fail until `tkfs_ca.crt` is a TKFS trusted CA and each mount's DN is allowed: see
+[TESTING.md](TESTING.md) steps 2 and 4, and allow `CN=tkfs_host2,O=TK-DEV` too for **b**.
 
 `certs.sh` takes the stack certs from the gatehouse checkout under your GOPATH. When the stack runs from
 another checkout or a worktree, set `STACK_CERTS` to that `docker/certs` directory. Rerun it after the
