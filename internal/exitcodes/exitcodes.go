@@ -78,8 +78,8 @@ const (
 	Revoked = 33
 	// RotateFailed - a rotation the op counter or a rekey demanded failed other than by a refusal: in
 	// three heartbeat intervals in a row when generating the new key failed, at once when the key
-	// service wrapped it under another KEK or the key ring could not take it, or at once before
-	// mounting. Also: the op count could not be persisted.
+	// ring could not take or persist it, or at once before mounting. Also: the op count could not be
+	// persisted.
 	RotateFailed = 34
 	// SharedStorageRefused - the gateway requires instance binding, which a -sharedstorage mount cannot
 	// keep. Remount without -sharedstorage, or through a gateway that does not require binding.
