@@ -86,9 +86,16 @@ type fakeHeartbeater struct {
 	laterErr error
 	reported []uint16
 	stamps   []time.Time
+	events   []model.TKFSHeartbeatEvent
+	// block, if set, holds every beat until it is closed.
+	block chan struct{}
 }
 
-func (f *fakeHeartbeater) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
+func (f *fakeHeartbeater) Heartbeat(event model.TKFSHeartbeatEvent, keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
+	if f.block != nil {
+		<-f.block
+	}
+	f.events = append(f.events, event)
 	f.reported = append(f.reported, keyIdx)
 	f.stamps = append(f.stamps, keyCreatedAt)
 	if f.laterErr != nil && len(f.reported) > 1 {
@@ -605,5 +612,63 @@ func TestFlushOpCountsBeforeMountRotationFailureIsFatal(t *testing.T) {
 	m.flushOpCountsBeforeMount()
 	if *code != exitcodes.RotateFailed {
 		t.Errorf("exit code = %d, want %d", *code, exitcodes.RotateFailed)
+	}
+}
+
+// The pre-mount heartbeat reports the mount and later beats report nothing, and ending the mount reports the
+// unmount once, whichever teardown paths reach it.
+func TestHeartbeatReportsMountAndUnmount(t *testing.T) {
+	r := newTestRotator(t, "")
+	hb := &fakeHeartbeater{}
+	m, _, _ := newTestMonitor(t, r, hb)
+	m.verifyKeyService()
+	m.tick()
+	m.reportUnmount()
+	m.reportUnmount()
+	want := []model.TKFSHeartbeatEvent{model.TKFSEventMount, model.TKFSEventNone, model.TKFSEventUnmount}
+	if !slices.Equal(hb.events, want) {
+		t.Errorf("events = %v, want %v", hb.events, want)
+	}
+}
+
+// A mount the key service never heard of has no unmount to report, and a refusal that ends the mount still
+// reports it.
+func TestUnmountIsReportedOnlyAfterAMount(t *testing.T) {
+	r := newTestRotator(t, "")
+	hb := &fakeHeartbeater{}
+	m, _, _ := newTestMonitor(t, r, hb)
+	m.reportUnmount()
+	if len(hb.events) != 0 {
+		t.Errorf("events = %v, want none before a mount was reported", hb.events)
+	}
+
+	hb = &fakeHeartbeater{}
+	m, srv, code := newTestMonitor(t, r, hb)
+	m.verifyKeyService()
+	hb.err = fmt.Errorf("gateway: %w", tkc.ErrDenied)
+	m.tick()
+	if *code != exitcodes.Revoked || srv.unmounts != 1 {
+		t.Fatalf("exit %d after %d unmounts, want a revocation", *code, srv.unmounts)
+	}
+	if got := hb.events[len(hb.events)-1]; got != model.TKFSEventUnmount {
+		t.Errorf("last event = %q, want the unmount", got)
+	}
+}
+
+// An unmount report that gets no answer is given up after its budget rather than holding the exit.
+func TestUnmountReportIsBounded(t *testing.T) {
+	r := newTestRotator(t, "")
+	hb := &fakeHeartbeater{}
+	m, _, _ := newTestMonitor(t, r, hb)
+	m.verifyKeyService()
+	hb.block = make(chan struct{})
+	defer close(hb.block)
+	defer func(d time.Duration) { unmountReportBudget = d }(unmountReportBudget)
+	unmountReportBudget = 50 * time.Millisecond
+
+	start := time.Now()
+	m.reportUnmount()
+	if waited := time.Since(start); waited > time.Second {
+		t.Errorf("reportUnmount waited %v", waited)
 	}
 }

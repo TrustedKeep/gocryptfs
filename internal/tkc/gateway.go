@@ -93,8 +93,8 @@ type DataKeyConnector interface {
 // connectors implement it; the mock has no route to beat to.
 type Heartbeater interface {
 	// Heartbeat reports this instance as alive and writing under key-ring index keyIdx, whose key the
-	// key service created at keyCreatedAt. Together they are what satisfy a rekey it asked for.
-	Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error)
+	// key service created at keyCreatedAt, along with event. The key fields are what satisfy a rekey.
+	Heartbeat(event model.TKFSHeartbeatEvent, keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error)
 }
 
 // ErrDenied wraps every HTTP 403 from the gateway: the DN left the ACL, a blocklist entry names this

@@ -78,8 +78,8 @@ func doMount(args *argContainer) {
 		os.Exit(exitcodes.Usage)
 	}
 	// Before anything that a second mount would collide on, so this is the error it reports. The wait
-	// covers the previous mount of this filesystem, which exits a moment after its unmount returns.
-	ringLock, err := configfile.LockKeyRing(args.config, time.Second)
+	// covers the previous mount of this filesystem, which exits once it has reported its unmount.
+	ringLock, err := configfile.LockKeyRing(args.config, unmountReportBudget+time.Second)
 	if errors.Is(err, configfile.ErrKeyRingInUse) {
 		tlog.Fatal.Printf("%s is already mounted by another TKFS process", args.cipherdir)
 		os.Exit(exitcodes.AlreadyMounted)
@@ -171,6 +171,7 @@ func doMount(args *argContainer) {
 	// Registered after the wipe so it runs before it: a mount that lived less than one interval
 	// would otherwise contribute nothing to the budget its writes spent.
 	defer m.flushOpCountsAtUnmount()
+	defer m.reportUnmount()
 	// Before anything is mounted: a gateway that will not answer a heartbeat cannot revoke this
 	// instance either, and a fatal exit here leaves no mountpoint behind.
 	m.verifyKeyService()
@@ -178,7 +179,8 @@ func doMount(args *argContainer) {
 	m.flushOpCountsBeforeMount()
 
 	// Initialize go-fuse FUSE server
-	srv := initGoFuse(fs, args)
+	// The key service already heard this mount, so a mount that fails takes it back.
+	srv := initGoFuse(fs, args, m.reportUnmount)
 	m.srv = srv
 	if x, ok := fs.(AfterUnmounter); ok {
 		defer x.AfterUnmount()
@@ -225,7 +227,10 @@ func doMount(args *argContainer) {
 	// Wait for SIGINT in the background and unmount ourselves if we get it.
 	// This prevents a dangling "Transport endpoint is not connected"
 	// mountpoint if the user hits CTRL-C.
-	handleSigint(srv, args.mountpoint, m.flushOpCountsAtUnmount)
+	handleSigint(srv, args.mountpoint, func() {
+		m.flushOpCountsAtUnmount()
+		m.reportUnmount()
+	})
 	// Return memory that was allocated for stuff that is no longer needed to the OS
 	debug.FreeOSMemory()
 	// Set up autounmount, if requested.
@@ -677,8 +682,8 @@ type RootInoer interface {
 
 // initGoFuse calls into go-fuse to mount `rootNode` on `args.mountpoint`.
 // The mountpoint is ready to use when the functions returns.
-// On error, it calls os.Exit and does not return.
-func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
+// On error, it calls beforeExit, if any, then os.Exit, and does not return.
+func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer, beforeExit func()) *fuse.Server {
 	var fuseOpts *fs.Options
 	sec := time.Second
 	if args.sharedstorage {
@@ -805,6 +810,9 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer) *fuse.Server {
 		tlog.Fatal.Printf("fs.Mount failed: %s", strings.TrimSpace(err.Error()))
 		if runtime.GOOS == "darwin" {
 			tlog.Info.Printf("Maybe you should run: /Library/Filesystems/osxfuse.fs/Contents/Resources/load_osxfuse")
+		}
+		if beforeExit != nil {
+			beforeExit()
 		}
 		os.Exit(exitcodes.FuseNewServer)
 	}

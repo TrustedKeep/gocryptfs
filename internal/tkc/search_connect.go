@@ -201,12 +201,13 @@ func (s *searchConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]
 	return dek, nil
 }
 
-func (s *searchConnector) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
+func (s *searchConnector) Heartbeat(event model.TKFSHeartbeatEvent, keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
 	req := model.TKFSHeartbeatRequest{
 		NodeID:       s.nodeID,
 		KekID:        s.identity.get(),
 		KeyIdx:       keyIdx,
 		KeyCreatedAt: keyCreatedAt,
+		Event:        event,
 	}
 	var out model.TKFSHeartbeatResponse
 	if err := s.post(searchHeartbeatPath, req, &out); err != nil {

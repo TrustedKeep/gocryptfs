@@ -281,7 +281,7 @@ func fsck(args *argContainer) (exitcode int) {
 		tlog.SwitchLoggerToSyslog()
 	}
 	// Mount
-	srv := initGoFuse(pfs, args)
+	srv := initGoFuse(pfs, args, nil)
 	// Handle SIGINT & SIGTERM
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt)

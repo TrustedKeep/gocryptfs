@@ -218,7 +218,7 @@ func TestGatewayConnectorSharedStorageRefusal(t *testing.T) {
 
 	g := newTestGWConnector(ts, "node-1")
 	g.identity.adopt("instance-1")
-	_, err := g.Heartbeat(0, testCreatedAt)
+	_, err := g.Heartbeat(model.TKFSEventNone, 0, testCreatedAt)
 	if !errors.Is(err, ErrSharedStorageRefused) || !errors.Is(err, ErrDenied) {
 		t.Errorf("409 = %v, want ErrSharedStorageRefused, which is also ErrDenied", err)
 	}
@@ -265,23 +265,24 @@ func TestGatewayConnectorHeartbeat(t *testing.T) {
 	g := newTestGWConnector(ts, "node-1")
 	g.identity.adopt("instance-1")
 
-	resp, err := g.Heartbeat(7, testCreatedAt)
+	resp, err := g.Heartbeat(model.TKFSEventMount, 7, testCreatedAt)
 	if err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
-	if got.NodeID != "node-1" || got.KekID != "instance-1" || got.KeyIdx != 7 || !got.KeyCreatedAt.Equal(testCreatedAt) {
-		t.Errorf("request = %+v, want the node, instance, key-ring index and key stamp", got)
+	if got.NodeID != "node-1" || got.KekID != "instance-1" || got.KeyIdx != 7 || !got.KeyCreatedAt.Equal(testCreatedAt) ||
+		got.Event != model.TKFSEventMount {
+		t.Errorf("request = %+v, want the node, instance, key-ring index, key stamp and event", got)
 	}
 	if resp.Command != model.TKFSCommandRekey {
 		t.Errorf("response = %+v, want the command passed through", resp)
 	}
 
 	status = http.StatusForbidden
-	if _, err := g.Heartbeat(0, testCreatedAt); !errors.Is(err, ErrDenied) {
+	if _, err := g.Heartbeat(model.TKFSEventNone, 0, testCreatedAt); !errors.Is(err, ErrDenied) {
 		t.Errorf("403 error = %v, want one wrapping ErrDenied", err)
 	}
 	status = http.StatusServiceUnavailable
-	if _, err := g.Heartbeat(0, testCreatedAt); err == nil {
+	if _, err := g.Heartbeat(model.TKFSEventNone, 0, testCreatedAt); err == nil {
 		t.Error("503 must be an error")
 	} else if errors.Is(err, ErrDenied) || errors.Is(err, ErrNotImplemented) {
 		t.Errorf("503 must read as a plain outage: %v", err)
@@ -290,7 +291,7 @@ func TestGatewayConnectorHeartbeat(t *testing.T) {
 	// rather than counting it as an outage, since a missing route never comes back.
 	for _, code := range []int{http.StatusNotFound, http.StatusNotImplemented} {
 		status = code
-		_, err := g.Heartbeat(0, testCreatedAt)
+		_, err := g.Heartbeat(model.TKFSEventNone, 0, testCreatedAt)
 		if !errors.Is(err, ErrNotImplemented) {
 			t.Errorf("%d error = %v, want one wrapping ErrNotImplemented", code, err)
 		}
@@ -385,7 +386,7 @@ func TestGatewayConnectorAdoptsTheMintedIdentity(t *testing.T) {
 	if got := g.identity.get(); got != "kek-minted" {
 		t.Fatalf("identity after mint = %q, want kek-minted", got)
 	}
-	if _, err := g.Heartbeat(1, testCreatedAt); err != nil {
+	if _, err := g.Heartbeat(model.TKFSEventNone, 1, testCreatedAt); err != nil {
 		t.Fatal(err)
 	}
 	if beat.KekID != "kek-minted" {
@@ -432,7 +433,7 @@ func TestGatewayErrorBodyIsNotACredentialRejection(t *testing.T) {
 	defer ts.Close()
 	g := newTestGWConnector(ts, "node-1")
 	g.identity.adopt("instance-1")
-	_, err := g.Heartbeat(0, testCreatedAt)
+	_, err := g.Heartbeat(model.TKFSEventNone, 0, testCreatedAt)
 	if err == nil || CredentialsRejected(err) {
 		t.Errorf("err = %v, want an outage, not a credential rejection", err)
 	}

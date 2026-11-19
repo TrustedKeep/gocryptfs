@@ -75,7 +75,7 @@ func TestGatewayConnectorProvesItsMachine(t *testing.T) {
 	g.identity.adopt("instance-1")
 	_, _ = g.GenerateTKFSDataKey()
 	_, _ = g.UnwrapTKFSDataKey("instance-1", []byte("c"))
-	_, _ = g.Heartbeat(0, testCreatedAt)
+	_, _ = g.Heartbeat(model.TKFSEventNone, 0, testCreatedAt)
 
 	want := awsidentity.Mock()
 	for name, got := range map[string]*model.TKFSIdentityProof{"generate": gen.Identity, "unwrap": unw.Identity, "heartbeat": hb.Identity} {
@@ -151,7 +151,7 @@ func TestGatewayConnectorReportsSharedStorage(t *testing.T) {
 		g.identity.adopt("instance-1")
 		_, _ = g.GenerateTKFSDataKey()
 		_, _ = g.UnwrapTKFSDataKey("instance-1", []byte("c"))
-		_, _ = g.Heartbeat(0, testCreatedAt)
+		_, _ = g.Heartbeat(model.TKFSEventNone, 0, testCreatedAt)
 
 		for _, path := range []string{gatewayGeneratePath, gatewayUnwrapPath, gatewayHeartbeatPath} {
 			if got, ok := sent[path]; !ok || got != want {

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -90,6 +91,42 @@ type keyServiceMonitor struct {
 	failures               int
 	rotateFailures         int
 	rotationFailedThisTick bool
+
+	// mountReported is set once the key service has heard this mount; only then is its unmount reported.
+	mountReported atomic.Bool
+	unmountOnce   sync.Once
+}
+
+// unmountReportBudget bounds how long ending a mount waits to report it.
+var unmountReportBudget = 5 * time.Second
+
+// report sends one heartbeat carrying event and the key this mount writes under.
+func (m *keyServiceMonitor) report(event model.TKFSHeartbeatEvent) (model.TKFSHeartbeatResponse, error) {
+	idx, createdAt := m.rotator.writeKey()
+	return m.hb.Heartbeat(event, idx, createdAt)
+}
+
+// reportUnmount tells the key service, once and within unmountReportBudget, that a mount it heard of is
+// ending. It is best effort, so a crash or an unreachable key service leaves the mount shown as mounted.
+func (m *keyServiceMonitor) reportUnmount() {
+	m.unmountOnce.Do(func() {
+		if m.hb == nil || !m.mountReported.Load() {
+			return
+		}
+		done := make(chan error, 1)
+		go func() {
+			_, err := m.report(model.TKFSEventUnmount)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				tlog.Info.Printf("Could not report the unmount to the key service: %v", err)
+			}
+		case <-time.After(unmountReportBudget):
+			tlog.Info.Printf("Gave up reporting the unmount to the key service after %v", unmountReportBudget)
+		}
+	})
 }
 
 // outageExit is the exit code for a mount ending because the key service could not be reached. An
@@ -142,7 +179,10 @@ func (m *keyServiceMonitor) firstHeartbeat() (model.TKFSHeartbeatResponse, error
 	var err error
 	start := time.Now()
 	for attempt := 1; ; attempt++ {
-		resp, err = m.hb.Heartbeat(m.rotator.writeKey())
+		resp, err = m.report(model.TKFSEventMount)
+		if err == nil {
+			m.mountReported.Store(true)
+		}
 		if err == nil || errors.Is(err, tkc.ErrDenied) || errors.Is(err, tkc.ErrSharedStorageRefused) ||
 			errors.Is(err, tkc.ErrUnauthenticated) ||
 			attempt == firstHeartbeatAttempts || time.Since(start)+firstHeartbeatRetryDelay > firstHeartbeatBudget {
@@ -190,7 +230,7 @@ func (m *keyServiceMonitor) tick() {
 // beat sends one heartbeat and acts on the answer, including any rekey it brings back. It reports
 // whether the key service answered.
 func (m *keyServiceMonitor) beat() bool {
-	resp, err := m.hb.Heartbeat(m.rotator.writeKey())
+	resp, err := m.report(model.TKFSEventNone)
 	if die, reason := m.classify(err); die {
 		m.shutdownNow("Heartbeat: "+reason, outageExit(err))
 		return false
@@ -228,7 +268,7 @@ func (m *keyServiceMonitor) rekey() error {
 	tlog.Info.Printf("Heartbeat: rekey requested; rotated to key-ring index %d", idx)
 	// A report, not a liveness check: an outage here spends none of the three-strike budget, but a
 	// refusal still ends the mount.
-	_, err = m.hb.Heartbeat(m.rotator.writeKey())
+	_, err = m.report(model.TKFSEventNone)
 	switch {
 	case errors.Is(err, tkc.ErrDenied), errors.Is(err, tkc.ErrSharedStorageRefused):
 		m.shutdownNow("Heartbeat: the key service refused this instance's report", keyServiceExit(err, exitcodes.Revoked))
@@ -294,6 +334,7 @@ func (m *keyServiceMonitor) shutdownNow(reason string, code int) {
 	fatalExitCode.Store(int32(code))
 	if m.srv == nil {
 		tlog.Fatal.Printf("%s.", reason)
+		m.reportUnmount()
 		m.exit(code)
 		return
 	}
@@ -305,6 +346,7 @@ func (m *keyServiceMonitor) shutdownNow(reason string, code int) {
 			tlog.Fatal.Printf("Unmount still failing: %v.", err)
 		}
 	}
+	m.reportUnmount()
 	m.exit(code)
 }
 

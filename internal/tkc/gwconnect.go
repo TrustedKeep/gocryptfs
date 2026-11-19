@@ -245,7 +245,7 @@ func (g *gwConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]byte
 	return dek, nil
 }
 
-func (g *gwConnector) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
+func (g *gwConnector) Heartbeat(event model.TKFSHeartbeatEvent, keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error) {
 	req := model.TKFSHeartbeatRequest{
 		NodeID:        g.nodeID,
 		KekID:         g.identity.get(),
@@ -253,6 +253,7 @@ func (g *gwConnector) Heartbeat(keyIdx uint16, keyCreatedAt time.Time) (model.TK
 		KeyCreatedAt:  keyCreatedAt,
 		Identity:      g.machine(),
 		SharedStorage: g.sharedStorage,
+		Event:         event,
 	}
 	var out model.TKFSHeartbeatResponse
 	if err := g.post(gatewayHeartbeatPath, req, &out); err != nil {

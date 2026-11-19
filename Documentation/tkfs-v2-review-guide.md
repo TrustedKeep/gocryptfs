@@ -150,8 +150,8 @@ keep stores TKFS state per tenant under `tkfs`, in six objects:
 |---|---|---|---|
 | `tkfs/ca` | `TKFSTrustedCAs` | Client CA set | Every gateway, for the listener's trust pool |
 | `tkfs/p` | `TKFSPolicy` | ACL (a set of DNs), blocklist, identity certs | keep on every call; gateways fetch only the identity certs |
-| `tkfs/i/<kekID>` | `TKFSInstance` | Registry record: DN, NodeID, key index, last seen, verified host, route | Rewritten by each heartbeat; read by a rekey request for `PastIdx`; shown in the admin UI |
-| `tkfs/r/<kekID>` | `TKFSRekeyDirective` | Pending rekey: `PastIdx`, `RequestedAt` | Each heartbeat |
+| `tkfs/i/<kekID>/<id>` | `TKFSInstance` | Registry record of one DN, NodeID and machine: key index, last mount and unmount reports, host and whether it verified, route | Written when the instance first appears, mounts, unmounts, changes key or changes whether its machine verifies; another machine is another instance; read by a rekey request for `PastIdx`; shown in the admin UI |
+| `tkfs/r/<kekID>/<id>` | `TKFSRekeyDirective` | Pending rekey for one instance: `PastIdx`, `RequestedAt` | Each heartbeat of that instance |
 | `tkfs/b/<kekID>` | `TKFSBinding` | The machine an instance is paired with | Gateways requiring binding; keep on the `-search` route |
 | `tkfs/k/<kekID>` | `TenantKek` | The instance's KEK, kept apart from MCSE's `kek/key` so neither service can name the other's | Every generate and unwrap; each heartbeat checks it exists |
 
@@ -212,14 +212,14 @@ sequenceDiagram
   participant G as gatehouse
   participant K as keep
   participant T as gocryptfs
-  A->>G: PUT /api/v1/tkfsdatakey/rekey/:kekID
-  G->>K: POST tkfsinstance/:kekID/rekey
+  A->>G: POST /api/v1/tkfsdatakey/instance/:kekID/:id/rekey
+  G->>K: POST tkfsinstance/:kekID/:id/rekey
   K->>K: directive: PastIdx = recorded KeyIdx, RequestedAt = now
   K-->>G: directive
   G-->>A: 202 with the directive
   Note over T: within one 5-minute heartbeat
   T->>G: heartbeat {NodeID, KekID, KeyIdx, KeyCreatedAt}
-  G->>K: upsert registry record, read directive
+  G->>K: record the beat if anything changed, read directive
   K-->>G: command: rekey
   G-->>T: command: rekey
   T->>G: generate under the same KekID
@@ -305,8 +305,8 @@ A gateway that requires binding pairs each instance with the first EC2 machine t
 - **Proof.** EC2's IMDS `rsa2048` signature: PKCS#7, RSA-2048 over SHA-256, which verifies under `fips140=only`. The client fetches it once per mount and sends it on generate, unwrap and heartbeat.
 - **Verification.** gatehouse verifies offline against identity certs an admin uploads, one per AWS region. None are built in, and a cert embedded in the proof is never trusted.
 - **The switch.** gatehouse startup config `UserData.TKFSRequireBinding` (docker: `TKFS_REQUIRE_BINDING`), off by default. It is per gateway, so a mixed fleet enforces only where it is set: a gateway without it serves a paired instance to any machine. Set it on every gateway in the tenant.
-- **The machine.** Account ID, region and EC2 instance ID. Image ID and private IP are recorded but not matched; the admin UI shows neither.
-- **The pairing.** Stored in keep at `tkfs/b/<kekID>`, written only after keep authorizes the call. It never moves; an admin Forget deletes it with the instance record.
+- **The machine.** Account ID, region and EC2 instance ID. Image ID and private IP are recorded but not matched; the admin UI shows neither. The registry tells instances apart by the machine the document names, verified or not, so a gateway gaining or losing its identity certs does not split a mount in two.
+- **The pairing.** Stored in keep at `tkfs/b/<kekID>`, one per filesystem, written only after keep authorizes the call. It never moves. Forgetting any of the filesystem's instances removes it, and so does an admin unbind.
 
 ```mermaid
 stateDiagram-v2
@@ -315,7 +315,7 @@ stateDiagram-v2
   [*] --> Paired: first mint, gateway requiring binding
   Unpaired --> Paired: unwrap at remount, gateway requiring binding
   Paired --> Paired: any call proving the same machine
-  Paired --> Unpaired: admin Forget
+  Paired --> Unpaired: Forget any instance, or unbind
 ```
 
 Behind a gateway requiring binding, an unpaired instance's heartbeat or rotation is refused, so mounts already running when the flag goes on exit 33 and pair at their remount. A call proving another machine, or none, gets 403 and exit 33. While the gateway has no usable identity cert, a call carrying a proof gets 502 instead, which the client counts as an outage.
@@ -324,7 +324,7 @@ What it does not close:
 
 - **The proof can be replayed.** It is a static signed document with no nonce or expiry, so anyone who can read IMDS on the paired instance can replay it.
 - **A modified client can mount elsewhere.** Replay on another machine also needs a valid client cert and key plus the filesystem's key ring. With those, a modified client can mount there.
-- **Pairing is trust on first use.** An instance is bound to the first machine that mints or unwraps its key through a gateway that requires binding, and nothing checks that this is the intended machine. An admin Forget removes the binding, and the next machine to unwrap becomes the bound one.
+- **Pairing is trust on first use.** An instance is bound to the first machine that mints or unwraps its key through a gateway that requires binding, and nothing checks that this is the intended machine. Forgetting any of its instances, or unbinding, removes the binding, and the next machine to unwrap becomes the bound one.
 
 `-search` mounts send no proof, are never paired, and cannot use a paired instance's KEK. `-mock-aws`, set at `-init`, proves one fixed fake machine (`i-00000000000000000` in `us-east-1`) for dev stacks, which verifies once the kit's `aws_mock_identity.crt` is uploaded.
 
@@ -334,12 +334,12 @@ gatehouse's cobblestone UI gains a TKFS page with four tabs, in `cobblestone/src
 
 | Tab | Shows | Actions |
 |---|---|---|
-| Instances | One row per instance, from heartbeats or a pairing. Status: Active, Blocked, Refused (the UI's prediction under binding), Unreachable or No record. A Host column when keep supports binding (the machine the last heartbeat proved, filled once an identity cert is uploaded, binding on or off), and a Binding column (Bound, Host mismatch, Unverified, Search mount) when this node requires it | Rekey (rows with a record), Block, Forget |
+| Instances | One row per instance (a KEK's DN, NodeID and machine), plus one per pairing whose KEK has no instance. Status: Mounted or Unmounted (the later of the instance's last mount and unmount reports; a record is created mounted), Blocked, Refused (the UI's prediction under binding) or No record. A Last Mounted column; a Host column when keep supports binding (the machine its identity document names, marked unverified until an identity cert verifies it, binding on or off), and a Binding column (Bound, Host mismatch, Unverified, Search mount) when this node requires it | Rekey (rows with a record), Block, Forget (an instance), or unbind (a row with no instance) |
 | Access Control | Allowed DNs and the blocklist | Add or remove a DN; add or remove a block on DN, NodeID or KekID |
 | Trusted CAs | The listener's client CA set; a warning when it is empty | Upload a PEM CA cert or chain (any non-CA cert refuses the upload); remove by fingerprint |
 | Instance Binding | Whether this gateway node requires binding (read-only) and the identity certs | Add or remove an identity cert |
 
-The Instance Binding tab is hidden when keep is too old to support binding or the policy cannot be read. Forget deletes the instance record, any pending rekey and the pairing; a mount that is still running registers again on its next heartbeat, or exits 33 behind a gateway requiring binding. keep audits every change made here, and each new pairing, as a KMS-config event; heartbeats are not audited.
+The Instance Binding tab is hidden when keep is too old to support binding or the policy cannot be read. Forget deletes the instance record, any pending rekey, and the filesystem's pairing. A mount that is still running registers again on its next heartbeat, or exits 33 behind a gateway requiring binding once its pairing is gone. keep audits every change made here, and each new pairing, as a KMS-config event; heartbeats are not audited.
 
 ## Security model and known limits
 
@@ -370,7 +370,7 @@ Start in gocryptfs `mount.go` and follow the key from `KR` to the cipher cores; 
 | gocryptfs | `internal/contentenc/`, `internal/nametransform/diriv.go`, `names.go`, `internal/fusefrontend/node_xattr.go`, `root_node.go` | Explicit key index on every object; no default of 0; 18-byte diriv; xattr marker |
 | gocryptfs | `internal/fusefrontend/file.go` (`doWrite`), `internal/ctlsocksrv/ctlsock_serve.go`, `internal/exitcodes/exitcodes.go` | A write under a key the mount lacks is EIO, not a panic; ctlsock `Rotate` and `Status`; exit codes 31 to 36 |
 | gocryptfs | `internal/tkc/`: `gateway.go`, `gwconnect.go`, `search_connect.go`, `machine.go`, `mock_gwconnect.go` | Transit unwrap; mapping of 403, 409, 401, TLS certificate alerts and 404/501 to the errors that pick the exit code; identity proof fetch |
-| tkutils | `model/`: `tkfsdatakey.go`, `transit.go`, `tkfspolicy.go`, `tkfsidentity.go`, `tkfscontrol.go`, `instances.go`; `awsidentity/`; `tcutils/restartable_http.go` | Wire types; RSA-OAEP transit and `ValidateTransportKey`; blocklist matching; the rekey rule (`OutstandingFor`); PKCS#7 verify and its 8 KiB cap; listener cert-refresh retries |
+| tkutils | `model/`: `tkfsdatakey.go`, `transit.go`, `tkfspolicy.go`, `tkfsidentity.go`, `tkfscontrol.go`, `tkfsinstance.go`; `awsidentity/`; `tcutils/restartable_http.go` | Wire types; RSA-OAEP transit and `ValidateTransportKey`; blocklist matching; the rekey rule (`OutstandingFor`); PKCS#7 verify and its 8 KiB cap; listener cert-refresh retries |
 | keep | `tcv/tkfs.go`, `tcv/object_keywrap.go`, `tenants/tenant_mgr_tkfs*.go` (`TKFSKekWrap`, `TKFSKekUnwrap`), `tenant_mgr_keywrap.go`, `tenant_mgr_paths.go` | The single `TKFSPermissionCheck`; one KEK per instance, resolved by id only under `tkfs/k/`, never in MCSE's `kek/key` |
 | keep | `web/tkfspolicy.go`, `tkfscas.go`, `tkfsinstance.go`, `tkfsbinding.go`, `tenantdatakey.go` | Admin routes and their audit records; heartbeat upsert and rekey directive; `-search` route keeps the blocklist and refuses paired instances |
 | gatehouse | `management/tkfsdatakey.go`, `tkfsbinding.go`, `tkfsinstance.go`, `tkfsrekey.go`, `tkfsdatakey_admin.go`, `ctx/tkfscas.go`, `ctx/tkfsidentitycerts.go`, `oec/oec.go`, `oec/s2s_object_proxy.go` | Listener supervisor; binding check order; key zeroized on every error path; TKFS KEK calls never cross S2S |

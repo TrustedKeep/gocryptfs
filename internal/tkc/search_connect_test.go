@@ -52,24 +52,25 @@ func TestSearchConnectorHeartbeat(t *testing.T) {
 	})
 	s.identity.adopt("instance-1")
 
-	resp, err := s.Heartbeat(7, testCreatedAt)
+	resp, err := s.Heartbeat(model.TKFSEventUnmount, 7, testCreatedAt)
 	if err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
-	if got.NodeID != "node-1" || got.KekID != "instance-1" || got.KeyIdx != 7 || !got.KeyCreatedAt.Equal(testCreatedAt) {
-		t.Errorf("request = %+v, want the node, instance, key-ring index and key stamp", got)
+	if got.NodeID != "node-1" || got.KekID != "instance-1" || got.KeyIdx != 7 || !got.KeyCreatedAt.Equal(testCreatedAt) ||
+		got.Event != model.TKFSEventUnmount {
+		t.Errorf("request = %+v, want the node, instance, key-ring index, key stamp and event", got)
 	}
 	if resp.Command != model.TKFSCommandRekey {
 		t.Errorf("response = %+v, want the command passed through", resp)
 	}
 
 	status = http.StatusForbidden
-	if _, err := s.Heartbeat(0, testCreatedAt); !errors.Is(err, ErrDenied) {
+	if _, err := s.Heartbeat(model.TKFSEventNone, 0, testCreatedAt); !errors.Is(err, ErrDenied) {
 		t.Errorf("403 error = %v, want one wrapping ErrDenied", err)
 	}
 	for _, code := range []int{http.StatusNotFound, http.StatusNotImplemented} {
 		status = code
-		_, err := s.Heartbeat(0, testCreatedAt)
+		_, err := s.Heartbeat(model.TKFSEventNone, 0, testCreatedAt)
 		if !errors.Is(err, ErrNotImplemented) {
 			t.Errorf("%d error = %v, want one wrapping ErrNotImplemented", code, err)
 		}
@@ -78,7 +79,7 @@ func TestSearchConnectorHeartbeat(t *testing.T) {
 		}
 	}
 	status = http.StatusServiceUnavailable
-	if _, err := s.Heartbeat(0, testCreatedAt); err == nil {
+	if _, err := s.Heartbeat(model.TKFSEventNone, 0, testCreatedAt); err == nil {
 		t.Error("503 must be an error")
 	} else if errors.Is(err, ErrDenied) || errors.Is(err, ErrNotImplemented) {
 		t.Errorf("503 must read as a plain outage: %v", err)
@@ -97,12 +98,12 @@ func TestSearchConnectorTriesTheNextHostOnA404(t *testing.T) {
 	s.identity.adopt("instance-1")
 	s.kmsHosts = []string{"kms-old", "kms-1"}
 	for i := 0; i < 20; i++ { // hosts are tried in random order
-		if _, err := s.Heartbeat(0, testCreatedAt); err != nil {
+		if _, err := s.Heartbeat(model.TKFSEventNone, 0, testCreatedAt); err != nil {
 			t.Fatalf("one host without the route failed the call: %v", err)
 		}
 	}
 	s.kmsHosts = []string{"kms-old", "kms-old"}
-	if _, err := s.Heartbeat(0, testCreatedAt); !errors.Is(err, ErrNotImplemented) {
+	if _, err := s.Heartbeat(model.TKFSEventNone, 0, testCreatedAt); !errors.Is(err, ErrNotImplemented) {
 		t.Errorf("every host 404 = %v, want ErrNotImplemented", err)
 	}
 }
@@ -119,7 +120,7 @@ func TestSearchConnectorPrefersACredentialRejection(t *testing.T) {
 	s.identity.adopt("instance-1")
 	s.kmsHosts = []string{"kms-rejects", "kms-down"}
 	for i := 0; i < 20; i++ { // hosts are tried in random order
-		_, err := s.Heartbeat(0, testCreatedAt)
+		_, err := s.Heartbeat(model.TKFSEventNone, 0, testCreatedAt)
 		if !CredentialsRejected(err) {
 			t.Fatalf("attempt %d: err = %v, want the credential rejection", i, err)
 		}
@@ -139,7 +140,7 @@ func TestCredentialRejectionComesFromTheTransportOnly(t *testing.T) {
 	} {
 		s := newTestSearchConnector(func(*http.Request) (*http.Response, error) { return nil, errors.New(alert) })
 		s.identity.adopt("instance-1")
-		if _, err := s.Heartbeat(0, testCreatedAt); !CredentialsRejected(err) {
+		if _, err := s.Heartbeat(model.TKFSEventNone, 0, testCreatedAt); !CredentialsRejected(err) {
 			t.Errorf("%q from the transport: CredentialsRejected = false", alert)
 		}
 	}
@@ -147,7 +148,7 @@ func TestCredentialRejectionComesFromTheTransportOnly(t *testing.T) {
 		return jsonResponse(http.StatusBadGateway, "dial upstream: remote error: tls: bad certificate"), nil
 	})
 	s.identity.adopt("instance-1")
-	if _, err := s.Heartbeat(0, testCreatedAt); err == nil || CredentialsRejected(err) {
+	if _, err := s.Heartbeat(model.TKFSEventNone, 0, testCreatedAt); err == nil || CredentialsRejected(err) {
 		t.Errorf("a 502 quoting a TLS error: err = %v, want an outage, not a credential rejection", err)
 	}
 }
@@ -159,7 +160,7 @@ func TestSearchConnectorSendsTenantToken(t *testing.T) {
 		token = r.Header.Get(kmsclient.HeaderTenantToken)
 		return jsonResponse(http.StatusOK, model.TKFSHeartbeatResponse{}), nil
 	})
-	if _, err := s.Heartbeat(0, testCreatedAt); err != nil {
+	if _, err := s.Heartbeat(model.TKFSEventNone, 0, testCreatedAt); err != nil {
 		t.Fatal(err)
 	}
 	if token != "tenant-token" {
