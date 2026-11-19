@@ -3,11 +3,22 @@
 # Builds the tkfs-mount image and mounts one TKFS filesystem in its own container, named tkfs-<name>, on the
 # gatehouse stack's network. Ctrl-C unmounts. See README.md.
 #
-#   mount.sh <name> [cert]    cert is a dir under certs/, default tkfs_host1
+#   mount.sh [-k] <name> [cert]    cert is a dir under certs/, default tkfs_host1; -k keeps the name's
+#                                  earlier filesystem instead of making a fresh one
 #
 set -euo pipefail
 
-NAME="${1:?usage: mount.sh <name> [cert]}"
+USAGE="usage: mount.sh [-k] <name> [cert]"
+KEEP=0
+while getopts k opt; do
+  case "${opt}" in
+    k) KEEP=1 ;;
+    *) echo >&2 "${USAGE}"; exit 1 ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+NAME="${1:?${USAGE}}"
 CERT="${2:-tkfs_host1}"
 HERE="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
 
@@ -22,4 +33,4 @@ docker network inspect "${STACK_NETWORK:-gw_gw}" >/dev/null 2>&1 || {
 "${HERE}/build.sh"
 
 cd "${HERE}"
-exec docker compose run --rm --name "tkfs-${NAME}" mount "${NAME}" "${CERT}"
+exec docker compose run --rm --name "tkfs-${NAME}" -e KEEP="${KEEP}" mount "${NAME}" "${CERT}"

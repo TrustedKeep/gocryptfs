@@ -1,7 +1,7 @@
 #!/bin/sh
 #
-# Mounts one TKFS filesystem in the foreground, initializing it on first use. Runs in the container; see
-# mount.sh.
+# Mounts one TKFS filesystem in the foreground, initializing a fresh one unless KEEP=1 and the name already
+# has one. Runs in the container; see mount.sh.
 #
 set -eu
 
@@ -12,6 +12,10 @@ CERT_DIR="/tkfs/certs/${CERT}"
 
 [ -f "${CERT_DIR}/tls.crt" ] || { echo >&2 "No cert dir ${CERT}; run certs.sh"; exit 1; }
 
+if [ "${KEEP:-0}" != 1 ] && [ -e "${STATE}" ]; then
+  echo "Discarding the earlier ${NAME}; mount.sh -k keeps it"
+  rm -rf "${STATE}"
+fi
 mkdir -p "${STATE}/cipher" "${STATE}/mnt"
 if [ ! -f "${STATE}/cipher/gocryptfs.conf" ]; then
   gocryptfs -init -gateway-host "${GATEWAY}" -node-id "${NAME}" -mock-aws "${STATE}/cipher"

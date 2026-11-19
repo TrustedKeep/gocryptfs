@@ -1,7 +1,8 @@
 # Testing TKFS against the gatehouse stack
 
 These steps follow the test steps on TK-1434 and TK-1394. Start the stack and make the certs as in
-[README.md](README.md), with no TKFS trusted CA uploaded yet. Run each `mount.sh` in its own terminal.
+[README.md](README.md), with no TKFS trusted CA uploaded yet. Run each `mount.sh` in its own terminal, and remount with
+`mount.sh -k`: a plain `mount.sh` makes a fresh filesystem, which is a new instance.
 
 ## Timing
 

@@ -29,8 +29,8 @@ In gatehouse's `docker/`:
 docker compose up -V --force-recreate --remove-orphans -d --wait
 ```
 
-This `up` recreates keep and so loses every KEK: run it again only after `docker compose down -v` here, and
-resume a stopped stack with the `up` under [Stop](#stop).
+This `up` recreates keep and so loses every KEK, so `mount.sh -k` cannot mount a filesystem made before it.
+Resume a stopped stack with the `up` under [Stop](#stop).
 
 Here:
 
@@ -52,9 +52,10 @@ certificate.
 
 ## Mounts
 
-`mount.sh <name> [cert]` mounts one filesystem, which is one TKFS instance, in its own container,
-`tkfs-<name>`. The cert is a directory under `certs/`, `tkfs_host1` by default. The filesystem is initialized
-on first use with `-mock-aws` and kept in the `tkfs_state` volume.
+`mount.sh [-k] <name> [cert]` mounts one filesystem, which is one TKFS instance, in its own container,
+`tkfs-<name>`. The cert is a directory under `certs/`, `tkfs_host1` by default. Each mount initializes a fresh
+filesystem with `-mock-aws`, replacing the name's earlier one; that is a new instance, so the earlier one stays
+on **Instances**. `-k` mounts the earlier filesystem instead. Filesystems live in the `tkfs_state` volume.
 
 - Ctrl-C or `docker stop tkfs-<name>` unmounts it, and a refused mount exits 33.
 - Closing the terminal leaves the mount running, so stop it with `docker stop tkfs-<name>` before mounting
@@ -63,7 +64,7 @@ on first use with `-mock-aws` and kept in the `tkfs_state` volume.
 - Mounts join the stack's `gw_gw` network. The AWS variant of the stack has only `gw_default`, so set
   `STACK_NETWORK=gw_default` for it.
 - `GATEWAY` sets the data-key listener a new filesystem is initialized with, `gateway:7083` by default
-  (`gateway2:7083` for the second cluster). It is stored in that filesystem's `gocryptfs.conf`, so later
+  (`gateway2:7083` for the second cluster). It is stored in that filesystem's `gocryptfs.conf`, so `-k`
   mounts ignore it.
 
 Certs in `certs/`:
@@ -120,5 +121,5 @@ docker compose down -v     # here, which removes the tkfs_state volume
 docker compose down -v     # in gatehouse's docker/
 ```
 
-The stack's `down -v` deletes keep's data, including every filesystem's KEK, so the filesystems in
-`tkfs_state` can never be mounted again. Remove them along with it.
+The stack's `down -v` deletes keep's data, including every filesystem's KEK, so `mount.sh -k` can never
+mount the filesystems in `tkfs_state` again. Remove them along with it.
