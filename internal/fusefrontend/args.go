@@ -39,8 +39,7 @@ type Args struct {
 	// Set from the "-one-file-system" flag, but not acted on: the only
 	// implementation lived in the removed reverse frontend.
 	OneFileSystem bool
-	// DeterministicNames disables gocryptfs.diriv files
+	// DeterministicNames fixes every gocryptfs.diriv's IV to all-zero, so a name encrypts the
+	// same way in every directory. The file itself still exists: it carries the key-ring index.
 	DeterministicNames bool
-	// whether or not we will be envelope encrypting the encryption keys
-	Envelope bool
 }

@@ -197,19 +197,12 @@ func (f *File) truncateGrowFile(oldPlainSz uint64, newPlainSz uint64) syscall.Er
 	if newPlainSz%f.rootNode.contentEnc.PlainBS() == 0 {
 		// The file was empty, so it did not have a header. Create one.
 		if oldPlainSz == 0 {
-			id, err := f.createHeader()
+			id, keyIdx, err := f.createHeader()
 			if err != nil {
 				return fs.ToErrno(err)
 			}
 			f.fileTableEntry.ID = id
-			//set up the envelope key if needed
-			if f.rootNode.args.Envelope {
-				err = f.initializeEnvelopeKey()
-				if err != nil {
-					tlog.Warn.Printf("Truncate initializeEnvelopeKey returned error: %v", err)
-					return syscall.EIO
-				}
-			}
+			f.fileTableEntry.KeyIdx = keyIdx
 		}
 		cSz := int64(f.rootNode.contentEnc.PlainSizeToCipherSize(newPlainSz))
 		err := syscall.Ftruncate(f.intFd(), cSz)

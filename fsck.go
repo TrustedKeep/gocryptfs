@@ -264,7 +264,8 @@ func fsck(args *argContainer) (exitcode int) {
 		tlog.Fatal.Printf("fsck: TmpDir: %v", err)
 		os.Exit(exitcodes.MountPoint)
 	}
-	pfs, wipeKeys := initFuseFrontend(args)
+	// fsck mounts read-only and never rotates, so it drops the rotator.
+	pfs, _, wipeKeys := initFuseFrontend(args)
 	rn := pfs.(*fusefrontend.RootNode)
 	rn.MitigatedCorruptions = make(chan string)
 	ck := fsckObj{
@@ -280,7 +281,7 @@ func fsck(args *argContainer) (exitcode int) {
 		tlog.SwitchLoggerToSyslog()
 	}
 	// Mount
-	srv := initGoFuse(pfs, args)
+	srv := initGoFuse(pfs, args, nil)
 	// Handle SIGINT & SIGTERM
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt)

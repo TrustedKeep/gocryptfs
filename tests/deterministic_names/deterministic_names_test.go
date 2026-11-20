@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
+	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
 
@@ -47,14 +48,26 @@ func TestDeterministicNames(t *testing.T) {
 	if err := os.MkdirAll(pDir+"/y/foo", 0700); err != nil {
 		t.Fatal(err)
 	}
-	matches, err := filepath.Glob(cDir + "/*/*")
-	if err != nil || len(matches) != 2 {
-		t.Fatal(matches, err)
+	// -deterministic-names writes a gocryptfs.diriv too (with an all-zero IV), because that is
+	// where the key-ring index of the directory's names lives. Drop it so only the two "foo"
+	// directories are left.
+	all, err := filepath.Glob(cDir + "/*/*")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if filepath.Base(matches[0]) != filepath.Base(matches[1]) {
-		t.Error(matches)
+	var foos []string
+	for _, m := range all {
+		if filepath.Base(m) != nametransform.DirIVFilename {
+			foos = append(foos, m)
+		}
 	}
-	fooEncrypted := filepath.Base(matches[0])
+	if len(foos) != 2 {
+		t.Fatal(all)
+	}
+	if filepath.Base(foos[0]) != filepath.Base(foos[1]) {
+		t.Error(foos)
+	}
+	fooEncrypted := filepath.Base(foos[0])
 
 	// "foo" should also encrypt to the same name in the root directory
 	if err := os.Mkdir(pDir+"/foo", 0700); err != nil {

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
+	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
 
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
@@ -26,9 +27,6 @@ func TestInitXchacha(t *testing.T) {
 	if !c.IsFeatureFlagSet(configfile.FlagXChaCha20Poly1305) {
 		t.Error("XChaCha20Poly1305 flag should be on")
 	}
-	if !c.IsFeatureFlagSet(configfile.FlagHKDF) {
-		t.Error("HKDF flag should be on")
-	}
 }
 
 // Create and mount "-xchacha" fs, and see if we get the expected file sizes
@@ -46,8 +44,9 @@ func TestXchacha(t *testing.T) {
 	if err := syscall.Stat(cDir+"/1byte", &st); err != nil {
 		t.Fatal(err)
 	}
-	// 2 byte version header + 16 byte file id + 192 bit xchacha iv + 1 byte payload + 16 byte mac
-	if st.Size != 2+16+24+1+16 {
+	// header (2 byte version + 2 byte key index + 16 byte file id) + 192 bit xchacha iv
+	// + 1 byte payload + 16 byte mac
+	if st.Size != contentenc.HeaderLen+24+1+16 {
 		t.Errorf("wrong size %d", st.Size)
 	}
 
@@ -58,8 +57,9 @@ func TestXchacha(t *testing.T) {
 	if err := syscall.Stat(cDir+"/1MiB", &st); err != nil {
 		t.Fatal(err)
 	}
-	// 2 byte version header + (16 byte file id + 192 bit xchacha iv + 4096 byte payload + 16 byte mac)*256
-	if st.Size != 2+16+(24+4096+16)*256 {
+	// header (2 byte version + 2 byte key index + 16 byte file id)
+	// + (192 bit xchacha iv + 4096 byte payload + 16 byte mac)*256
+	if st.Size != contentenc.HeaderLen+(24+4096+16)*256 {
 		t.Errorf("wrong size %d", st.Size)
 	}
 }

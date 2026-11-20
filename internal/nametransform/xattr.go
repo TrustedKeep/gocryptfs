@@ -22,21 +22,21 @@ func isValidXattrName(name string) error {
 	return nil
 }
 
-// EncryptXattrName encrypts an extended attribute (xattr) name.
+// EncryptXattrName encrypts an extended attribute (xattr) name under key-ring index "keyIdx".
 // xattr names are encrypted like file names, but with a fixed IV, and fewer
 // naming restriction.
-func (n *NameTransform) EncryptXattrName(plainName string) (cipherName64 string, err error) {
+func (n *NameTransform) EncryptXattrName(plainName string, keyIdx uint16) (cipherName64 string, err error) {
 	if err := isValidXattrName(plainName); err != nil {
 		tlog.Warn.Printf("EncryptXattrName %q: invalid plainName: %v", plainName, err)
 		return "", syscall.EBADMSG
 	}
-	return n.encryptName(plainName, xattrNameIV), nil
+	return n.encryptName(plainName, xattrNameIV, keyIdx)
 }
 
 // DecryptXattrName calls decryptName to try and decrypt a base64-encoded encrypted
 // filename "cipherName", and failing that checks if it can be bypassed
-func (n *NameTransform) DecryptXattrName(cipherName string) (plainName string, err error) {
-	if plainName, err = n.decryptName(cipherName, xattrNameIV); err != nil {
+func (n *NameTransform) DecryptXattrName(cipherName string, keyIdx uint16) (plainName string, err error) {
+	if plainName, err = n.decryptName(cipherName, xattrNameIV, keyIdx); err != nil {
 		return "", err
 	}
 	if err := isValidXattrName(plainName); err != nil {

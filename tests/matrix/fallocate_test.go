@@ -6,6 +6,10 @@ import (
 	"syscall"
 	"testing"
 
+	"golang.org/x/crypto/chacha20poly1305"
+
+	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
+	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
 	"github.com/rfjakob/gocryptfs/v2/internal/syscallcompat"
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
@@ -148,20 +152,24 @@ func TestFallocate(t *testing.T) {
 			}
 		}
 	}
-	// We used to allocate 18 bytes too much:
+	// We used to allocate a header's worth of bytes too much:
 	// https://github.com/rfjakob/gocryptfs/issues/311
 	//
-	// 8110 bytes of plaintext should get us exactly 8192 bytes of ciphertext.
+	// This much plaintext should get us exactly 8192 bytes of ciphertext: one full block plus a
+	// partial one, after the file header. Derived from the format constants rather than
+	// hard-coded, so a header or nonce size change does not silently turn this into a
+	// disk-usage assertion about the wrong number.
 	err = file.Truncate(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var plain int64 = 8110
+	ivLen := int64(contentenc.DefaultIVBits / 8)
 	if testcase.isSet("-xchacha") {
-		// xchacha has 24 byte ivs instead of 16. 8kiB are two blocks, so
-		// 2x8=16 bytes more.
-		plain = plain - 16
+		ivLen = chacha20poly1305.NonceSizeX
 	}
+	cipherBS := int64(contentenc.DefaultBS) + ivLen + cryptocore.AuthTagLen
+	// 8192 = HeaderLen + cipherBS (full block) + (partial plain + ivLen + tag)
+	plain := int64(contentenc.DefaultBS) + 8192 - contentenc.HeaderLen - cipherBS - ivLen - cryptocore.AuthTagLen
 	err = syscallcompat.Fallocate(fd, FALLOC_DEFAULT, 0, plain)
 	if err != nil {
 		t.Fatal(err)

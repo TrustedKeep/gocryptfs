@@ -5,11 +5,11 @@ package configfile
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"syscall"
 
 	"os"
 
-	"github.com/google/uuid"
 	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
 	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
@@ -21,7 +21,6 @@ const (
 	// The dot "." is not used in base64url (RFC4648), hence
 	// we can never clash with an encrypted file.
 	ConfDefaultName = "gocryptfs.conf"
-	EnvSetUpFlag    = "CEK" //created envelope key, if this file exists, it means the current envelope key has already been created
 )
 
 // ConfFile is the content of a config file.
@@ -35,20 +34,14 @@ type ConfFile struct {
 	FeatureFlags []string
 	// NodeID is the unique identifier for this host/mount
 	NodeID string
-	// BoundaryHost is the host:port of the Boundary instance that will retrieve
-	// our encryption keys
-	BoundaryHost string
-	// MockAWS uses a mock AWS connection for development
+	// GatewayHost is the host:port of the TrustedGateway that wraps and unwraps
+	// our data keys
+	GatewayHost string
+	// MockAWS proves tkutils' test-signed mock machine instead of reading EC2 IMDS.
 	MockAWS bool `json:",omitempty"`
 	// MockKMS uses a mock KMS for development
 	MockKMS  bool `json:",omitempty"`
 	IsSearch bool `json:",omitempty"`
-	// KeyPool is the size of the pool of keys to use, zero is no longer an option, Negative one means envelope encryption
-	KeyPool int `json:",omitempty"`
-	//EnvelopeID is the id in the kms of the envelope key that will be used to encrypt the individual file encryption keys ... TODO: this will probably need to be re-set during key rotations
-	EnvelopeID string `json:",omitempty"` //TODO: MAKE SURE THIS IS UPDATED DURING KEY ROTATION
-	//EnvEncAlg is the encryption algorithm that will be used to envelope encrypt the individual file keys
-	EnvEncAlg string `json:",omitempty"`
 	// LongNameMax corresponds to the -longnamemax flag
 	LongNameMax uint8 `json:",omitempty"`
 	// Filename is the name of the config file. Not exported to JSON.
@@ -62,36 +55,33 @@ type CreateArgs struct {
 	DeterministicNames bool
 	XChaCha20Poly1305  bool
 	NodeID             string
-	BoundaryHost       string
+	GatewayHost        string
 	MockAWS            bool
 	MockKMS            bool
 	IsSearch           bool
-	KeyPool            int
-	EnvEncAlg          string
 	LongNameMax        uint8
 }
 
-// Create - create a new config and write it to "Filename".
+// Create - create a new config and write it to "Filename". No key ring is written, and so no identity
+// is assigned: a filesystem's KekID is the id of the KEK keep mints on its first generate, which
+// the first mount records in the key ring (see keyring.go).
 func Create(args *CreateArgs) error {
-	cf := ConfFile{
-		filename:     args.Filename,
-		Version:      contentenc.CurrentVersion,
-		NodeID:       args.NodeID,
-		BoundaryHost: args.BoundaryHost,
-		MockAWS:      args.MockAWS,
-		MockKMS:      args.MockKMS,
-		IsSearch:     args.IsSearch,
-		KeyPool:      args.KeyPool,
-		EnvelopeID:   uuid.NewString(),
-		EnvEncAlg:    args.EnvEncAlg,
+	if args.NodeID == "" {
+		// The NodeID is reported on every data-key call and heartbeat, so a blocklist entry can
+		// name it; initDir resolves it, Create must not mint a different one.
+		return fmt.Errorf("NodeID is required")
 	}
-
-	if cf.NodeID == "" {
-		cf.NodeID = uuid.NewString()
+	cf := ConfFile{
+		filename:    args.Filename,
+		Version:     contentenc.CurrentVersion,
+		NodeID:      args.NodeID,
+		GatewayHost: args.GatewayHost,
+		MockAWS:     args.MockAWS,
+		MockKMS:     args.MockKMS,
+		IsSearch:    args.IsSearch,
 	}
 
 	// Feature flags
-	cf.setFeatureFlag(FlagHKDF)
 	if args.XChaCha20Poly1305 {
 		cf.setFeatureFlag(FlagXChaCha20Poly1305)
 	} else {
@@ -119,7 +109,9 @@ func Create(args *CreateArgs) error {
 	return cf.WriteFile()
 }
 
-// Load loads and parses the config file at "filename".
+// Load loads and parses the config file at "filename". The returned error carries the exit code
+// the caller should use: OpenConf if the file could not be read, DeprecatedFS if the on-disk
+// format is one this version cannot read, LoadConf if the contents are malformed.
 func Load(filename string) (*ConfFile, error) {
 	var cf ConfFile
 	cf.filename = filename
@@ -127,21 +119,20 @@ func Load(filename string) (*ConfFile, error) {
 	// Read from disk
 	js, err := os.ReadFile(filename)
 	if err != nil {
-		return nil, err
+		return nil, exitcodes.NewErr(err.Error(), exitcodes.OpenConf)
 	}
 	if len(js) == 0 {
-		return nil, fmt.Errorf("config file is empty")
+		return nil, exitcodes.NewErr("config file is empty", exitcodes.LoadConf)
 	}
 
 	// Unmarshal
-	err = json.Unmarshal(js, &cf)
-	if err != nil {
+	if err := json.Unmarshal(js, &cf); err != nil {
 		tlog.Warn.Printf("Failed to unmarshal config file")
-		return nil, err
+		return nil, exitcodes.NewErr(err.Error(), exitcodes.LoadConf)
 	}
 
 	if err := cf.Validate(); err != nil {
-		return nil, exitcodes.NewErr(err.Error(), exitcodes.DeprecatedFS)
+		return nil, err
 	}
 
 	// All good
@@ -156,43 +147,68 @@ func (cf *ConfFile) setFeatureFlag(flag flagIota) {
 	cf.FeatureFlags = append(cf.FeatureFlags, knownFlags[flag])
 }
 
-// WriteFile - write out config in JSON format to file "filename.tmp"
-// then rename over "filename".
-// This way a password change atomically replaces the file.
+// WriteFile atomically replaces the config file.
 func (cf *ConfFile) WriteFile() error {
 	if err := cf.Validate(); err != nil {
 		return err
 	}
-	tmp := cf.filename + ".tmp"
-	// 0400 permissions: gocryptfs.conf should be kept secret and never be written to.
+	return writeJSONAtomic(cf.filename, cf)
+}
+
+// writeJSONAtomic marshals "v" to "filename.tmp" and renames it over "filename", so an update
+// replaces the file atomically and a reader never observes a half-written one. Shared by the
+// config file and the key ring: both hold data a mount cannot recover from if it lands
+// truncated, and both are only ever replaced, never edited in place.
+func writeJSONAtomic(filename string, v interface{}) (err error) {
+	tmp := filename + ".tmp"
+	// 0400: these files should be kept secret and are never written in place.
 	fd, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0400)
 	if err != nil {
 		return err
 	}
-	js, err := json.MarshalIndent(cf, "", "\t")
+	// Clean up the tmp file on any failure: leaving it behind would make every later attempt
+	// fail on the exclusive create above.
+	fdOpen := true
+	defer func() {
+		if err != nil {
+			if fdOpen {
+				fd.Close()
+			}
+			os.Remove(tmp)
+		}
+	}()
+	js, err := json.MarshalIndent(v, "", "\t")
 	if err != nil {
 		return err
 	}
-	// For convenience for the user, add a newline at the end.
-	js = append(js, '\n')
-	_, err = fd.Write(js)
-	if err != nil {
+
+	if _, err = fd.Write(js); err != nil {
 		return err
 	}
-	err = fd.Sync()
-	if err != nil {
+	if err2 := fd.Sync(); err2 != nil {
 		// This can happen on network drives: FRITZ.NAS mounted on MacOS returns
 		// "operation not supported": https://github.com/rfjakob/gocryptfs/issues/390
-		tlog.Warn.Printf("Warning: fsync failed: %v", err)
+		tlog.Warn.Printf("Warning: fsync failed: %v", err2)
 		// Try sync instead
 		syscall.Sync()
 	}
-	err = fd.Close()
-	if err != nil {
+	fdOpen = false
+	if err = fd.Close(); err != nil {
 		return err
 	}
-	err = os.Rename(tmp, cf.filename)
-	return err
+	if err = os.Rename(tmp, filename); err != nil {
+		return err
+	}
+	// fsync the directory so the rename survives a crash. For the key ring this is what stops a
+	// crash from reverting to an absent ring and regenerating a key over data already encrypted
+	// under the lost one. Warning-only, like the file fsync.
+	if dirfd, err2 := os.Open(filepath.Dir(filename)); err2 == nil {
+		if err2 := dirfd.Sync(); err2 != nil {
+			tlog.Warn.Printf("Warning: directory fsync failed: %v", err2)
+		}
+		dirfd.Close()
+	}
+	return nil
 }
 
 // ContentEncryption tells us which content encryption algorithm is selected

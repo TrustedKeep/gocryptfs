@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
+
+	"github.com/TrustedKeep/tkutils/v2/network"
 )
 
 // TestPrefixOArgs checks that the "-o x,y,z" parsing works correctly.
@@ -117,7 +120,11 @@ func TestParseCliOpts(t *testing.T) {
 		longnames:   true,
 		longnamemax: 255,
 		raw64:       true,
-		hkdf:        true,
+		// The fork's own non-zero flag defaults. gatewayHost is derived from the host's local IP,
+		// so it has to be computed the same way rather than hard-coded, or this passes only on the
+		// machine the literal was copied from.
+		healthCheckPort: defaultHealthCheckPort,
+		gatewayHost:     fmt.Sprintf("%s:%d", network.GetLocalIP(), 7083),
 	}
 
 	type testcaseContainer struct {
@@ -156,6 +163,34 @@ func TestParseCliOpts(t *testing.T) {
 		o := parseCliOpts(tc.i)
 		if !reflect.DeepEqual(o, tc.o) {
 			t.Errorf("in=%v\nwant=%v\nhave=%v", tc.i, tc.o, o)
+		}
+	}
+}
+
+// The health-check port's three regions. 0 must behave exactly like an absent flag — it is the int
+// zero value, so the two are the same statement and cannot be allowed to mean different things.
+// Disabling is out of band, below zero, where no real port lives.
+func TestResolveHealthCheckPort(t *testing.T) {
+	testcases := []struct {
+		in      int
+		port    int
+		enabled bool
+	}{
+		{0, defaultHealthCheckPort, true}, // unset
+		{8000, 8000, true},
+		{9999, 9999, true},
+		{1, 1, true},
+		{-1, 0, false},
+		{-8000, 0, false},
+	}
+	for _, tc := range testcases {
+		port, enabled := resolveHealthCheckPort(tc.in)
+		if enabled != tc.enabled {
+			t.Errorf("resolveHealthCheckPort(%d): enabled=%v, want %v", tc.in, enabled, tc.enabled)
+			continue
+		}
+		if enabled && port != tc.port {
+			t.Errorf("resolveHealthCheckPort(%d): port=%d, want %d", tc.in, port, tc.port)
 		}
 	}
 }
