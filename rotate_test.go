@@ -210,7 +210,7 @@ func encrypt(r *keyRotator, n int) {
 // only with its own ops.
 func TestFlushOpCountsRotatesAtThreshold(t *testing.T) {
 	r := newTestRotator(t, "")
-	m, _, code := newTestMonitor(t, r, nil)
+	m, code := newTestMonitor(t, r, nil)
 	m.opThreshold = 4
 
 	encrypt(r, 3)
@@ -259,7 +259,7 @@ func TestFlushOpCountsRotatesAnInheritedCount(t *testing.T) {
 	if err := kr.WriteFile(); err != nil {
 		t.Fatal(err)
 	}
-	m, _, code := newTestMonitor(t, r, nil)
+	m, code := newTestMonitor(t, r, nil)
 	m.opThreshold = 10
 	m.flushOpCounts()
 	if n := len(loadRing(t, r).Keys); n != 2 {

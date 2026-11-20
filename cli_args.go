@@ -51,6 +51,8 @@ type argContainer struct {
 	_ctlsockFd net.Listener
 	// _forceOwner is, if non-nil, a parsed, validated Owner (as opposed to the string above)
 	_forceOwner *fuse.Owner
+	// _keyGate, if non-nil, suspends file operations while the key service does not vouch for this mount
+	_keyGate *keyGate
 
 	healthCheckPort int
 	// tk specific options

@@ -384,14 +384,13 @@ its original key, which no later rotation can bound.
 rotation, and a negative one is a usage error. `-ro` suppresses it, because a
 read-only mount performs no encrypt operations and may not write the cipherdir.
 
-**Failing to keep the count ends the mount** (**exit code 34**, or 33 when the
-key service refuses the rotation, 35 for a `-sharedstorage` refusal) rather
-than carrying on under a key whose budget nothing can account for: either the
-counter could not be persisted, or the threshold rotation failed three
-intervals in a row. A key ring that cannot take or persist the new key ends the
-mount at once. The usual causes are an unreachable gateway —
-which the heartbeat would end the mount over in any case — and an unwritable
-cipherdir.
+**Failing to keep the count suspends the mount** (see KEY-SERVICE HEARTBEAT)
+rather than carrying on under a key whose budget nothing can account for:
+either the counter could not be persisted, or the threshold rotation failed,
+three intervals in a row. A refusal, or a key ring that cannot take or persist
+the new key, suspends it at once. The usual causes are an unreachable gateway
+and an unwritable cipherdir. Before mounting, the same failures end the mount
+(**exit code 34**, or 33 for a refusal, 35 for a `-sharedstorage` refusal).
 
 #### -rw, -ro
 Mount the filesystem read-write (`-rw`, default) or read-only (`-ro`).
@@ -441,11 +440,11 @@ It does not permit a second mount of a mounted filesystem: its key ring has one
 writer, so a second mount on the same host is refused (exit code 32).
 
 It cannot be used with instance binding, which pins a filesystem to one
-machine. A gateway that requires binding refuses a `-sharedstorage` mount
-(**exit code 35**), at mount or on the first heartbeat, rekey or op-counter
-rotation of a running mount to reach such a gateway, for example behind a load
-balancer or after a gateway restart; a refused `-ctlsock` `Rotate` only returns
-the error. `-search` and `-mock-kms` mounts are never refused for it.
+machine. A gateway that requires binding refuses a `-sharedstorage` mount: at
+mount with **exit code 35**, and a running mount whose heartbeat, rekey or
+op-counter rotation reaches such a gateway, for example behind a load balancer
+or after a gateway restart, is suspended; a refused `-ctlsock` `Rotate` only
+returns the error. `-search` and `-mock-kms` mounts are never refused for it.
 
 More info: https://github.com/rfjakob/gocryptfs/issues/156
 
@@ -716,11 +715,10 @@ made; a rotation it makes after the request for another reason, such as the
 `-ctlsock` `Rotate` command or the op counter, completes it too. Nothing dials
 the mount, so it listens on no inbound port for this. A rekey that arrives
 while the instance is down is collected when it returns. A rotation that cannot
-get a new key is retried at the next heartbeat; three failures in a row end the
-mount (**exit code 34**) rather than leaving it writing under a key it was told
-to stop using. A refusal ends it at once (**exit code 33**, or 35 for a
-`-sharedstorage` refusal), as does a key ring that cannot take or persist the
-new key (**exit code 34**). `-ro` suppresses the rotation, as it does
+get a new key is retried at the next heartbeat; three failures in a row suspend
+the mount rather than leaving it writing under a key it was told to stop using.
+A refusal suspends it at once, as does a key ring that cannot take or persist
+the new key. `-ro` suppresses the rotation, as it does
 the op counter's, and the request stays pending for a writable mount.
 
 **The first heartbeat is sent before anything is mounted.** A key service that
@@ -737,20 +735,38 @@ does not get to serve one. A rekey that heartbeat brings back is carried out
 before the filesystem is served.
 
 Once mounted, a refusal — a blocklist entry naming the instance, or its DN
-removed from the ACL (gateway mounts only; `-search` has no ACL) — ends the
+removed from the ACL (gateway mounts only; `-search` has no ACL) — suspends the
 mount on the heartbeat that carries it. Merely *failing to reach* the key
-service is survivable twice, and the third consecutive failure ends it too. A
+service is survivable twice, and the third consecutive failure suspends it too. A
 404 or 501 counts as failing to reach it (under `-search`, only when every keep
-host answers so). Removing the instance's CA from the gateway's trust set is one of those failures, not a refusal: the TLS handshake
+host answers so), and so does a keep node that is still unsealing, which
+answers with a redirect to its unseal page. Removing the instance's CA from the gateway's trust set is one of those failures, not a refusal: the TLS handshake
 fails, so it takes three heartbeats. A heartbeat the key service answers but
 cannot record also counts as a failure, not as a success: revocation acts
 through that record, so a mount missing from it is one nobody can stop.
 
-Either way the mount ends the same way, and it is not abortable: a clean
-unmount is attempted, a busy mountpoint gets ten seconds and one more try, and
-the process then exits (**exit code 33** for a refusal or rejected credentials,
-35 for a `-sharedstorage` refusal, 36 for an outage) regardless, at worst leaving a dead mountpoint. Whether a filesystem outlives its key service does not depend on
-whether someone has a file open in it.
+**A running mount is never unmounted by the key service.** An unmounted
+mountpoint is an ordinary directory, and anything a writer put there would land
+on the local disk unencrypted. Suspended, the mount stays up and keeps its
+heartbeat, but every operation on it fails with EACCES ("Permission denied"),
+`stat` and `statfs` of the mountpoint included, so clients can tell something is
+wrong. So do the `-ctlsock` `EncryptPath` and `DecryptPath` commands; only
+closing and syncing files already open, and saving what a program already wrote
+into a memory-mapped file, still work. It resumes at the end of the
+first interval whose heartbeat is answered, unless a demanded rotation was
+refused in it or has failed three intervals in a row, and reports a mount to the
+key service as it does. So unblocking an instance, re-allowing its DN or ending
+an outage brings it back within one interval, with no remount. Suspending also
+has the kernel drop the cached pages of files still open, so a memory mapping
+made before it fails (SIGBUS) instead of reading or changing them. Until a
+file's pages are dropped, which normally takes milliseconds, a mapping can still
+change them.
+
+Suspension cannot cover the times nothing is mounted: before the first mount,
+after a crash or a failure before mounting, and after a stop or an `-idle`
+unmount, the mountpoint is an ordinary directory again. Make it immutable while
+it is empty (`chattr +i MOUNTPOINT`, as root) so that writes into it fail instead
+of landing on the local disk unencrypted; mounting over it still works.
 
 `-mock-kms` is the one mount with no heartbeat, and so neither revocation nor
 rekeying. A filesystem created with `-mock-kms`, which keeps plaintext keys on
@@ -768,19 +784,20 @@ the first EC2 instance to mount it through such a gateway, and
 refuses every call not from that instance, so a copied cipherdir and client
 certificate stop working anywhere else. Only a mount pairs: such a gateway
 refuses an unpaired filesystem's heartbeat and rotation, so a mount already
-running when binding is turned on exits with **exit code 33** at its next
-heartbeat and must be remounted by hand, which pairs it. A gateway that does
+running when binding is turned on is suspended at its next heartbeat and must
+be remounted by hand, which pairs it. A gateway that does
 not require binding pairs nothing. `-search` mounts reach keep directly, send
 no document and are never paired.
 
 Off EC2 there is no document: the mount warns once and carries on. A gateway
 that requires binding refuses such a mount, and one on any instance but its
-own, with **exit code 33**, at mount or on the next heartbeat; it refuses a
-`-sharedstorage` mount with **exit code 35**. A pairing cannot be moved, so a
-filesystem moved to a new instance is refused there until an administrator
+own: with **exit code 33** at mount, or by suspending it on the next heartbeat.
+It refuses a `-sharedstorage` mount the same way, with **exit code 35** at
+mount. A pairing cannot be moved, so a filesystem moved to a new instance is
+refused there until an administrator
 forgets the instance in the gateway; its next mount then pairs it with the new
-instance. Forgetting a mounted instance ends that mount with **exit code 33**
-at its next heartbeat, and remounting it pairs it again. Containers need IMDSv1,
+instance. Forgetting a mounted instance suspends that mount at its next
+heartbeat, and remounting it pairs it again. Containers need IMDSv1,
 or IMDSv2 with a hop limit of 2 or more.
 
 With `-mock-aws` (given at `-init`) the mount proves a fixed, fake instance
@@ -800,14 +817,15 @@ EXIT CODES
 26: fsck found errors  
 31: the health-check port could not be bound  
 32: the filesystem is already mounted by another gocryptfs process  
-33: the key service withdrew this instance's authorization or rejected its credentials  
-34: the key operation counter could not be persisted, or a rotation failed other than by a refusal — the op threshold's or a rekey's  
-35: a gateway that requires instance binding refused this `-sharedstorage` mount  
-36: the key service could not be reached  
+33: before mounting, the key service refused this instance or rejected its credentials  
+34: before mounting, the key operation counter could not be persisted, or a rotation failed other than by a refusal — the op threshold's or a rekey's  
+35: before mounting, a gateway that requires instance binding refused this `-sharedstorage` mount  
+36: before mounting, the key service could not be reached  
 other: please check the error message
 
-A systemd unit should set `RestartPreventExitStatus=33 35`, so a revoked or
-refused mount is not restarted into the same answer.
+Once mounted, none of these end the mount; it is suspended instead. A systemd
+unit should set `RestartPreventExitStatus=33 35`, so a mount refused at start is
+not restarted into the same answer.
 
 See also: https://github.com/rfjakob/gocryptfs/blob/master/internal/exitcodes/exitcodes.go
 

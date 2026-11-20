@@ -6,7 +6,7 @@ require (
 	github.com/TrustedKeep/tkutils/v2 v2.16.3-0.20261119002152-dc83a590deb5
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/google/uuid v1.6.0
-	github.com/hanwen/go-fuse/v2 v2.8.0
+	github.com/hanwen/go-fuse/v2 v2.12.1
 	github.com/moby/sys/mountinfo v0.7.2
 	github.com/pkg/xattr v0.4.9
 	github.com/rfjakob/eme v1.1.2

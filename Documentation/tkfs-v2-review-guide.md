@@ -1,6 +1,6 @@
 # TKFS v2 Review Guide
 
-As of 2026-11-16. Living version: [TKFS v2 Review Guide](https://claude.ai/code/artifact/b55011d0-b567-41f6-bfcc-31332661db70).
+As of 2026-11-20. Living version: [TKFS v2 Review Guide](https://claude.ai/code/artifact/b55011d0-b567-41f6-bfcc-31332661db70).
 
 TKFS v2 swaps TrustedBoundary for TrustedGateway and replaces per-file envelope keys with one KEK-wrapped data key per filesystem. On that base it adds key rotation, remote rekey, heartbeat revocation, optional EC2 instance binding and a gatehouse admin UI. Phases 0 to 5 are merged into each repo's `feature/tkfs-v2`; shared storage (Phase 3.5) is still in progress.
 
@@ -18,7 +18,7 @@ New in v2:
 
 - **Rotation**: new files, directories, symlinks and xattr values use the newest key; existing files keep theirs, and old data stays readable.
 - **Remote rekey**: an admin asks the gateway; the instance picks it up on its next heartbeat.
-- **Revocation**: an ACL removal or a block takes effect at the next heartbeat and unmounts the filesystem.
+- **Revocation**: an ACL removal or a block takes effect at the next heartbeat and suspends the filesystem: it stays mounted, file operations fail with EACCES, and it resumes once the key service answers again.
 - **Instance binding**: a gateway can require each instance to prove which EC2 machine it runs on.
 - **Admin UI**: a TKFS page in gatehouse for instances, access control, trusted CAs and binding.
 
@@ -130,13 +130,13 @@ A call succeeds when three things hold: its client CA is trusted, its DN is in t
 ```mermaid
 flowchart TD
   A["call arrives on :7083"] --> B{"client cert signed<br/>by a trusted CA?"}
-  B -- no --> X1["TLS handshake fails, client exits 33"]
+  B -- no --> X1["TLS handshake fails: exit 33 at mount,<br/>an outage strike once mounted"]
   B -- yes --> C{"gateway requires<br/>binding?"}
   C -- no --> G
   C -- yes --> S{"-sharedstorage<br/>mount?"}
-  S -- yes --> X2["409, client exits 35"]
+  S -- yes --> X2["409: exit 35 at mount,<br/>suspended once mounted"]
   S -- no --> E{"identity proof matches<br/>the instance's pairing?"}
-  E -- no --> X3["403, client exits 33"]
+  E -- no --> X3["403: exit 33 at mount,<br/>suspended once mounted"]
   E -- yes --> G{"keep: DN in ACL and<br/>not blocklisted?"}
   G -- no --> X3
   G -- yes --> OK["200 after KekWrap, KekUnwrap or upsert.<br/>With binding required, a mint or an unwrap<br/>of an unpaired instance pairs here."]
@@ -155,7 +155,7 @@ keep stores TKFS state per tenant under `tkfs`, in six objects:
 | `tkfs/b/<kekID>` | `TKFSBinding` | The machine an instance is paired with | Gateways requiring binding; keep on the `-search` route |
 | `tkfs/k/<kekID>` | `TenantKek` | The instance's KEK, kept apart from MCSE's `kek/key` so neither service can name the other's | Every generate and unwrap; each heartbeat checks it exists |
 
-The CA set is kept apart from the policy so that a policy which fails to decode cannot tear down the listener. It still fails every heartbeat in the tenant as an outage (keep 500, gateway 502), because keep reads the policy on each one, so every mount exits 36 after three beats, and a restart fails at unwrap, which reads it too. No admin route can rewrite an undecodable policy.
+The CA set is kept apart from the policy so that a policy which fails to decode cannot tear down the listener. It still fails every heartbeat in the tenant as an outage (keep 500, gateway 502), because keep reads the policy on each one, so every mount is suspended after three beats, and a new mount fails at unwrap, which reads it too. No admin route can rewrite an undecodable policy.
 
 ## Transit wrap
 
@@ -239,26 +239,27 @@ The heartbeat runs every 5 minutes and is not configurable, because it sets the 
 
 | Heartbeat answer | Effect |
 |---|---|
-| 200 | Reset the failure count; run a `rekey` if one came back |
-| 403 | Unmount now (exit 33): authorization is gone |
-| 409 | Unmount now (exit 35): a gateway requiring binding refused `-sharedstorage` |
+| 200 | Reset the failure count, and resume if nothing else holds the mount suspended; run a `rekey` if one came back |
+| 403 | Suspend now: authorization is gone |
+| 409 | Suspend now: a gateway requiring binding refused `-sharedstorage` |
 | 404 or 501 | Count it like any outage: the first heartbeat already proved the route |
-| Anything else: transport or TLS failure, 401, other 4xx or 5xx | Count it; the third in a row unmounts with exit 36, or 33 if it was a 401 or a TLS alert refusing the client certificate |
+| 200 with keep's `redirect` body (a keep node still unsealing) | `-search`: try the next host, and count it like any outage if none answers. The gateway answers it 502 |
+| Anything else: transport or TLS failure, 401, other 4xx or 5xx | Count it; the third in a row suspends |
 
-A rekey or op-counter rotation that cannot get a new key is retried at the next interval, and the third failing interval in a row exits 34. A refusal ends the mount at once (33, or 35), as do a key ring that cannot take or persist the new entry (34) and any rotation failure before mounting.
+A rekey or op-counter rotation that cannot get a new key is retried at the next interval, and the third failing interval in a row suspends. A refusal, or a key ring that cannot take or persist the new entry, suspends at once. Before mounting, any of these ends the mount instead (33, 34 or 35).
 
-Unmounting is not abortable: a clean unmount, a 10-second grace for a busy mountpoint, one retry, then exit. An outage spanning three heartbeats (possible after 10 minutes, certain after 15) therefore unmounts every filesystem in the tenant that uses the failed service, with exit 36: a gateway outage takes down gateway mounts, a keep outage takes down all of them.
+A running mount is never unmounted by the key service (`keygate.go`): an unmounted mountpoint is an ordinary directory, so a writer that does not notice would put plaintext on the local disk. Suspended, it stays mounted and keeps beating, but every operation fails with EACCES, stat and statfs of the mountpoint included, as do the control socket's EncryptPath and DecryptPath; only release, flush and fsync of what is already open, and the kernel's writeback of pages a mapping has dirtied (refusing it would discard them), still work. It also has the kernel drop the cached pages of files still open (go-fuse ≥ 2.11 makes that notify safe against unmount), so a mapping made before faults instead of reading or changing them; until a file's drop finishes, its mapped pages can still be changed and written back. It resumes at the end of the first interval whose heartbeat is answered, unless a demanded rotation was refused in it or has failed three intervals in a row, with no remount, and reports a mount event as it does, which stamps the record's last-mounted time. An outage spanning three heartbeats (possible after 10 minutes, certain after 15) therefore suspends every filesystem in the tenant that uses the failed service, and they resume within an interval of it ending.
 
 | Exit code | Meaning |
 |---|---|
 | 31 | The health-check port could not be bound |
 | 32 | The filesystem is already mounted by another process |
-| 33 | Authorization withdrawn (403), or credentials rejected (401, or a TLS alert refusing the client certificate) |
-| 34 | The op count could not be persisted, or an op-counter or rekey rotation failed other than by a refusal: three intervals in a row, or at once before mounting or when the ring cannot take the new entry |
-| 35 | A gateway requiring binding refused a `-sharedstorage` mount |
-| 36 | The key service could not be reached: the pre-mount heartbeat ran out of attempts, or three heartbeats in a row failed |
+| 33 | Before mounting: instance refused (403), or credentials rejected (401, or a TLS alert refusing the client certificate) |
+| 34 | Before mounting: the op count could not be persisted, or an op-counter or rekey rotation failed other than by a refusal |
+| 35 | Before mounting: a gateway requiring binding refused a `-sharedstorage` mount |
+| 36 | Before mounting: the pre-mount heartbeat ran out of attempts |
 
-systemd units should set `RestartPreventExitStatus=33 35`, so an outage (36) restarts and a refusal does not.
+systemd units should set `RestartPreventExitStatus=33 35`, so a mount that failed to start on an outage (36) restarts and a refusal does not.
 
 Rotation is forward-only. A file keeps its content key and a directory its name key, so the root directory's names never rotate. Rotation also does not contain a KEK compromise, since one KEK wraps every entry; the answer to that is a new instance.
 
@@ -318,7 +319,7 @@ stateDiagram-v2
   Paired --> Unpaired: Forget any instance, or unbind
 ```
 
-Behind a gateway requiring binding, an unpaired instance's heartbeat or rotation is refused, so mounts already running when the flag goes on exit 33 and pair at their remount. A call proving another machine, or none, gets 403 and exit 33. While the gateway has no usable identity cert, a call carrying a proof gets 502 instead, which the client counts as an outage.
+Behind a gateway requiring binding, an unpaired instance's heartbeat or rotation is refused, so mounts already running when the flag goes on are suspended and pair at their remount. A call proving another machine, or none, gets 403: exit 33 at mount, suspension once mounted. While the gateway has no usable identity cert, a call carrying a proof gets 502 instead, which the client counts as an outage.
 
 What it does not close:
 
@@ -334,12 +335,12 @@ gatehouse's cobblestone UI gains a TKFS page with four tabs, in `cobblestone/src
 
 | Tab | Shows | Actions |
 |---|---|---|
-| Instances | One row per instance (a KEK's DN, NodeID and machine), plus one per pairing whose KEK has no instance. Status: Mounted or Unmounted (the later of the instance's last mount and unmount reports; a record is created mounted), Blocked, Refused (the UI's prediction under binding) or No record. A Last Mounted column; a Host column when keep supports binding (the machine its identity document names, marked unverified until an identity cert verifies it, binding on or off), and a Binding column (Bound, Host mismatch, Unverified, Search mount) when this node requires it | Rekey (rows with a record), Block, Forget (an instance), or unbind (a row with no instance) |
+| Instances | One row per instance (a KEK's DN, NodeID and machine), plus one per pairing whose KEK has no instance. Status: Active or Unmounted (the later of the instance's last mount and unmount reports; a record is created mounted), Blocked, Refused (the UI's prediction under binding; the tooltip says whether the filesystem is not bound, the machine is unverified or it is another machine) or No record. Blocked and Refused instances that are mounted stay mounted with their file operations failing. A Last Mounted column; a Host column when keep supports binding (the machine its identity document names, marked unverified until an identity cert verifies it, binding on or off), and a Binding column (Bound, Not bound, Search mount) when this node requires it | Rekey (rows with a record), Block, Forget (an instance), or unbind (a row with no instance) |
 | Access Control | Allowed DNs and the blocklist | Add or remove a DN; add or remove a block on DN, NodeID or KekID |
 | Trusted CAs | The listener's client CA set; a warning when it is empty | Upload a PEM CA cert or chain (any non-CA cert refuses the upload); remove by fingerprint |
 | Instance Binding | Whether this gateway node requires binding (read-only) and the identity certs | Add or remove an identity cert |
 
-The Instance Binding tab is hidden when keep is too old to support binding or the policy cannot be read. Forget deletes the instance record, any pending rekey, and the filesystem's pairing. A mount that is still running registers again on its next heartbeat, or exits 33 behind a gateway requiring binding once its pairing is gone. keep audits every change made here, and each new pairing, as a KMS-config event; heartbeats are not audited.
+The Instance Binding tab is hidden when keep is too old to support binding or the policy cannot be read. Forget deletes the instance record, any pending rekey, and the filesystem's pairing. A mount that is still running registers again on its next heartbeat, or is suspended behind a gateway requiring binding once its pairing is gone. keep audits every change made here, and each new pairing, as a KMS-config event; heartbeats are not audited.
 
 ## Security model and known limits
 
@@ -349,8 +350,10 @@ The KEK model makes a stolen cipherdir useless without the key service and gives
 |---|---|---|
 | `KR` is a bearer capability within a tenant | Unwrap selects the KEK by the `KeyID` in `KR` and checks only that the caller's DN is allowed and not blocked (on `-search`, only the blocklist, and that the instance is unpaired), so any authorized client holding another filesystem's `KR` can unwrap it | Binding, for paired instances: `-search` refuses them and a gateway requiring binding refuses other machines; separate tenants |
 | NodeID is self-asserted | A NodeID block is soft. DN and KekID blocks refuse key release, but no block stops a running mount that ignores the refusal | Block the DN or KekID, remove the DN from the ACL, or remove its CA |
-| Outage unmounts the fleet | An outage spanning three heartbeats (10 to 15 minutes) unmounts every mount that uses the failed service, with exit 36: gateway mounts for a gateway outage, all of them for keep. So does a stored policy that fails to decode, and no admin route can repair one | Accepted trade for bounded revocation. 36 is not in `RestartPreventExitStatus`, so systemd retries the mount |
-| Removing the last trusted CA | The listener stops once keep confirms the empty set, at least 30 seconds after the gateway first sees it. Gateway mounts in the tenant then exit 36 after three failed heartbeats, and none remounts until a CA is back | The UI warns and asks to confirm before removing the last CA |
+| Outage suspends the fleet | An outage spanning three heartbeats (10 to 15 minutes) suspends every mount that uses the failed service: gateway mounts for a gateway outage, all of them for keep. So does a stored policy that fails to decode, and no admin route can repair one | Accepted trade for bounded revocation. The mounts stay up and resume within an interval of the outage ending |
+| Removing the last trusted CA | The listener stops once keep confirms the empty set, at least 30 seconds after the gateway first sees it. Gateway mounts in the tenant are then suspended after three failed heartbeats, and resume once a CA is back | The UI warns and asks to confirm before removing the last CA |
+| The mountpoint while nothing is mounted | Before the first mount, after a crash or a failure before mounting, and after a stop or an `-idle` unmount, the mountpoint is an ordinary directory, so a writer that does not notice puts plaintext on the local disk. The next mount refuses a non-empty mountpoint (exit 10), but only after the fact | `chattr +i` on the empty mountpoint, documented in MANPAGE.md |
+| A suspended mount keeps its keys | Suspension refuses file operations and drops open files' cached pages, but does not wipe the data keys from memory | Unmount the instance on the host |
 | Transit wrap is passive-only | The transport key is not bound to the mTLS identity, so an active middlebox that rewrites bodies is out of scope | TLS to the gateway |
 | Rotation is forward-only | Existing files and directories keep their keys; a KEK compromise is not contained by rotation | New instance and copy the data |
 | Binding is trust on first use | Anything that can read IMDS on the paired machine can replay its static proof; Forget reopens pairing | IMDSv2 required (`HttpTokens=required`) with hop limit 1, which also keeps bridged containers off IMDS, so TKFS must run on the host or with host networking |
@@ -365,7 +368,7 @@ Start in gocryptfs `mount.go` and follow the key from `KR` to the cipher cores; 
 | Repo | Where to look | What to check |
 |---|---|---|
 | gocryptfs | `mount.go`: `doMount`, `initFuseFrontend`, `generateInitialDataKey`, `buildKeySets`, `keyServiceExit` | Order on first mount (diriv, then ring, then heartbeat, then FUSE); which unwrap failures are fatal |
-| gocryptfs | `heartbeat.go` (`keyServiceMonitor`), `rotate.go` (`keyRotator`) | Three-strike and immediate-death rules for heartbeats and rotations; which failures exit 33, 34, 35 or 36 |
+| gocryptfs | `heartbeat.go` (`keyServiceMonitor`), `rotate.go` (`keyRotator`), `keygate.go` (`keyGate`, `gatedFS`) | Three-strike and immediate-suspension rules for heartbeats and rotations, which operations a suspension refuses and which cached pages it drops, and which pre-mount failures exit 33, 34, 35 or 36 |
 | gocryptfs | `internal/configfile/keyring.go`, `config_file.go`, `validate.go` | Append-only ring; every entry shares one KeyID; empty ring only before the first mount |
 | gocryptfs | `internal/contentenc/`, `internal/nametransform/diriv.go`, `names.go`, `internal/fusefrontend/node_xattr.go`, `root_node.go` | Explicit key index on every object; no default of 0; 18-byte diriv; xattr marker |
 | gocryptfs | `internal/fusefrontend/file.go` (`doWrite`), `internal/ctlsocksrv/ctlsock_serve.go`, `internal/exitcodes/exitcodes.go` | A write under a key the mount lacks is EIO, not a panic; ctlsock `Rotate` and `Status`; exit codes 31 to 36 |
@@ -428,7 +431,7 @@ You need Docker with buildx, FUSE on the host (`/dev/fuse`), OpenSSL 3 or later 
     TKFS_REQUIRE_BINDING=true docker compose up -d --force-recreate --no-deps --wait gateway
     ```
 
-    Mounts already running are refused on their next heartbeat (exit 33); remount each to pair it.
+    Mounts already running are suspended on their next heartbeat; remount each to pair it.
 
 After a code change:
 

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/TrustedKeep/tkutils/v2/model"
@@ -19,7 +18,7 @@ import (
 // keep serving for: fifteen minutes.
 const heartbeatInterval = 5 * time.Minute
 
-// heartbeatFailureLimit is how many consecutive failures end the mount. A definitive rejection
+// heartbeatFailureLimit is how many consecutive failures suspend the mount's file operations. A refusal
 // does not wait the count out. Rotations a rekey or the op counter demand get the same budget.
 const heartbeatFailureLimit = 3
 
@@ -36,11 +35,6 @@ var firstHeartbeatRetryDelay = 5 * time.Second
 // take a request timeout per key-service host, and a mount that blows systemd's start timeout is
 // killed instead of exiting with a code that says why. No retry starts after this much time.
 var firstHeartbeatBudget = 45 * time.Second
-
-// forcefulUnmountGrace is how long a shutdown gives a busy mountpoint to free up before it stops
-// trying for a clean unmount. A stale mountpoint is an operator cleanup problem; a filesystem still
-// serving after the key service can no longer vouch for it is a security failure.
-const forcefulUnmountGrace = 10 * time.Second
 
 // defaultRotateOpThreshold is how many encrypt operations one data key covers before the mount
 // rotates to a fresh one — about 4.4 TB at the default block size. A quarter of NIST's 2^32 bound
@@ -70,9 +64,7 @@ func autoRotateThreshold(args *argContainer) uint64 {
 // authorization current, reports its key-ring index and collects any rekey asked of it, and the
 // op-counter flush that drives auto-rotation. They share one timer and neither needs its own goroutine.
 type keyServiceMonitor struct {
-	// hb is nil unless the connector has a heartbeat route to beat to. That is what keeps
-	// heartbeat-death away from -mock-kms and every integration mount: a filesystem that
-	// unmounts itself over a heartbeat it could never send would take the test suite with it.
+	// hb is nil when the connector has no heartbeat route, as under -mock-kms.
 	hb      tkc.Heartbeater
 	rotator *keyRotator
 	// readOnly suppresses the rekey a heartbeat can bring back, for the reason -ro suppresses
@@ -80,20 +72,23 @@ type keyServiceMonitor struct {
 	readOnly bool
 	// opThreshold is the operation count that triggers auto-rotation. Zero disables it.
 	opThreshold uint64
-	// srv is nil until the filesystem is mounted.
-	srv        interface{ Unmount() error }
-	mountpoint string
-	exit       func(code int)
+	mountpoint  string
+	// exit ends the process; only failures before mounting use it.
+	exit func(code int)
 
 	// failures counts heartbeats that failed in a row. rotateFailures counts ticks in a row in which
 	// a demanded rotation (rekey or op counter) failed: one per tick however many failed in it, and
 	// back to zero after a tick in which none did. rotationFailedThisTick tracks the current tick.
+	// A refusal sets its count to the limit at once.
 	failures               int
 	rotateFailures         int
 	rotationFailedThisTick bool
+	// gate suspends file operations while either count is at heartbeatFailureLimit.
+	gate *keyGate
 
-	// mountReported is set once the key service has heard this mount; only then is its unmount reported.
-	mountReported atomic.Bool
+	// mountReported is set once the key service has heard this mount, before mounting, so before any
+	// goroutine that reports the unmount starts; only then is its unmount reported.
+	mountReported bool
 	unmountOnce   sync.Once
 }
 
@@ -110,7 +105,7 @@ func (m *keyServiceMonitor) report(event model.TKFSHeartbeatEvent) (model.TKFSHe
 // ending. It is best effort, so a crash or an unreachable key service leaves the mount shown as mounted.
 func (m *keyServiceMonitor) reportUnmount() {
 	m.unmountOnce.Do(func() {
-		if m.hb == nil || !m.mountReported.Load() {
+		if m.hb == nil || !m.mountReported {
 			return
 		}
 		done := make(chan error, 1)
@@ -129,7 +124,7 @@ func (m *keyServiceMonitor) reportUnmount() {
 	})
 }
 
-// outageExit is the exit code for a mount ending because the key service could not be reached. An
+// outageExit is the exit code for a mount that could not reach the key service before mounting. An
 // outage is restartable, unless the failures were the key service rejecting this instance's
 // credentials (a 401, or a TLS alert refusing its certificate), which a restart would only repeat.
 func outageExit(err error) int {
@@ -149,9 +144,7 @@ func (m *keyServiceMonitor) verifyKeyService() {
 	case errors.Is(err, tkc.ErrNotImplemented):
 		// Possibly a key service too old for the route, but a proxy or a deploy answers 404 too, so
 		// this exits as an outage: a restart will mount once the route answers.
-		tlog.Fatal.Printf("The key service does not answer the heartbeat route, so this mount would run with " +
-			"no revocation: blocking or de-authorizing it could not unmount it. If the key service predates " +
-			"the route, upgrade it.")
+		tlog.Fatal.Printf("The key service does not answer the heartbeat routes.")
 		m.exit(exitcodes.KeyServiceUnreachable)
 	case errors.Is(err, tkc.ErrSharedStorageRefused):
 		tlog.Fatal.Printf("%v", err)
@@ -166,10 +159,15 @@ func (m *keyServiceMonitor) verifyKeyService() {
 		// A short mount never reaches the first scheduled beat. Before mounting there is no old key in
 		// use to keep serving under, so a rekey that fails ends the mount rather than being retried.
 		if err := m.rekey(); err != nil {
-			m.shutdownNow(fmt.Sprintf("The key service asked for a rekey before mounting and it failed: %v", err),
+			m.exitBeforeMount(fmt.Sprintf("The key service asked for a rekey before mounting and it failed: %v", err),
 				keyServiceExit(err, exitcodes.RotateFailed))
 		}
 	}
+}
+
+// refused reports whether err is the key service deciding against this instance, not failing to answer.
+func refused(err error) bool {
+	return errors.Is(err, tkc.ErrDenied) || errors.Is(err, tkc.ErrSharedStorageRefused)
 }
 
 // firstHeartbeat sends the pre-mount heartbeat, retrying anything but a refusal up to
@@ -181,10 +179,9 @@ func (m *keyServiceMonitor) firstHeartbeat() (model.TKFSHeartbeatResponse, error
 	for attempt := 1; ; attempt++ {
 		resp, err = m.report(model.TKFSEventMount)
 		if err == nil {
-			m.mountReported.Store(true)
+			m.mountReported = true
 		}
-		if err == nil || errors.Is(err, tkc.ErrDenied) || errors.Is(err, tkc.ErrSharedStorageRefused) ||
-			errors.Is(err, tkc.ErrUnauthenticated) ||
+		if err == nil || refused(err) || errors.Is(err, tkc.ErrUnauthenticated) ||
 			attempt == firstHeartbeatAttempts || time.Since(start)+firstHeartbeatRetryDelay > firstHeartbeatBudget {
 			return resp, err
 		}
@@ -220,10 +217,29 @@ func (m *keyServiceMonitor) tick() {
 		heard = m.beat()
 	}
 	if err := m.flushOpCounts(); err != nil {
-		m.rotationFailed(m.opRotationFailure(), err)
+		m.rotationFailed("Op counter", err)
 	}
 	if heard && !m.rotationFailedThisTick {
 		m.rotateFailures = 0
+	}
+	if m.gate.suspended.Load() && !m.due() {
+		m.reportResume()
+	}
+	m.setSuspended(m.due())
+}
+
+// reportResume reports a mount event before file operations resume, so keep stamps the record's LastMounted.
+// A refusal keeps the mount suspended; any other failure only logs.
+func (m *keyServiceMonitor) reportResume() {
+	if m.hb == nil {
+		return
+	}
+	_, err := m.report(model.TKFSEventMount)
+	switch {
+	case refused(err):
+		m.countHeartbeat(err)
+	case err != nil:
+		tlog.Info.Printf("Could not report the resume to the key service: %v", err)
 	}
 }
 
@@ -231,10 +247,7 @@ func (m *keyServiceMonitor) tick() {
 // whether the key service answered.
 func (m *keyServiceMonitor) beat() bool {
 	resp, err := m.report(model.TKFSEventNone)
-	if die, reason := m.classify(err); die {
-		m.shutdownNow("Heartbeat: "+reason, outageExit(err))
-		return false
-	}
+	m.countHeartbeat(err)
 	if err != nil {
 		return false
 	}
@@ -253,8 +266,8 @@ func (m *keyServiceMonitor) beat() bool {
 }
 
 // rekey carries out a rotation the key service asked for and reports the new index at once, so what an
-// operator watches moves within seconds rather than at the next tick. It returns the rotation's error
-// for the caller to judge: retried at runtime, fatal before mounting.
+// operator watches moves within seconds rather than at the next tick. It returns the rotation's error,
+// or a refusal of that report, for the caller to judge: retried at runtime, fatal before mounting.
 func (m *keyServiceMonitor) rekey() error {
 	if m.readOnly {
 		// The directive stays pending, for a writable mount of this instance to collect.
@@ -266,125 +279,108 @@ func (m *keyServiceMonitor) rekey() error {
 		return err
 	}
 	tlog.Info.Printf("Heartbeat: rekey requested; rotated to key-ring index %d", idx)
-	// A report, not a liveness check: an outage here spends none of the three-strike budget, but a
-	// refusal still ends the mount.
+	// A report, not a liveness check: an outage here spends none of the three-strike budget.
 	_, err = m.report(model.TKFSEventNone)
 	switch {
-	case errors.Is(err, tkc.ErrDenied), errors.Is(err, tkc.ErrSharedStorageRefused):
-		m.shutdownNow("Heartbeat: the key service refused this instance's report", keyServiceExit(err, exitcodes.Revoked))
+	case refused(err):
+		return fmt.Errorf("the key service refused the report of key-ring index %d: %w", idx, err)
 	case err != nil:
 		tlog.Info.Printf("Heartbeat: reporting key-ring index %d failed: %v.", idx, err)
 	}
 	return nil
 }
 
-// rotationFailed handles a rotation a rekey or the op counter demanded that did not happen. A refusal
-// ends the mount at once. Anything else is retried: a rekey directive stays pending in keep, so the next
-// heartbeat brings it back, and the op counter is still due at the next flush. Nothing is written
-// before a rotation's generate succeeds, so a retry is safe. Only heartbeatFailureLimit failures in a
-// row end the mount: a filesystem told its key should change must not write under the old one for long.
+// rotationFailed counts a rotation a rekey or the op counter demanded that did not happen, one strike
+// per tick. The next tick retries it, since a rekey directive stays pending and the op counter stays
+// due, and nothing is written before generate succeeds. A refusal, or errRotationFatal, reaches
+// heartbeatFailureLimit at once: a filesystem told its key should change must not write under the old one.
 func (m *keyServiceMonitor) rotationFailed(what string, err error) {
-	if errors.Is(err, tkc.ErrDenied) || errors.Is(err, tkc.ErrSharedStorageRefused) || errors.Is(err, errRotationFatal) {
-		m.shutdownNow(fmt.Sprintf("%s: %v", what, err), keyServiceExit(err, exitcodes.RotateFailed))
-		return
-	}
-	// One strike per tick: a rekey and the op counter failing in the same tick are one failure.
 	if !m.rotationFailedThisTick {
 		m.rotateFailures++
 		m.rotationFailedThisTick = true
 	}
-	if m.rotateFailures >= heartbeatFailureLimit {
-		m.shutdownNow(fmt.Sprintf("%s %d times in a row: %v", what, m.rotateFailures, err), exitcodes.RotateFailed)
-		return
+	if refused(err) || errors.Is(err, errRotationFatal) {
+		m.rotateFailures = max(m.rotateFailures, heartbeatFailureLimit)
 	}
-	tlog.Info.Printf("%s (%d of %d), retrying at the next heartbeat: %v", what, m.rotateFailures, heartbeatFailureLimit, err)
+	tlog.Info.Printf("%s (%d in a row): %v", what, m.rotateFailures, err)
+	m.suspendIfDue()
 }
 
-// classify reports whether one heartbeat outcome ends the mount, advancing the failure counter as it
-// goes. A decision about this instance ends it at once; failing to reach the key service is an outage,
-// survivable twice. A missing route (404/501) is an outage here too: the pre-mount heartbeat already
-// showed the key service has the route, so now it is a proxy, a load balancer, or one node mid-deploy.
-func (m *keyServiceMonitor) classify(err error) (die bool, reason string) {
+// countHeartbeat advances the heartbeat failure count; a refusal reaches heartbeatFailureLimit at once.
+// A 404/501 counts as an outage, since the pre-mount heartbeat already showed the key service has the route.
+func (m *keyServiceMonitor) countHeartbeat(err error) {
 	switch {
-	case errors.Is(err, tkc.ErrSharedStorageRefused):
-		return true, "a gateway that requires instance binding refused this -sharedstorage mount"
-	case errors.Is(err, tkc.ErrDenied):
-		return true, "the key service withdrew this instance's authorization"
+	case refused(err):
+		m.failures = max(m.failures+1, heartbeatFailureLimit)
+		tlog.Fatal.Printf("Heartbeat: the key service refused this instance: %v", err)
 	case err != nil:
 		m.failures++
-		tlog.Info.Printf("Heartbeat failed (%d of %d): %v", m.failures, heartbeatFailureLimit, err)
-		if m.failures >= heartbeatFailureLimit {
-			return true, fmt.Sprintf("lost contact with the key service (%d consecutive failures)", m.failures)
-		}
-		return false, ""
+		tlog.Info.Printf("Heartbeat failed (%d in a row): %v", m.failures, err)
+	default:
+		m.failures = 0
 	}
-	m.failures = 0
-	return false, ""
+	m.suspendIfDue()
 }
 
-// fatalExitCode records that a monitor is ending this mount, and with what code. Without it the
-// code would be a race: a clean unmount lets srv.Wait() return in doMount and the process exit 0
-// before shutdownNow reaches its own os.Exit. doMount defers a check of this, registered first so
-// it runs last.
-var fatalExitCode atomic.Int32
+// due reports whether either failure count is at heartbeatFailureLimit.
+func (m *keyServiceMonitor) due() bool {
+	return m.failures >= heartbeatFailureLimit || m.rotateFailures >= heartbeatFailureLimit
+}
 
-// shutdownNow ends the mount and is not abortable. A clean unmount is attempted first; if the
-// mountpoint stays busy it gives up and exits, leaving a mountpoint whose every operation fails.
-func (m *keyServiceMonitor) shutdownNow(reason string, code int) {
-	fatalExitCode.Store(int32(code))
-	if m.srv == nil {
-		tlog.Fatal.Printf("%s.", reason)
-		m.reportUnmount()
-		m.exit(code)
+// suspendIfDue suspends file operations as soon as a count reaches its limit. Only the end of a tick
+// resumes them, so a heartbeat that answers cannot reopen them before that tick's rotations have run.
+func (m *keyServiceMonitor) suspendIfDue() {
+	if m.due() {
+		m.setSuspended(true)
+	}
+}
+
+// setSuspended suspends or resumes file operations, logging the change. The mount itself stays up, and
+// suspending drops the open files' cached pages.
+func (m *keyServiceMonitor) setSuspended(suspend bool) {
+	if m.gate.suspended.Swap(suspend) == suspend {
 		return
 	}
-	tlog.Fatal.Printf("%s. Unmounting %s.", reason, m.mountpoint)
-	if err := m.srv.Unmount(); err != nil {
-		tlog.Fatal.Printf("Unmount failed: %v. Retrying once in %v, then leaving the mountpoint dead.", err, forcefulUnmountGrace)
-		time.Sleep(forcefulUnmountGrace)
-		if err := m.srv.Unmount(); err != nil {
-			tlog.Fatal.Printf("Unmount still failing: %v.", err)
-		}
+	if suspend {
+		tlog.Fatal.Printf("File operations on %s now fail (%v) until the key service vouches for this mount again.",
+			m.mountpoint, suspendedErrno)
+		m.gate.dropCache()
+	} else {
+		tlog.Info.Printf("File operations on %s resume.", m.mountpoint)
 	}
+}
+
+// exitBeforeMount ends a mount that never started serving, reporting its unmount if the key service heard it.
+func (m *keyServiceMonitor) exitBeforeMount(reason string, code int) {
+	tlog.Fatal.Printf("%s.", reason)
 	m.reportUnmount()
 	m.exit(code)
 }
 
 // flushOpCounts persists this mount's encrypt-op counter into the key ring and rotates when the
-// active key has crossed the threshold. Failing to persist ends the mount: continuing would go on
-// drawing nonces under a key whose budget nothing can account for any more. A failed rotation is
-// returned for the caller to judge: retried at runtime for up to heartbeatFailureLimit intervals
+// active key has crossed the threshold. Its error is the caller's to judge: a strike at runtime
 // (rotationFailed), fatal before mounting (flushOpCountsBeforeMount).
 func (m *keyServiceMonitor) flushOpCounts() error {
 	if m.rotator == nil || m.opThreshold == 0 {
 		return nil
 	}
 	due, err := m.rotator.flushOpCounts(m.opThreshold)
-	if err != nil {
-		m.shutdownNow(fmt.Sprintf("Cannot persist this mount's key operation count: %v", err), exitcodes.RotateFailed)
-		return nil
-	}
-	if !due {
-		return nil
+	if err != nil || !due {
+		return err
 	}
 	idx, err := m.rotator.rotate()
 	if err != nil {
-		return err
+		return fmt.Errorf("the active key passed %d operations but rotating away from it failed: %w", m.opThreshold, err)
 	}
 	tlog.Info.Printf("Auto-rotated to key-ring index %d: the previous key passed %d operations", idx, m.opThreshold)
 	return nil
-}
-
-// opRotationFailure describes a failed op-threshold rotation.
-func (m *keyServiceMonitor) opRotationFailure() string {
-	return fmt.Sprintf("The active key passed %d operations but rotating away from it failed", m.opThreshold)
 }
 
 // flushOpCountsBeforeMount is flushOpCounts before anything is mounted. A key already past its budget
 // must not start serving, so a rotation that fails here ends the mount rather than being retried.
 func (m *keyServiceMonitor) flushOpCountsBeforeMount() {
 	if err := m.flushOpCounts(); err != nil {
-		m.shutdownNow(fmt.Sprintf("%s before mounting: %v", m.opRotationFailure(), err), keyServiceExit(err, exitcodes.RotateFailed))
+		m.exitBeforeMount(fmt.Sprintf("Op counter, before mounting: %v", err), keyServiceExit(err, exitcodes.RotateFailed))
 	}
 }
 

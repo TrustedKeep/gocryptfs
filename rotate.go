@@ -54,10 +54,10 @@ func (r *keyRotator) writeKey() (uint16, time.Time) {
 	return r.cEnc.WriteKeyIdx(), r.writeCreatedAt
 }
 
-// errRotationFatal marks a rotation failure that retrying would not fix or would make worse, once a new
-// data key is in hand: a KEK other than this filesystem's means the key service holds a second master
-// for it, and a key ring that will not take or persist the new entry is a cipherdir the mount cannot
-// write. A failure to get the key at all is retried.
+// errRotationFatal marks a rotation failure once a new data key is in hand: a KEK other than this
+// filesystem's means the key service holds a second master for it, and a key ring that will not take or
+// persist the new entry is a cipherdir the mount cannot write. It suspends file operations at once,
+// where a failure to get the key at all is struck heartbeatFailureLimit times first.
 var errRotationFatal = errors.New("rotation failed after the key service answered")
 
 // rotate appends a freshly generated data key to the ring and makes it the key new content, names

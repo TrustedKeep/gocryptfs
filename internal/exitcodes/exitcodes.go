@@ -71,22 +71,21 @@ const (
 	// AlreadyMounted - another gocryptfs process already has this filesystem mounted. A key ring
 	// has one writer, so a second mount is refused rather than left to race the first.
 	AlreadyMounted = 32
-	// Revoked - the key service withdrew this instance's authorization (a 403 on any key-service call),
-	// or the mount ended on failures that were the key service rejecting its credentials (a 401, or a
-	// TLS alert refusing its certificate). Restarting gets the same answer. The mountpoint may be left
-	// dead if it was busy.
+	// Revoked - before mounting, the key service refused this instance (a 403) or
+	// rejected its credentials (a 401, or a TLS alert refusing its certificate). Restarting gets the
+	// same answer. A running mount suspends its file operations instead.
 	Revoked = 33
-	// RotateFailed - a rotation the op counter or a rekey demanded failed other than by a refusal: in
-	// three heartbeat intervals in a row when generating the new key failed, at once when the key
-	// ring could not take or persist it, or at once before mounting. Also: the op count could not be
-	// persisted.
+	// RotateFailed - before mounting, a rotation the op counter or a rekey demanded failed other than
+	// by a refusal, or the op count could not be persisted. A running mount suspends its file
+	// operations instead.
 	RotateFailed = 34
-	// SharedStorageRefused - the gateway requires instance binding, which a -sharedstorage mount cannot
-	// keep. Remount without -sharedstorage, or through a gateway that does not require binding.
+	// SharedStorageRefused - before mounting, a gateway that requires instance binding, which a
+	// -sharedstorage mount cannot keep, refused it. Remount without -sharedstorage, or through a
+	// gateway that does not require binding.
 	SharedStorageRefused = 35
-	// KeyServiceUnreachable - the key service could not be reached: the first heartbeat failed all the
-	// attempts its retry budget allowed, or three heartbeats in a row failed. An outage, not a decision about this instance, so
-	// unlike 33 and 35 a restart may succeed. The mountpoint may be left dead if it was busy.
+	// KeyServiceUnreachable - the first heartbeat, before mounting, failed all the attempts its retry
+	// budget allowed. An outage, not a decision about this instance, so unlike 33 and 35 a restart may
+	// succeed.
 	KeyServiceUnreachable = 36
 )
 

@@ -52,14 +52,6 @@ type AfterUnmounter interface {
 // doMount mounts an encrypted directory.
 // Called from main.
 func doMount(args *argContainer) {
-	// Registered first so it runs last, after every other teardown: a mount that was ended by
-	// the gateway or by losing its write key reports that, whether the forceful path reached its
-	// own os.Exit first or the unmount completed and srv.Wait() returned below.
-	defer func() {
-		if code := fatalExitCode.Load(); code != 0 {
-			os.Exit(int(code))
-		}
-	}()
 	// Check mountpoint
 	var err error
 	args.mountpoint, err = filepath.Abs(flagSet.Arg(1))
@@ -153,6 +145,7 @@ func doMount(args *argContainer) {
 	// the connector is built without one and is handed it there.
 	tkc.Connect(cf.GatewayHost, args.gatewayCertDir, cf.NodeID, cf.MockKMS, cf.MockAWS, cf.IsSearch, args.sharedstorage)
 
+	args._keyGate = new(keyGate)
 	// Initialize gocryptfs (read config file, ask for password, ...)
 	fs, rotator, wipeKeys := initFuseFrontend(args)
 	// Try to wipe secret keys from memory after unmount
@@ -167,6 +160,7 @@ func doMount(args *argContainer) {
 		opThreshold: autoRotateThreshold(args),
 		mountpoint:  args.mountpoint,
 		exit:        os.Exit,
+		gate:        args._keyGate,
 	}
 	// Registered after the wipe so it runs before it: a mount that lived less than one interval
 	// would otherwise contribute nothing to the budget its writes spent.
@@ -181,7 +175,6 @@ func doMount(args *argContainer) {
 	// Initialize go-fuse FUSE server
 	// The key service already heard this mount, so a mount that fails takes it back.
 	srv := initGoFuse(fs, args, m.reportUnmount)
-	m.srv = srv
 	if x, ok := fs.(AfterUnmounter); ok {
 		defer x.AfterUnmount()
 	}
@@ -481,7 +474,7 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, rotator *k
 		if !args.ro {
 			rotate = rotator.rotate
 		}
-		go ctlsocksrv.Serve(args._ctlsockFd, rootNode.(ctlsocksrv.Interface), rotate, ks.holes)
+		go ctlsocksrv.Serve(args._ctlsockFd, gateCtl(rootNode.(ctlsocksrv.Interface), args._keyGate), rotate, ks.holes)
 	}
 	return rootNode, rotator, func() {
 		// Names first: cEnc.Wipe() forces the one GC, and it can only collect the EME key
@@ -722,6 +715,9 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer, beforeExit func()
 		// Attempt to directly call mount(2) before trying fusermount. This means we
 		// can do without fusermount if running as root.
 		DirectMount: true,
+		// A handler panic crashes the mount, as before go-fuse 2.11, instead of answering EIO and serving
+		// on with whatever state the panic left behind.
+		PanicHandler: func(r any) fuse.Status { panic(r) },
 	}
 
 	mOpts := &fuseOpts.MountOptions
@@ -805,7 +801,7 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer, beforeExit func()
 		}
 	}
 
-	srv, err := fs.Mount(args.mountpoint, rootNode, fuseOpts)
+	srv, err := mountGated(args.mountpoint, rootNode, fuseOpts, args._keyGate)
 	if err != nil {
 		tlog.Fatal.Printf("fs.Mount failed: %s", strings.TrimSpace(err.Error()))
 		if runtime.GOOS == "darwin" {
