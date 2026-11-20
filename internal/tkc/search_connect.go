@@ -229,12 +229,23 @@ func (s *searchConnector) Close() error {
 	return nil
 }
 
+// keepRedirect returns the page keep points a caller to, "" if body is not a redirect. A sealed keep node
+// answers every route it is not serving with 200 and a redirect, which would otherwise decode as an empty answer.
+func keepRedirect(body []byte) string {
+	var r struct {
+		Redirect string `json:"redirect"`
+	}
+	if json.Unmarshal(body, &r) != nil {
+		return ""
+	}
+	return r.Redirect
+}
+
 // post sends body as JSON to a KMS data-key route, trying the configured hosts in random order
 // until one answers. Each request carries the tenant token in addition to the mTLS client cert.
-// A 401/403 is returned immediately: another host will not fix an authorization failure. A 404/501
-// falls through to the next host like a transport or 5xx error, since one keep node without the
-// route, or a proxy in front of it, says nothing about the others; ErrNotImplemented is returned
-// only when every host answered that way.
+// A 401/403 is returned immediately: another host will not fix an authorization failure. Anything else,
+// including a 404/501 or a sealed node's redirect, falls through to the next host, since one keep node
+// says nothing about the others; ErrNotImplemented is returned only when every host answered 404/501.
 func (s *searchConnector) post(path string, body, out any) error {
 	if s.client == nil {
 		return fmt.Errorf("search client not initialized")
@@ -285,6 +296,10 @@ func (s *searchConnector) post(path string, body, out any) error {
 			continue
 		case resp.StatusCode < 200 || resp.StatusCode >= 300:
 			lastErr = fmt.Errorf("search %s @ %s: HTTP %d: %s", path, host, resp.StatusCode, bytes.TrimSpace(respBody))
+			continue
+		}
+		if page := keepRedirect(respBody); page != "" {
+			lastErr = fmt.Errorf("search %s @ %s: keep redirected to %s instead of answering; it may be sealed", path, host, page)
 			continue
 		}
 		if err := json.Unmarshal(respBody, out); err != nil {

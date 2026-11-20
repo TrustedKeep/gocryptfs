@@ -35,8 +35,8 @@ func jsonResponse(code int, v any) *http.Response {
 
 // A search mount heartbeats to keep exactly as a gateway-proxied one does to the gateway: same body,
 // same pass-through of a rekey directive, and the same three failure classes. 403 is revocation,
-// 404/501 is a keep that does not serve the route, and everything else is an outage — the caller
-// unmounts immediately on the first two and spends a failure budget on the third.
+// 404/501 is a keep that does not serve the route, and everything else is an outage. The caller suspends
+// at once on a 403 and counts the others as failures.
 func TestSearchConnectorHeartbeat(t *testing.T) {
 	var got model.TKFSHeartbeatRequest
 	var status int
@@ -105,6 +105,33 @@ func TestSearchConnectorTriesTheNextHostOnA404(t *testing.T) {
 	s.kmsHosts = []string{"kms-old", "kms-old"}
 	if _, err := s.Heartbeat(model.TKFSEventNone, 0, testCreatedAt); !errors.Is(err, ErrNotImplemented) {
 		t.Errorf("every host 404 = %v, want ErrNotImplemented", err)
+	}
+}
+
+// A sealed keep node answers 200 with a redirect to its unseal page. That is no answer: the next host is
+// tried, and when every host is sealed the call fails as an outage.
+func TestSearchConnectorSkipsASealedNode(t *testing.T) {
+	s := newTestSearchConnector(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Hostname() == "kms-sealed" {
+			return jsonResponse(http.StatusOK, map[string]string{"redirect": "/v2/#/seal"}), nil
+		}
+		return jsonResponse(http.StatusOK, model.TKFSHeartbeatResponse{Command: model.TKFSCommandRekey}), nil
+	})
+	s.identity.adopt("instance-1")
+	s.kmsHosts = []string{"kms-sealed", "kms-1"}
+	for i := 0; i < 20; i++ { // hosts are tried in random order
+		resp, err := s.Heartbeat(model.TKFSEventNone, 0, testCreatedAt)
+		if err != nil || resp.Command != model.TKFSCommandRekey {
+			t.Fatalf("got %+v, %v; want the unsealed host's answer", resp, err)
+		}
+	}
+	s.kmsHosts = []string{"kms-sealed", "kms-sealed"}
+	_, err := s.Heartbeat(model.TKFSEventNone, 0, testCreatedAt)
+	if err == nil {
+		t.Fatal("every host sealed must fail the call")
+	}
+	if errors.Is(err, ErrDenied) || errors.Is(err, ErrNotImplemented) || CredentialsRejected(err) {
+		t.Errorf("every host sealed = %v, want a plain outage", err)
 	}
 }
 
