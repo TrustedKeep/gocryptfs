@@ -437,7 +437,12 @@ usual (exclusive) use-case. Please test your workload in advance
 and report any problems you may hit.
 
 It does not permit a second mount of a mounted filesystem: its key ring has one
-writer, so a second mount on the same host is refused (exit code 32).
+writer, so a second mount on the same host is refused (exit code 32). On NFS,
+EFS or SMB that lock does not reach other hosts, so mount such a cipherdir from
+one host at a time. A mount that finds the key ring changed under it, when it
+next rotates or counts operations, is suspended until it is remounted rather
+than writing it; two hosts writing it at the same moment can still lose an
+entry. A writable mount that cannot take the lock at all fails.
 
 It cannot be used with instance binding, which pins a filesystem to one
 machine. A gateway that requires binding refuses a `-sharedstorage` mount: at
@@ -757,7 +762,9 @@ into a memory-mapped file, still work. It resumes at the end of the
 first interval whose heartbeat is answered, unless a demanded rotation was
 refused in it or has failed three intervals in a row, and reports a mount to the
 key service as it does. So unblocking an instance, re-allowing its DN or ending
-an outage brings it back within one interval, with no remount. Suspending also
+an outage brings it back within one interval, with no remount. A mount
+suspended because another host changed its key ring (see `-sharedstorage`)
+resumes only when remounted. Suspending also
 has the kernel drop the cached pages of files still open, so a memory mapping
 made before it fails (SIGBUS) instead of reading or changing them. Until a
 file's pages are dropped, which normally takes milliseconds, a mapping can still

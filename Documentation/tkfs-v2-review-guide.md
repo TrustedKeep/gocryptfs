@@ -206,6 +206,8 @@ Three things trigger a rotation:
 2. **`-ctlsock`.** `{"Rotate": true}` returns the new `KeyIdx`, which the key service sees at the next scheduled heartbeat.
 3. **Remote rekey.** An admin asks the gateway, and the instance pulls the request on its next heartbeat. Nothing dials the instance.
 
+Each rotation, and each op-count flush, first checks that `KR` on disk is still the ring the mount holds keys for, and a rotation checks again after the key service answers. The ring lock is host-local on NFS, EFS and SMB, so a second host can change it; the mount then suspends until remounted, rather than rotate onto or count against an entry that is not its own. Two writes at the same moment can still drop one, which Phase 3.5's `link(2)` ring closes.
+
 ```mermaid
 sequenceDiagram
   participant A as admin

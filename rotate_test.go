@@ -296,6 +296,55 @@ func encrypt(r *keyRotator, n int) {
 	}
 }
 
+// Another host sharing the cipherdir appends to the ring, which a host-local lock does not stop. The
+// mount must suspend rather than generate a key for that ring or count its ops against that host's entry.
+func TestRotatorRefusesARingAnotherWriterChanged(t *testing.T) {
+	r := newTestRotator(t, "")
+	other := loadRing(t, r)
+	if _, err := other.Append(configfile.KeyRingEntry{KeyID: other.Keys[0].KeyID, Ciphertext: []byte("other host")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.WriteFile(); err != nil {
+		t.Fatal(err)
+	}
+	r.generate = func() (tkc.TKFSDataKey, error) {
+		t.Error("rotate generated a key for a ring it will not write")
+		return tkc.TKFSDataKey{}, errors.New("unexpected generate")
+	}
+	if _, err := r.rotate(); !errors.Is(err, errRingChanged) {
+		t.Errorf("rotate: %v, want errRingChanged", err)
+	}
+
+	m, code := newTestMonitor(t, r, nil)
+	encrypt(r, 1)
+	m.tick()
+	assertServing(t, m, code, true)
+	if got := loadRing(t, r).Keys; len(got) != 2 || got[1].OpCount != 0 {
+		t.Errorf("ring on disk = %+v, want the other host's two entries, uncounted", got)
+	}
+}
+
+// A ring another host writes while generate waits on the gateway is caught before this mount writes its own.
+func TestRotateRechecksTheRingAfterGenerate(t *testing.T) {
+	r := newTestRotator(t, "")
+	r.generate = func() (tkc.TKFSDataKey, error) {
+		other := loadRing(t, r)
+		if _, err := other.Append(configfile.KeyRingEntry{KeyID: other.Keys[0].KeyID, Ciphertext: []byte("other host")}); err != nil {
+			t.Fatal(err)
+		}
+		if err := other.WriteFile(); err != nil {
+			t.Fatal(err)
+		}
+		return tkc.DataKey().GenerateTKFSDataKey()
+	}
+	if _, err := r.rotate(); !errors.Is(err, errRingChanged) {
+		t.Errorf("rotate: %v, want errRingChanged", err)
+	}
+	if got := loadRing(t, r).Keys; len(got) != 2 || string(got[1].Ciphertext) != "other host" {
+		t.Errorf("ring on disk = %+v, want the other host's entry kept", got)
+	}
+}
+
 // Crossing the threshold rotates; the outgoing entry keeps what it spent and the new one is credited
 // only with its own ops.
 func TestFlushOpCountsRotatesAtThreshold(t *testing.T) {

@@ -292,14 +292,14 @@ func (m *keyServiceMonitor) rekey() error {
 
 // rotationFailed counts a rotation a rekey or the op counter demanded that did not happen, one strike
 // per tick. The next tick retries it, since a rekey directive stays pending and the op counter stays
-// due, and nothing is written before generate succeeds. A refusal, or errRotationFatal, reaches
+// due, and nothing is written before generate succeeds. A refusal, errRotationFatal or errRingChanged reaches
 // heartbeatFailureLimit at once: a filesystem told its key should change must not write under the old one.
 func (m *keyServiceMonitor) rotationFailed(what string, err error) {
 	if !m.rotationFailedThisTick {
 		m.rotateFailures++
 		m.rotationFailedThisTick = true
 	}
-	if refused(err) || errors.Is(err, errRotationFatal) {
+	if refused(err) || errors.Is(err, errRotationFatal) || errors.Is(err, errRingChanged) {
 		m.rotateFailures = max(m.rotateFailures, heartbeatFailureLimit)
 	}
 	tlog.Info.Printf("%s (%d in a row): %v", what, m.rotateFailures, err)

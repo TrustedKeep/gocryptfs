@@ -912,6 +912,11 @@ func openKeyRing(args *argContainer) (*configfile.ConfFile, *os.File) {
 		tlog.Fatal.Printf("%s is already mounted by another TKFS process", args.cipherdir)
 		os.Exit(exitcodes.AlreadyMounted)
 	} else if err != nil {
+		// A read-only mount never writes the ring.
+		if !args.ro {
+			tlog.Fatal.Printf("Cannot lock the key ring: %v", err)
+			os.Exit(exitcodes.Other)
+		}
 		tlog.Warn.Printf("Cannot lock the key ring, so a second mount of this filesystem would not be refused: %v", err)
 	}
 	return cf, ringLock

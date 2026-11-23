@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sync"
 	"time"
 
@@ -32,6 +34,8 @@ type keyRotator struct {
 	flushed uint64
 	// writeCreatedAt is the key service's stamp on the write key. Guarded by lock.
 	writeCreatedAt time.Time
+	// entries is the ring this mount holds keys for. Guarded by lock.
+	entries []configfile.KeyRingEntry
 	// generate asks the key service for a new data key; nil means tkc.DataKey(). Tests replace it.
 	generate func() (tkc.TKFSDataKey, error)
 }
@@ -44,7 +48,7 @@ func newKeyRotator(configPath string, kr *configfile.KeyRing, backend cryptocore
 		return nil, err
 	}
 	return &keyRotator{configPath: configPath, backend: backend, ivBits: ivBits, cEnc: cEnc,
-		nameTransform: nameTransform, writeCreatedAt: active.CreatedAt}, nil
+		nameTransform: nameTransform, writeCreatedAt: active.CreatedAt, entries: slices.Clone(kr.All())}, nil
 }
 
 // writeKey returns the ring index this mount writes under and the key service's stamp on its key.
@@ -66,8 +70,7 @@ func (r *keyRotator) rotate() (uint16, error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	// The rotator keeps no copy of the ring, so load the one on disk to append to.
-	keyRing, err := configfile.LoadKeyRing(r.configPath)
+	keyRing, err := r.loadRing()
 	if err != nil {
 		return 0, err
 	}
@@ -84,6 +87,10 @@ func (r *keyRotator) rotate() (uint16, error) {
 		return 0, fmt.Errorf("failed to generate a data key: %w", err)
 	}
 	defer clear(dk.Plaintext)
+	// generate is a gateway round trip, the widest window for another host's write.
+	if keyRing, err = r.loadRing(); err != nil {
+		return 0, err
+	}
 	// One KEK serves an instance for life, so a generate that answers with a different one means
 	// the key service minted a second master — the state that would make the ring name two.
 	if dk.KeyID != active.KeyID {
@@ -95,11 +102,12 @@ func (r *keyRotator) rotate() (uint16, error) {
 	if outgoing := r.cEnc.OpCount(); outgoing > r.flushed {
 		keyRing.AddOpCount(outgoing - r.flushed)
 	}
-	idx, err := keyRing.Append(configfile.KeyRingEntry{
+	e := configfile.KeyRingEntry{
 		KeyID:      dk.KeyID,
 		Ciphertext: dk.Ciphertext,
 		CreatedAt:  dk.CreatedAt,
-	})
+	}
+	idx, err := keyRing.Append(e)
 	if err != nil {
 		return 0, fmt.Errorf("%w: %w", errRotationFatal, err)
 	}
@@ -108,6 +116,7 @@ func (r *keyRotator) rotate() (uint16, error) {
 	if err := keyRing.WriteFile(); err != nil {
 		return 0, fmt.Errorf("%w: failed to persist the new key-ring entry: %w", errRotationFatal, err)
 	}
+	r.entries = append(r.entries, e)
 	core := cryptocore.New(dk.Plaintext, r.backend, r.ivBits)
 	if got := r.cEnc.AddKey(core.AEADCipher); got != idx {
 		log.Panicf("rotate: content key landed at index %d, the ring assigned %d", got, idx)
@@ -128,7 +137,7 @@ func (r *keyRotator) rotate() (uint16, error) {
 func (r *keyRotator) flushOpCounts(threshold uint64) (rotateDue bool, err error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
-	keyRing, err := configfile.LoadKeyRing(r.configPath)
+	keyRing, err := r.loadRing()
 	if err != nil {
 		return false, err
 	}
@@ -147,4 +156,28 @@ func (r *keyRotator) flushOpCounts(threshold uint64) (rotateDue bool, err error)
 		return false, err
 	}
 	return active.OpCount >= threshold, nil
+}
+
+// errRingChanged marks a key ring on disk other than the one this mount holds keys for, which another
+// host sharing the cipherdir wrote. Only a remount loads that host's entries.
+var errRingChanged = errors.New("another host changed the key ring on disk; remount to load its entries")
+
+// loadRing loads the ring on disk, refusing one that is not the ring this mount holds keys for, so a
+// rotation or op count never lands on another host's entry. Call with lock held.
+func (r *keyRotator) loadRing() (*configfile.KeyRing, error) {
+	kr, err := configfile.LoadKeyRing(r.configPath)
+	if err != nil {
+		return nil, err
+	}
+	if !sameEntries(kr.All(), r.entries) {
+		return nil, fmt.Errorf("%w (%d entries on disk, %d held)", errRingChanged, len(kr.All()), len(r.entries))
+	}
+	return kr, nil
+}
+
+// sameEntries reports whether two rings hold the same wrapped keys in the same order.
+func sameEntries(a, b []configfile.KeyRingEntry) bool {
+	return slices.EqualFunc(a, b, func(x, y configfile.KeyRingEntry) bool {
+		return x.KeyID == y.KeyID && bytes.Equal(x.Ciphertext, y.Ciphertext)
+	})
 }
