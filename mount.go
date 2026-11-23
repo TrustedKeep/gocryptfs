@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -499,6 +500,53 @@ func unwrapDataKey(dk tkc.DataKeyConnector, idx uint16, e configfile.KeyRingEntr
 	}
 }
 
+// unwrapRing fills each nil slot of keys with its ring entry's key: the first alone, since behind a gateway
+// requiring binding it binds an unbound instance, then tkc.MaxConns at a time. Once one fails no more start,
+// and it returns that failure, wiping the keys it holds.
+func unwrapRing(dk tkc.DataKeyConnector, entries []configfile.KeyRingEntry, keys [][]byte) error {
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+		started  int
+	)
+	slots := make(chan struct{}, tkc.MaxConns)
+	for i, e := range entries {
+		if keys[i] != nil {
+			continue
+		}
+		slots <- struct{}{}
+		mu.Lock()
+		failed := firstErr != nil
+		mu.Unlock()
+		if failed {
+			<-slots
+			break
+		}
+		wg.Add(1)
+		go func() {
+			defer func() { <-slots; wg.Done() }()
+			key, err := unwrapDataKey(dk, uint16(i), e)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("failed to unwrap key-ring index %d: %w", i, err)
+			}
+			keys[i] = key
+		}()
+		if started++; started == 1 {
+			wg.Wait()
+		}
+	}
+	wg.Wait()
+	if firstErr != nil {
+		for _, k := range keys {
+			clear(k)
+		}
+	}
+	return firstErr
+}
+
 // buildKeySets unwraps every retained key-ring entry into the content AEAD and EME name cipher at its
 // ring index, exiting if any entry will not unwrap. freshKey, if non-nil, is the plaintext of the entry
 // this mount just generated.
@@ -508,25 +556,22 @@ func buildKeySets(kr *configfile.KeyRing, freshKey []byte, backend cryptocore.AE
 		tlog.Fatal.Printf("%v", err)
 		os.Exit(exitcodes.Other)
 	}
+	keys := make([][]byte, len(kr.All()))
+	keys[activeIdx] = freshKey
+	if err := unwrapRing(tkc.DataKey(), kr.All(), keys); err != nil {
+		tlog.Fatal.Printf("%v", err)
+		os.Exit(outageExit(err))
+	}
 	ks := &keySets{
 		aeads:      make([]cipher.AEAD, int(activeIdx)+1),
 		emeCiphers: make([]*eme.EMECipher, int(activeIdx)+1),
 	}
-	for i, e := range kr.All() {
+	for i, key := range keys {
 		idx := uint16(i)
-		key := freshKey
-		if idx != activeIdx || key == nil {
-			if key, err = unwrapDataKey(tkc.DataKey(), idx, e); err != nil {
-				tlog.Fatal.Printf("Failed to unwrap key-ring index %d: %v", idx, err)
-				os.Exit(outageExit(err))
-			}
-		}
 		// cryptocore HKDF-derives and caches the EME/content keys, so the master key is no
 		// longer needed in memory once the core exists.
 		core := cryptocore.New(key, backend, ivBits)
-		for i := range key {
-			key[i] = 0
-		}
+		clear(key)
 		ks.aeads[idx] = core.AEADCipher
 		ks.emeCiphers[idx] = core.EMECipher
 		if idx == activeIdx {

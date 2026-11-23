@@ -102,7 +102,7 @@ sequenceDiagram
     G-->>T: {KeyID, Ciphertext, TransitWrappedKey, CreatedAt}
     T->>T: write root diriv, then persist KR entry (ciphertext only)
   else later mounts
-    loop every KR entry
+    loop every KR entry: the first alone, which binds an unbound instance, then 4 at a time
       T->>G: unwrap {KeyID, Ciphertext, transport pubkey, proof}
       G->>G: binding check, if required
       G->>K: KekUnwrap

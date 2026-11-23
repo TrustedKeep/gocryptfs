@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"crypto/cipher"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -161,6 +164,93 @@ func TestUnwrapDataKeyRetriesOutagesButNotRefusals(t *testing.T) {
 				t.Errorf("calls = %d, want %d", f.calls, c.wantCalls)
 			}
 		})
+	}
+}
+
+// ringConnector unwraps an entry to its ciphertext after hold, refuses the ciphertext fail at once, and
+// records how many unwraps ran at the same time and whether any overlapped the first.
+type ringConnector struct {
+	fakeConnector
+	hold                         time.Duration
+	fail                         string
+	mu                           sync.Mutex
+	calls, inFlight, maxInFlight int
+	firstDone, overlapped        bool
+}
+
+func (c *ringConnector) UnwrapTKFSDataKey(keyID string, ct []byte) ([]byte, error) {
+	c.mu.Lock()
+	c.calls++
+	first := c.calls == 1
+	c.overlapped = c.overlapped || !first && !c.firstDone
+	c.inFlight++
+	c.maxInFlight = max(c.maxInFlight, c.inFlight)
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.inFlight--
+		c.firstDone = c.firstDone || first
+		c.mu.Unlock()
+	}()
+	if string(ct) == c.fail {
+		return nil, fmt.Errorf("gateway: %w", tkc.ErrDenied)
+	}
+	time.Sleep(c.hold)
+	return slices.Clone(ct), nil
+}
+
+func ringEntries(n int) []configfile.KeyRingEntry {
+	entries := make([]configfile.KeyRingEntry, n)
+	for i := range entries {
+		entries[i] = entry(fmt.Sprint("key", i))
+	}
+	return entries
+}
+
+// The first unwrap runs alone, then tkc.MaxConns at once; each key lands in its own slot, and a filled slot
+// is not unwrapped.
+func TestUnwrapRingRunsInParallel(t *testing.T) {
+	c := &ringConnector{hold: 50 * time.Millisecond}
+	entries := ringEntries(3 * tkc.MaxConns)
+	keys := make([][]byte, len(entries))
+	last := len(keys) - 1
+	keys[last] = []byte("fresh")
+	if err := unwrapRing(c, entries, keys); err != nil {
+		t.Fatal(err)
+	}
+	for i, k := range keys[:last] {
+		if want := fmt.Sprint("key", i); string(k) != want {
+			t.Errorf("slot %d = %q, want %q", i, k, want)
+		}
+	}
+	if string(keys[last]) != "fresh" || c.calls != last {
+		t.Errorf("fresh slot = %q after %d calls, want it untouched after %d", keys[last], c.calls, last)
+	}
+	if c.maxInFlight != tkc.MaxConns {
+		t.Errorf("%d unwraps ran at once, want %d", c.maxInFlight, tkc.MaxConns)
+	}
+	if c.overlapped {
+		t.Error("an unwrap started before the first finished")
+	}
+}
+
+// A failure stops further unwraps from starting, so an unreachable or refusing key service fails the
+// mount in about one unwrap's time, and the keys already unwrapped are wiped.
+func TestUnwrapRingStopsAtTheFirstFailure(t *testing.T) {
+	c := &ringConnector{hold: 200 * time.Millisecond, fail: "key1"}
+	entries := ringEntries(5 * tkc.MaxConns)
+	keys := make([][]byte, len(entries))
+	err := unwrapRing(c, entries, keys)
+	if !errors.Is(err, tkc.ErrDenied) || !strings.Contains(err.Error(), "index 1") {
+		t.Errorf("error = %v, want index 1's refusal", err)
+	}
+	if c.calls > 1+tkc.MaxConns {
+		t.Errorf("%d unwraps started, want at most %d", c.calls, 1+tkc.MaxConns)
+	}
+	for i, k := range keys {
+		if !bytes.Equal(k, make([]byte, len(k))) {
+			t.Errorf("slot %d still holds %q", i, k)
+		}
 	}
 }
 

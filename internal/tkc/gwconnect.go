@@ -138,7 +138,7 @@ func (g *gwConnector) load() error {
 		Timeout: gwHTTPTimeout,
 		Transport: &http.Transport{
 			MaxIdleConns:    1,
-			MaxConnsPerHost: 2,
+			MaxConnsPerHost: MaxConns,
 			IdleConnTimeout: gwIdleConnTimeout,
 			TLSClientConfig: tlsConfig,
 		},

@@ -97,6 +97,9 @@ type Heartbeater interface {
 	Heartbeat(event model.TKFSHeartbeatEvent, keyIdx uint16, keyCreatedAt time.Time) (model.TKFSHeartbeatResponse, error)
 }
 
+// MaxConns is how many calls a connector has open to its key service at once.
+const MaxConns = 4
+
 // ErrDenied wraps every HTTP 403 from the gateway: the DN left the ACL, a blocklist entry names this
 // instance, or the call failed instance binding. It is a decision rather than an outage, so the caller
 // must not spend a retry budget on it.

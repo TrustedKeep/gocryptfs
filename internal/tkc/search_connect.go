@@ -130,7 +130,7 @@ func (s *searchConnector) load(ramdisk string) error {
 		Timeout: searchHTTPTimeout,
 		Transport: &http.Transport{
 			MaxIdleConns:    1,
-			MaxConnsPerHost: 2,
+			MaxConnsPerHost: MaxConns,
 			IdleConnTimeout: time.Minute,
 			TLSClientConfig: tlsConfig,
 		},
