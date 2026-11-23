@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG REPO=824638282610.dkr.ecr.us-east-1.amazonaws.com/
-ARG GO_VERSION=1.24
+ARG GO_VERSION=1.27
 FROM ${REPO}trustedkeep/builder:${GO_VERSION} AS builder
 
 RUN --mount=type=ssh \

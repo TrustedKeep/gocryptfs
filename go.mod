@@ -1,6 +1,6 @@
 module github.com/rfjakob/gocryptfs/v2
 
-go 1.24.0
+go 1.27
 
 require (
 	github.com/TrustedKeep/tkutils/v2 v2.16.3-0.20261119002152-dc83a590deb5
