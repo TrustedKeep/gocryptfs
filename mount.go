@@ -59,25 +59,8 @@ func doMount(args *argContainer) {
 		tlog.Fatal.Printf("Invalid mountpoint: %v", err)
 		os.Exit(exitcodes.MountPoint)
 	}
-	// A config file is mandatory: it names the key service this filesystem's keys come from, and
-	// there is no password or master-key path to fall back on.
-	cf, err := loadConfig(args)
-	if err != nil {
-		exitcodes.Exit(err)
-	}
-	if err := checkMockKMS(cf.MockKMS, args.mockKMS); err != nil {
-		tlog.Fatal.Printf("%v", err)
-		os.Exit(exitcodes.Usage)
-	}
-	// Before anything that a second mount would collide on, so this is the error it reports. The wait
-	// covers the previous mount of this filesystem, which exits once it has reported its unmount.
-	ringLock, err := configfile.LockKeyRing(args.config, unmountReportBudget+time.Second)
-	if errors.Is(err, configfile.ErrKeyRingInUse) {
-		tlog.Fatal.Printf("%s is already mounted by another TKFS process", args.cipherdir)
-		os.Exit(exitcodes.AlreadyMounted)
-	} else if err != nil {
-		tlog.Warn.Printf("Cannot lock the key ring, so a second mount of this filesystem would not be refused: %v", err)
-	}
+	// Before anything that a second mount would collide on, so the lock is the error it reports.
+	cf, ringLock := openKeyRing(args)
 	defer ringLock.Close()
 
 	// We cannot mount "/home/user/.cipher" at "/home/user" because the mount
@@ -139,11 +122,7 @@ func doMount(args *argContainer) {
 		}()
 	}
 
-	// connect to KMS
-	security.Memlock()
-	// The instance's identity lives in the key ring, which is not loaded until initFuseFrontend, so
-	// the connector is built without one and is handed it there.
-	tkc.Connect(cf.GatewayHost, args.gatewayCertDir, cf.NodeID, cf.MockKMS, cf.MockAWS, cf.IsSearch, args.sharedstorage)
+	connectKeyService(args, cf)
 
 	args._keyGate = new(keyGate)
 	// Initialize gocryptfs (read config file, ask for password, ...)
@@ -888,6 +867,34 @@ func loadConfig(args *argContainer) (cf *configfile.ConfFile, err error) {
 		return nil, err
 	}
 	return cf, nil
+}
+
+// openKeyRing loads the config, which names the key service, and locks the key ring, exiting on
+// failure. The wait covers the previous mount of this filesystem, which exits once it has reported its unmount.
+func openKeyRing(args *argContainer) (*configfile.ConfFile, *os.File) {
+	cf, err := loadConfig(args)
+	if err != nil {
+		exitcodes.Exit(err)
+	}
+	if err := checkMockKMS(cf.MockKMS, args.mockKMS); err != nil {
+		tlog.Fatal.Printf("%v", err)
+		os.Exit(exitcodes.Usage)
+	}
+	ringLock, err := configfile.LockKeyRing(args.config, unmountReportBudget+time.Second)
+	if errors.Is(err, configfile.ErrKeyRingInUse) {
+		tlog.Fatal.Printf("%s is already mounted by another TKFS process", args.cipherdir)
+		os.Exit(exitcodes.AlreadyMounted)
+	} else if err != nil {
+		tlog.Warn.Printf("Cannot lock the key ring, so a second mount of this filesystem would not be refused: %v", err)
+	}
+	return cf, ringLock
+}
+
+// connectKeyService connects to cf's key service without an identity, which initFuseFrontend adopts
+// from the key ring.
+func connectKeyService(args *argContainer, cf *configfile.ConfFile) {
+	security.Memlock()
+	tkc.Connect(cf.GatewayHost, args.gatewayCertDir, cf.NodeID, cf.MockKMS, cf.MockAWS, cf.IsSearch, args.sharedstorage)
 }
 
 func getFusermountPath() (path string, err error) {

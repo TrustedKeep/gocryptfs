@@ -46,7 +46,9 @@ action is to mount a filesystem (see SYNOPSIS).
 
 #### -fsck
 Check CIPHERDIR for consistency. If corruption is found, the
-exit code is 26.
+exit code is 26. Like a mount, it unwraps every key-ring entry, and an entry
+that fails ends it with a mount's exit code. It refuses a mounted filesystem
+with exit code 32.
 
 #### -h, -help
 Print a short help text that shows the more-often used options.
