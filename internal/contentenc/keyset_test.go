@@ -18,8 +18,8 @@ func newTestAEAD(seed byte) cipher.AEAD {
 }
 
 // aeadForKey has to answer for every index the ring holds, refuse anything past it, and refuse a
-// hole — an entry whose key the key service would not return at mount. The distinction matters:
-// a hole is a specific, nameable index, not "out of range".
+// nil entry, a key the mount does not hold. The distinction matters: a nil entry is a specific,
+// nameable index, not "out of range".
 func TestAeadForKey(t *testing.T) {
 	cc := cryptocore.New(make([]byte, cryptocore.KeyLen), cryptocore.BackendGoGCM, DefaultIVBits)
 	k0, k2 := newTestAEAD(1), newTestAEAD(2)
@@ -32,7 +32,7 @@ func TestAeadForKey(t *testing.T) {
 		t.Errorf("index 2: got (%v, %v), want the third key", a, err)
 	}
 	if _, err := be.aeadForKey(1); err == nil {
-		t.Error("index 1 is a hole and must be an error, not a silent fallback")
+		t.Error("index 1 is not held and must be an error, not a silent fallback")
 	}
 	if _, err := be.aeadForKey(3); err == nil {
 		t.Error("index 3 is past the end of the ring and must be an error")
@@ -165,8 +165,8 @@ func TestOpCount(t *testing.T) {
 }
 
 // A wipe can overlap a mount that is still answering reads, so it has to publish a whole new
-// snapshot rather than clear the live one: a reader must see either the old valid set or a clean
-// hole. Run under -race with concurrent readers.
+// snapshot rather than clear the live one: a reader must see either the old valid set or the
+// all-nil one. Run under -race with concurrent readers.
 //
 // Reads only. A write after a wipe still panics, because doEncryptBlock treats an unresolvable
 // write index as a caller bug; nothing may be writing once the FUSE server is down.
@@ -184,7 +184,7 @@ func TestWipeConcurrent(t *testing.T) {
 			defer wg.Done()
 			<-start
 			for range 200 {
-				// Either decrypts or reports a hole; neither may panic, and the
+				// Either decrypts or reports a missing key; neither may panic, and the
 				// backend properties cryptoCore carries stay readable throughout.
 				be.DecryptBlock(block, 0, nil, 0)
 			}
@@ -195,14 +195,14 @@ func TestWipeConcurrent(t *testing.T) {
 	wg.Wait()
 
 	if _, err := be.aeadForKey(0); err == nil {
-		t.Error("after a wipe every index must report a hole")
+		t.Error("after a wipe every index must report a missing key")
 	}
 	if _, err := be.DecryptBlock(block, 0, nil, 0); err == nil {
 		t.Error("a block must not decrypt after a wipe")
 	}
 }
 
-// CheckKey says whether this mount can use a key-ring index: not a hole, and not past the ring.
+// CheckKey says whether this mount can use a key-ring index: held, and not past the ring.
 func TestCheckKey(t *testing.T) {
 	cc := cryptocore.New(make([]byte, cryptocore.KeyLen), cryptocore.BackendGoGCM, DefaultIVBits)
 	ce := New(cc, []cipher.AEAD{cc.AEADCipher, nil}, DefaultBS)
@@ -210,7 +210,7 @@ func TestCheckKey(t *testing.T) {
 		t.Errorf("held key: %v", err)
 	}
 	if err := ce.CheckKey(1); err == nil {
-		t.Error("a hole must not be usable")
+		t.Error("a key the mount does not hold must not be usable")
 	}
 	if err := ce.CheckKey(2); err == nil {
 		t.Error("an index past the ring must not be usable")

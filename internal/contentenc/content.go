@@ -29,8 +29,8 @@ const (
 	DefaultIVBits = 128
 )
 
-// keySet is an immutable snapshot of the content keys this mount holds. A nil entry is a hole:
-// a ring entry whose key the key service would not return at mount.
+// keySet is an immutable snapshot of the content keys this mount holds. A nil entry is a key the
+// mount no longer holds, as after Wipe.
 type keySet struct {
 	// aeads is indexed by key-ring index, so aeads[i] belongs to the ring's i-th entry.
 	aeads []cipher.AEAD
@@ -86,8 +86,7 @@ type ContentEnc struct {
 }
 
 // New returns an initialized ContentEnc instance. "cc" is the primary (newest) key's core;
-// "aeads" holds one content AEAD per key-ring index, with nil for an index whose key could not
-// be unwrapped.
+// "aeads" holds one content AEAD per key-ring index.
 func New(cc *cryptocore.CryptoCore, aeads []cipher.AEAD, plainBS uint64) *ContentEnc {
 	tlog.Debug.Printf("contentenc.New: plainBS=%d, keys=%d", plainBS, len(aeads))
 
@@ -156,9 +155,9 @@ func (be *ContentEnc) OpCount() uint64 {
 }
 
 // CheckKey reports why content under key-ring index keyIdx cannot be encrypted or decrypted by this
-// mount, or nil when it can. A file's header names its own index, which may be a ring entry that
-// failed to unwrap at mount or one the mount never had, so a write to an existing file checks it
-// here first: doEncryptBlock treats an unusable index as a bug and panics.
+// mount, or nil when it can. A file's header names its own index, which may be one the mount never
+// had or no longer holds after Wipe, so a write to an existing file checks it here first:
+// doEncryptBlock treats an unusable index as a bug and panics.
 func (be *ContentEnc) CheckKey(keyIdx uint16) error {
 	_, err := be.aeadForKey(keyIdx)
 	return err
@@ -174,7 +173,7 @@ func (be *ContentEnc) aeadForKey(keyIdx uint16) (cipher.AEAD, error) {
 	}
 	aead := ks.aeads[keyIdx]
 	if aead == nil {
-		return nil, fmt.Errorf("key-ring index %d could not be unwrapped at mount, so this content is unreadable", keyIdx)
+		return nil, fmt.Errorf("this mount no longer holds the key for key-ring index %d, so this content is unreadable", keyIdx)
 	}
 	return aead, nil
 }
@@ -413,7 +412,7 @@ func (be *ContentEnc) MergeBlocks(oldData []byte, newData []byte, offset int) []
 // Wipe tries to wipe secret keys from memory by dropping every reference to them.
 //
 // It publishes an all-nil snapshot rather than clearing the live one, so a reader that overlaps a
-// wipe sees either the old valid set or a clean hole, never a torn read.
+// wipe sees either the old valid set or the all-nil one, never a torn read.
 func (be *ContentEnc) Wipe() {
 	be.addKeyLock.Lock()
 	defer be.addKeyLock.Unlock()

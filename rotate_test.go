@@ -130,7 +130,7 @@ func (f *fakeConnector) UnwrapTKFSDataKey(keyID string, ct []byte) ([]byte, erro
 }
 
 // A 403 is the key service's decision and is not retried; anything else is an outage and is, since a
-// blip would otherwise leave a hole until the next remount.
+// blip would otherwise fail the mount.
 func TestUnwrapDataKeyRetriesOutagesButNotRefusals(t *testing.T) {
 	defer func(d time.Duration) { unwrapRetryDelay = d }(unwrapRetryDelay)
 	unwrapRetryDelay = time.Microsecond

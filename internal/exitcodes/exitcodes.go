@@ -83,9 +83,9 @@ const (
 	// -sharedstorage mount cannot keep, refused it. Remount without -sharedstorage, or through a
 	// gateway that does not require binding.
 	SharedStorageRefused = 35
-	// KeyServiceUnreachable - the first heartbeat, before mounting, failed all the attempts its retry
-	// budget allowed. An outage, not a decision about this instance, so unlike 33 and 35 a restart may
-	// succeed.
+	// KeyServiceUnreachable - before mounting, the first heartbeat, a key-ring unwrap or a first mount's
+	// key generation failed other than by a refusal. An outage, not a decision about this instance, so
+	// unlike 33 and 35 a restart may succeed.
 	KeyServiceUnreachable = 36
 )
 

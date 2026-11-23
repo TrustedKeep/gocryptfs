@@ -225,9 +225,7 @@ Only works when mounting as root, otherwise you get this error from fusermount3:
 Create a control socket at the specified location. The socket can be
 used to decrypt and encrypt paths inside the filesystem, and to trigger
 a key rotation (send `{"Rotate": true}`; the reply carries the new
-`KeyIdx`; refused on a "-ro" mount), and to ask which key-ring indices this mount could not unwrap
-(send `{"Status": true}`; the reply carries `KeyHoles`, and everything
-written under one of those indices fails with EIO until a remount). When using
+`KeyIdx`; refused on a "-ro" mount). When using
 this option, make sure that the directory you place the socket in is
 not world-accessible. For example, `/run/user/UID/my.socket` would
 be suitable.
@@ -730,8 +728,9 @@ four times, five seconds apart, with no retry starting after 45 seconds. A key s
 unreachable, or still answering 404 for the route, then fails the mount with
 **exit code 36**, or 33 if it was rejecting the instance's certificate. The
 key-ring unwrap, or a first mount's key generation, comes first: a refusal or
-rejected credentials there is also exit code 33, not retried, and a key service
-that cannot be reached at all fails the mount there with exit code 11. A key
+rejected credentials there is also exit code 33, not retried, and any other
+failure is an outage, exit code 36, after three tries for an unwrap. Every
+retained key-ring entry must unwrap, or the mount fails. A key
 service that cannot answer a heartbeat cannot revoke this instance either, so it
 does not get to serve one. A rekey that heartbeat brings back is carried out
 before the filesystem is served.
@@ -822,7 +821,7 @@ EXIT CODES
 33: before mounting, the key service refused this instance or rejected its credentials  
 34: before mounting, the key operation counter could not be persisted, or a rotation failed other than by a refusal — the op threshold's or a rekey's  
 35: before mounting, a gateway that requires instance binding refused this `-sharedstorage` mount  
-36: before mounting, the key service could not be reached  
+36: before mounting, the first heartbeat, a key-ring unwrap or a first mount's key generation failed other than by a refusal  
 other: please check the error message
 
 Once mounted, none of these end the mount; it is suspended instead. A systemd

@@ -25,7 +25,7 @@ const (
 )
 
 // emeSet is an immutable snapshot of the name keys this mount holds, indexed by key-ring index.
-// A nil entry is a ring entry whose key could not be unwrapped at mount.
+// A nil entry is a key the mount no longer holds, as after Wipe.
 type emeSet struct {
 	ciphers  []*eme.EMECipher
 	writeIdx uint16
@@ -56,8 +56,7 @@ type NameTransform struct {
 	deterministicNames bool
 }
 
-// New returns a new NameTransform instance. "e" holds one EME cipher per key-ring index, with
-// nil for an index whose key could not be unwrapped.
+// New returns a new NameTransform instance. "e" holds one EME cipher per key-ring index.
 //
 // If `longNames` is set, names longer than `longNameMax` are hashed to
 // `gocryptfs.longname.[sha256]`.
@@ -111,7 +110,7 @@ func (n *NameTransform) AddCipher(c *eme.EMECipher) uint16 {
 // Wipe drops the references to the EME ciphers. Called at unmount.
 //
 // It publishes an all-nil snapshot rather than clearing the live one, so a lookup that overlaps a
-// wipe sees either the old valid set or a clean hole.
+// wipe sees either the old valid set or the all-nil one.
 func (n *NameTransform) Wipe() {
 	n.addCipherLock.Lock()
 	defer n.addCipherLock.Unlock()
@@ -136,7 +135,7 @@ func (n *NameTransform) emeCipher(keyIdx uint16) (*eme.EMECipher, error) {
 	if c := es.ciphers[keyIdx]; c != nil {
 		return c, nil
 	}
-	return nil, fmt.Errorf("%w: index %d could not be unwrapped at mount", ErrKeyMissing, keyIdx)
+	return nil, fmt.Errorf("%w: this mount no longer holds index %d", ErrKeyMissing, keyIdx)
 }
 
 // DecryptName calls decryptName to try and decrypt a base64-encoded encrypted

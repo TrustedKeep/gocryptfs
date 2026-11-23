@@ -19,7 +19,7 @@ import (
 // mount down. A full-block write skips the read-modify-write that would otherwise fail first.
 func TestWriteUnderAnUnusableKeyIsEIO(t *testing.T) {
 	cCore := cryptocore.New(make([]byte, cryptocore.KeyLen), cryptocore.BackendGoGCM, contentenc.DefaultIVBits)
-	// Index 0 is held, index 1 is a hole (its ring entry failed to unwrap), index 2 is past the ring.
+	// Index 0 is held, index 1 is not, index 2 is past the ring.
 	cEnc := contentenc.New(cCore, []cipher.AEAD{cCore.AEADCipher, nil}, contentenc.DefaultBS)
 	n := nametransform.New([]*eme.EMECipher{cCore.EMECipher}, true, 0, true, nil, false)
 	rn := NewRootNode(Args{}, cEnc, n)

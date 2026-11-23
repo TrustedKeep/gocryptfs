@@ -727,59 +727,23 @@ func corruptEntry(t *testing.T, cDir string, idx int) {
 	}
 }
 
-// An entry that will not unwrap leaves a hole: the mount serves everything else, the hole's files
-// fail with EIO, and ctlsock Status names it.
-func TestKeyRingHole(t *testing.T) {
-	cDir := test_helpers.InitFS(t, "-mock-kms")
-	os.Chmod(cDir, 0777)
-	pDir, sock := mountWithCtlsock(t, cDir)
-	var files []string
-	for i := range 3 {
-		fn := filepath.Join(pDir, fmt.Sprintf("gen%d.txt", i))
-		if err := os.WriteFile(fn, []byte("content"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		files = append(files, fn)
-		if i < 2 {
-			rotate(t, sock)
-		}
-	}
-	test_helpers.UnmountPanic(pDir)
-	corruptEntry(t, cDir, 1)
-
-	// Reading the hole's file is logged at Warn, which -wpanic would turn into a crash.
-	test_helpers.MountOrFatal(t, cDir, pDir, "-ctlsock="+sock, "-mock-kms", "-extpass=echo test", "-wpanic=0")
-	defer test_helpers.UnmountPanic(pDir)
-	resp := test_helpers.QueryCtlSock(t, sock, ctlsock.RequestStruct{Status: true})
-	if !slices.Equal(resp.KeyHoles, []uint16{1}) {
-		t.Errorf("KeyHoles = %v, want [1]", resp.KeyHoles)
-	}
-	for i, fn := range files {
-		_, err := os.ReadFile(fn)
-		if i == 1 && !errors.Is(err, syscall.EIO) {
-			t.Errorf("read of the file under the hole: %v, want EIO", err)
-		} else if i != 1 && err != nil {
-			t.Errorf("read %q: %v", fn, err)
-		}
-	}
-}
-
-// A hole the mount cannot serve around is fatal: the active entry, and with encrypted names entry 0,
-// which the root directory is keyed with.
-func TestKeyRingHoleThatCannotBeServedIsFatal(t *testing.T) {
+// Every retained entry must unwrap before anything is served: one that will not fails the mount as
+// an outage, whichever entry it is.
+func TestKeyRingEntryThatWillNotUnwrapIsFatal(t *testing.T) {
 	for _, c := range []struct {
 		name     string
 		initArgs []string
 		corrupt  int
-		fatal    bool
 	}{
-		{"active entry", nil, 1, true},
-		{"root directory's entry", nil, 0, true},
-		{"entry 0 under -plaintextnames", []string{"-plaintextnames"}, 0, false},
+		{"active entry", nil, 2},
+		{"historical entry", nil, 1},
+		{"root directory's entry", nil, 0},
+		{"entry 0 under -plaintextnames", []string{"-plaintextnames"}, 0},
 	} {
 		// No subtests: InitFS names the cipherdir after t.Name(), which a subtest gives a slash.
 		cDir := test_helpers.InitFS(t, append(c.initArgs, "-mock-kms")...)
 		pDir, sock := mountWithCtlsock(t, cDir)
+		rotate(t, sock)
 		rotate(t, sock)
 		test_helpers.UnmountPanic(pDir)
 		corruptEntry(t, cDir, c.corrupt)
@@ -788,9 +752,8 @@ func TestKeyRingHoleThatCannotBeServedIsFatal(t *testing.T) {
 		if err == nil {
 			test_helpers.UnmountPanic(pDir)
 		}
-		// A clean refusal, not a crash on the missing key.
-		if code := test_helpers.ExtractCmdExitCode(err); c.fatal && code != exitcodes.Other || !c.fatal && err != nil {
-			t.Errorf("%s: mount error = %v, want fatal %v", c.name, err, c.fatal)
+		if code := test_helpers.ExtractCmdExitCode(err); code != exitcodes.KeyServiceUnreachable {
+			t.Errorf("%s: mount exit code %d (%v), want %d", c.name, code, err, exitcodes.KeyServiceUnreachable)
 		}
 	}
 }

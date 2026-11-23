@@ -24,19 +24,17 @@ type Interface interface {
 type ctlSockHandler struct {
 	fs     Interface
 	rotate func() (uint16, error)
-	holes  []uint16
 	socket *net.UnixListener
 }
 
 // Serve serves incoming connections on "sock". This call blocks so you
 // probably want to run it in a new goroutine.
 //
-// "rotate" is nil on a read-only mount; "holes" are the indices that failed to unwrap at mount.
-func Serve(sock net.Listener, fs Interface, rotate func() (uint16, error), holes []uint16) {
+// "rotate" is nil on a read-only mount.
+func Serve(sock net.Listener, fs Interface, rotate func() (uint16, error)) {
 	handler := ctlSockHandler{
 		fs:     fs,
 		rotate: rotate,
-		holes:  holes,
 		socket: sock.(*net.UnixListener),
 	}
 	handler.acceptLoop()
@@ -99,16 +97,12 @@ func (ch *ctlSockHandler) handleConnection(conn *net.UnixConn) {
 func (ch *ctlSockHandler) handleRequest(in *ctlsock.RequestStruct, conn *net.UnixConn) {
 	var err error
 	var inPath, outPath, clean, warnText string
-	if in.Rotate || in.Status {
-		if (in.Rotate && in.Status) || in.DecryptPath != "" || in.EncryptPath != "" {
+	if in.Rotate {
+		if in.DecryptPath != "" || in.EncryptPath != "" {
 			sendResponse(conn, errors.New("Ambiguous"), "", "")
 			return
 		}
-		if in.Rotate {
-			ch.handleRotate(conn)
-		} else {
-			writeResponse(conn, ctlsock.ResponseStruct{KeyHoles: ch.holes})
-		}
+		ch.handleRotate(conn)
 		return
 	}
 	// You cannot perform both decryption and encryption in one request

@@ -431,7 +431,7 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, rotator *k
 		os.Exit(exitcodes.Other)
 	}
 	// freshKey is nil when the ring already had a key, which is the usual case.
-	ks := buildKeySets(keyRing, freshKey, cryptoBackend, IVBits, frontendArgs.PlaintextNames)
+	ks := buildKeySets(keyRing, freshKey, cryptoBackend, IVBits)
 
 	cEnc := contentenc.New(ks.core, ks.aeads, contentenc.DefaultBS)
 	nameTransform := nametransform.New(ks.emeCiphers, frontendArgs.LongNames, args.longnamemax,
@@ -453,7 +453,7 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, rotator *k
 		if !args.ro {
 			rotate = rotator.rotate
 		}
-		go ctlsocksrv.Serve(args._ctlsockFd, gateCtl(rootNode.(ctlsocksrv.Interface), args._keyGate), rotate, ks.holes)
+		go ctlsocksrv.Serve(args._ctlsockFd, gateCtl(rootNode.(ctlsocksrv.Interface), args._keyGate), rotate)
 	}
 	return rootNode, rotator, func() {
 		// Names first: cEnc.Wipe() forces the one GC, and it can only collect the EME key
@@ -472,16 +472,13 @@ type keySets struct {
 	// core is the newest entry's, which is what contentenc reads IVLen and the nonce generator
 	// from.
 	core *cryptocore.CryptoCore
-	// aeads and emeCiphers are indexed by ring index. A nil entry is a hole.
+	// aeads and emeCiphers are indexed by ring index.
 	aeads      []cipher.AEAD
 	emeCiphers []*eme.EMECipher
-	// holes are the ring indices whose key the key service would not return, in ring order. Fixed
-	// for the life of the mount: nothing retries an unwrap afterwards.
-	holes []uint16
 }
 
-// unwrapAttempts is how many times a failed unwrap is tried before the entry becomes a hole. The
-// budget is paid per retained entry, so it is kept small.
+// unwrapAttempts is how many times a failed unwrap is tried before the mount fails. The budget is
+// paid per retained entry, so it is kept small.
 const unwrapAttempts = 3
 
 // unwrapRetryDelay is the wait before the first retry, doubled after each one. Tests shorten it.
@@ -503,8 +500,9 @@ func unwrapDataKey(dk tkc.DataKeyConnector, idx uint16, e configfile.KeyRingEntr
 }
 
 // buildKeySets unwraps every retained key-ring entry into the content AEAD and EME name cipher at its
-// ring index. freshKey, if non-nil, is the plaintext of the entry this mount just generated.
-func buildKeySets(kr *configfile.KeyRing, freshKey []byte, backend cryptocore.AEADTypeEnum, ivBits int, plaintextNames bool) *keySets {
+// ring index, exiting if any entry will not unwrap. freshKey, if non-nil, is the plaintext of the entry
+// this mount just generated.
+func buildKeySets(kr *configfile.KeyRing, freshKey []byte, backend cryptocore.AEADTypeEnum, ivBits int) *keySets {
 	activeIdx, err := kr.ActiveIdx()
 	if err != nil {
 		tlog.Fatal.Printf("%v", err)
@@ -519,24 +517,8 @@ func buildKeySets(kr *configfile.KeyRing, freshKey []byte, backend cryptocore.AE
 		key := freshKey
 		if idx != activeIdx || key == nil {
 			if key, err = unwrapDataKey(tkc.DataKey(), idx, e); err != nil {
-				// The refusal is the mount's, not the entry's, so it is never a hole.
-				if errors.Is(err, tkc.ErrSharedStorageRefused) {
-					tlog.Fatal.Printf("Failed to unwrap key-ring index %d: %v", idx, err)
-					os.Exit(keyServiceExit(err, exitcodes.Other))
-				}
-				// The root diriv is stamped with index 0, so with encrypted names no path
-				// resolves without it.
-				if idx == activeIdx || (idx == 0 && !plaintextNames) {
-					tlog.Fatal.Printf("Failed to unwrap key-ring index %d, which this mount cannot serve without: %v", idx, err)
-					os.Exit(keyServiceExit(err, exitcodes.Other))
-				}
-				// Fatal is the level, not the outcome: the mount goes on, and -q must not
-				// hide that part of it is unreadable.
-				tlog.Fatal.Printf("Key-ring index %d could not be unwrapped (%v). Every file, directory, "+
-					"symlink and xattr value written under that key fails in this mount until it is "+
-					"remounted; the ctlsock Status command lists the affected indices.", idx, err)
-				ks.holes = append(ks.holes, idx)
-				continue
+				tlog.Fatal.Printf("Failed to unwrap key-ring index %d: %v", idx, err)
+				os.Exit(outageExit(err))
 			}
 		}
 		// cryptocore HKDF-derives and caches the EME/content keys, so the master key is no
@@ -577,7 +559,7 @@ func generateInitialDataKey(args *argContainer, keyRing *configfile.KeyRing, pla
 	dk, err := tkc.DataKey().GenerateTKFSDataKey()
 	if err != nil {
 		tlog.Fatal.Printf("Failed to generate the initial data key: %v", err)
-		os.Exit(keyServiceExit(err, exitcodes.Other))
+		os.Exit(outageExit(err))
 	}
 	idx, err := keyRing.Append(configfile.KeyRingEntry{
 		KeyID:      dk.KeyID,

@@ -116,7 +116,7 @@ sequenceDiagram
   T->>T: mount and serve
 ```
 
-A historical entry that fails to unwrap (after three tries, or one refusal) leaves a hole: files, directories, symlinks and xattrs written under it return EIO, writes included, and the mount carries on. Failing the active entry, or index 0 when names are encrypted, fails the mount, as does a 409 on any entry.
+Every retained entry must unwrap, or the mount fails before serving anything: a refusal or rejected credentials exits 33 without a retry, a 409 35, and anything else, after three tries, 36, which a restart retries.
 
 ## Data-key service and authorization
 
@@ -203,7 +203,7 @@ Every encrypted object names its key index explicitly. There is no trial decrypt
 Three things trigger a rotation:
 
 1. **Op counter.** After 2^30 encrypt operations on the active key (about 4.4 TB at 4 KiB blocks). The count is persisted in `KR`, so it spans mounts. Set with `-rotate-op-threshold`; only `-ro` disables it.
-2. **`-ctlsock`.** `{"Rotate": true}` returns the new `KeyIdx`, which the key service sees at the next scheduled heartbeat; `{"Status": true}` returns the indices this mount could not unwrap.
+2. **`-ctlsock`.** `{"Rotate": true}` returns the new `KeyIdx`, which the key service sees at the next scheduled heartbeat.
 3. **Remote rekey.** An admin asks the gateway, and the instance pulls the request on its next heartbeat. Nothing dials the instance.
 
 ```mermaid
@@ -235,7 +235,7 @@ sequenceDiagram
 
 A directive is satisfied once the instance reports an index other than `PastIdx` on a key keep created after `RequestedAt`. Every timestamp in that rule is keep's, so the TKFS host's clock decides nothing (`KeyCreatedAt` is keep's stamp, relayed by the instance).
 
-The heartbeat runs every 5 minutes and is not configurable, because it sets the revocation window. The first one goes out before the FUSE mount, so a refusal fails the mount with no mountpoint attached: a 403 or 401 exits 33 and a 409 exits 35. Anything else is tried up to four times, 5 seconds apart, then exits 36 (33 if the TLS handshake refused the client certificate). The ring unwrap, or a first mount's generate, runs earlier still: a key service that cannot be reached fails the mount there with exit 11.
+The heartbeat runs every 5 minutes and is not configurable, because it sets the revocation window. The first one goes out before the FUSE mount, so a refusal fails the mount with no mountpoint attached: a 403 or 401 exits 33 and a 409 exits 35. Anything else is tried up to four times, 5 seconds apart, then exits 36 (33 if the TLS handshake refused the client certificate). The ring unwrap, or a first mount's generate, runs earlier still and exits the same way: 33 or 35 on a refusal, otherwise 36 (an unwrap after three tries).
 
 | Heartbeat answer | Effect |
 |---|---|
@@ -257,7 +257,7 @@ A running mount is never unmounted by the key service (`keygate.go`): an unmount
 | 33 | Before mounting: instance refused (403), or credentials rejected (401, or a TLS alert refusing the client certificate) |
 | 34 | Before mounting: the op count could not be persisted, or an op-counter or rekey rotation failed other than by a refusal |
 | 35 | Before mounting: a gateway requiring binding refused a `-sharedstorage` mount |
-| 36 | Before mounting: the pre-mount heartbeat ran out of attempts |
+| 36 | Before mounting: the first heartbeat, a key-ring unwrap or a first mount's key generation failed other than by a refusal |
 
 systemd units should set `RestartPreventExitStatus=33 35`, so a mount that failed to start on an outage (36) restarts and a refusal does not.
 
@@ -367,11 +367,11 @@ Start in gocryptfs `mount.go` and follow the key from `KR` to the cipher cores; 
 
 | Repo | Where to look | What to check |
 |---|---|---|
-| gocryptfs | `mount.go`: `doMount`, `initFuseFrontend`, `generateInitialDataKey`, `buildKeySets`, `keyServiceExit` | Order on first mount (diriv, then ring, then heartbeat, then FUSE); which unwrap failures are fatal |
+| gocryptfs | `mount.go`: `doMount`, `initFuseFrontend`, `generateInitialDataKey`, `buildKeySets`, `keyServiceExit` | Order on first mount (diriv, then ring, then heartbeat, then FUSE); every unwrap failure is fatal |
 | gocryptfs | `heartbeat.go` (`keyServiceMonitor`), `rotate.go` (`keyRotator`), `keygate.go` (`keyGate`, `gatedFS`) | Three-strike and immediate-suspension rules for heartbeats and rotations, which operations a suspension refuses and which cached pages it drops, and which pre-mount failures exit 33, 34, 35 or 36 |
 | gocryptfs | `internal/configfile/keyring.go`, `config_file.go`, `validate.go` | Append-only ring; every entry shares one KeyID; empty ring only before the first mount |
 | gocryptfs | `internal/contentenc/`, `internal/nametransform/diriv.go`, `names.go`, `internal/fusefrontend/node_xattr.go`, `root_node.go` | Explicit key index on every object; no default of 0; 18-byte diriv; xattr marker |
-| gocryptfs | `internal/fusefrontend/file.go` (`doWrite`), `internal/ctlsocksrv/ctlsock_serve.go`, `internal/exitcodes/exitcodes.go` | A write under a key the mount lacks is EIO, not a panic; ctlsock `Rotate` and `Status`; exit codes 31 to 36 |
+| gocryptfs | `internal/fusefrontend/file.go` (`doWrite`), `internal/ctlsocksrv/ctlsock_serve.go`, `internal/exitcodes/exitcodes.go` | A write under a key the mount lacks is EIO, not a panic; ctlsock `Rotate`; exit codes 31 to 36 |
 | gocryptfs | `internal/tkc/`: `gateway.go`, `gwconnect.go`, `search_connect.go`, `machine.go`, `mock_gwconnect.go` | Transit unwrap; mapping of 403, 409, 401, TLS certificate alerts and 404/501 to the errors that pick the exit code; identity proof fetch |
 | tkutils | `model/`: `tkfsdatakey.go`, `transit.go`, `tkfspolicy.go`, `tkfsidentity.go`, `tkfscontrol.go`, `tkfsinstance.go`; `awsidentity/`; `tcutils/restartable_http.go` | Wire types; RSA-OAEP transit and `ValidateTransportKey`; blocklist matching; the rekey rule (`OutstandingFor`); PKCS#7 verify and its 8 KiB cap; listener cert-refresh retries |
 | keep | `tcv/tkfs.go`, `tcv/object_keywrap.go`, `tenants/tenant_mgr_tkfs*.go` (`TKFSKekWrap`, `TKFSKekUnwrap`), `tenant_mgr_keywrap.go`, `tenant_mgr_paths.go` | The single `TKFSPermissionCheck`; one KEK per instance, resolved by id only under `tkfs/k/`, never in MCSE's `kek/key` |
