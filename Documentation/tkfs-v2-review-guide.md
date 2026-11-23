@@ -305,7 +305,7 @@ A gateway that requires binding pairs each instance with the first EC2 machine t
 
 - **Proof.** EC2's IMDS `rsa2048` signature: PKCS#7, RSA-2048 over SHA-256, which verifies under `fips140=only`. The client fetches it once per mount and sends it on generate, unwrap and heartbeat.
 - **Verification.** gatehouse verifies offline against identity certs an admin uploads, one per AWS region. None are built in, and a cert embedded in the proof is never trusted.
-- **The switch.** gatehouse startup config `UserData.TKFSRequireBinding` (docker: `TKFS_REQUIRE_BINDING`), off by default. It is per gateway, so a mixed fleet enforces only where it is set: a gateway without it serves a paired instance to any machine. Set it on every gateway in the tenant.
+- **The switch.** gatehouse startup config `UserData.TKFSRequireBinding` (docker: `TKFS_REQUIRE_BINDING`), off by default. It is per gateway, so a mixed fleet enforces only where it is set: a gateway without it serves a paired instance to any machine. Roll it out in this order: upload the identity certs, set the flag on every gateway in the tenant, then restart each TKFS mount.
 - **The machine.** Account ID, region and EC2 instance ID. Image ID and private IP are recorded but not matched; the admin UI shows neither. The registry tells instances apart by the machine the document names, verified or not, so a gateway gaining or losing its identity certs does not split a mount in two.
 - **The pairing.** Stored in keep at `tkfs/b/<kekID>`, one per filesystem, written only after keep authorizes the call. It never moves. Forgetting any of the filesystem's instances removes it, and so does an admin unbind.
 
@@ -319,7 +319,7 @@ stateDiagram-v2
   Paired --> Unpaired: Forget any instance, or unbind
 ```
 
-Behind a gateway requiring binding, an unpaired instance's heartbeat or rotation is refused, so mounts already running when the flag goes on are suspended and pair at their remount. A call proving another machine, or none, gets 403: exit 33 at mount, suspension once mounted. While the gateway has no usable identity cert, a call carrying a proof gets 502 instead, which the client counts as an outage.
+Behind a gateway requiring binding, an unpaired instance's heartbeat or rotation is refused, so mounts already running when the flag goes on stay suspended until restarted by hand, and the restart's unwrap pairs them. A call proving another machine, or none, gets 403: exit 33 at mount, suspension once mounted. While the gateway has no usable identity cert, a call carrying a proof gets 502 instead, which the client counts as an outage.
 
 What it does not close:
 

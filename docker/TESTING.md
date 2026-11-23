@@ -24,8 +24,10 @@ policy change immediately, and it picks up a queued rekey at once.
    time moves past the rekey.
 7. **Block.** Block the instance. Its next heartbeat is refused and the mount is suspended: it stays mounted,
    but `ls` and reads in it fail with "Permission denied", and a program that mapped a file before the block
-   dies with a bus error on its next read of it. A new mount is refused straight away. Remove the block on
-   **Access Control**; the running mount resumes on its next heartbeat.
+   dies with a bus error on its next read of it. Remove the block on **Access Control**; the mount resumes on
+   its next heartbeat, with no remount. Block it again, stop it with `docker stop tkfs-a`, and run
+   `mount.sh -k a`: it is refused at once and exits 33 (`echo $?`). Remove the block and run `mount.sh -k a`
+   again for the next steps.
 8. **Revoke.** Remove the DN from the allowed DNs. The mount is suspended on its next heartbeat, and resumes
    on the one after the DN is allowed again.
 9. **Unreachable.** Stop the gateway for 15 minutes. The mount stays up and is suspended after three failed
@@ -38,9 +40,10 @@ policy change immediately, and it picks up a queued rekey at once.
       `TKFS_REQUIRE_BINDING=true docker compose up -d --force-recreate --no-deps --wait gateway`.
       **Instance Binding** then shows the node as requiring binding, and **Instances** gains a Binding
       column. Each filesystem binds to the machine it proves on its next mount, and shows as Bound. A mount
-      that proves no machine is refused, and the next heartbeat of a mount still running unbound suspends
-      it; remount it to bind. Forget removes the binding: a running mount is suspended on its next
-      heartbeat and binds again when remounted.
+      that proves no machine is refused. A mount still running unbound is suspended on its next heartbeat
+      and stays suspended until restarted by hand: `docker stop tkfs-<name>`, then `mount.sh -k <name>`,
+      which binds it. Forget removes the binding: a running mount is suspended on its next heartbeat until
+      restarted the same way, which binds it again.
 
 `-mock-aws` always proves the same fake machine (`i-00000000000000000`, account `000000000000`). A second
 real machine, as TK-1394 describes, needs EC2.
