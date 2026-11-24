@@ -38,6 +38,8 @@ type keyRotator struct {
 	entries []configfile.KeyRingEntry
 	// generate asks the key service for a new data key; nil means tkc.DataKey(). Tests replace it.
 	generate func() (tkc.TKFSDataKey, error)
+	// gate, if set, refuses every rotation once the mount has halted.
+	gate *keyGate
 }
 
 // newKeyRotator returns the rotator for a mount whose key ring is kr, writing under its newest entry.
@@ -64,11 +66,17 @@ func (r *keyRotator) writeKey() (uint16, time.Time) {
 // where a failure to get the key at all is struck heartbeatFailureLimit times first.
 var errRotationFatal = errors.New("rotation failed after the key service answered")
 
+// errHalted refuses a rotation on a halted mount.
+var errHalted = errors.New("the mount has halted; only a remount rotates it")
+
 // rotate appends a freshly generated data key to the ring and makes it the key new content, names
 // and directories are written under. Nothing on disk is re-encrypted.
 func (r *keyRotator) rotate() (uint16, error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
+	if r.gate != nil && r.gate.halted.Load() {
+		return 0, errHalted
+	}
 
 	keyRing, err := r.loadRing()
 	if err != nil {

@@ -3,6 +3,7 @@ package main
 import (
 	"maps"
 	"os"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,10 @@ const (
 // control socket (gatedCtl) check it.
 type keyGate struct {
 	suspended atomic.Bool
+	// halted refuses file operations for the rest of the mount's life, whatever the key service says.
+	halted atomic.Bool
+	// onHalt, if set, runs on a goroutine of its own when the gate first halts. Set it before serving.
+	onHalt func()
 
 	mu sync.Mutex
 	// open counts the open file handles per FUSE node.
@@ -33,6 +38,38 @@ type keyGate struct {
 	// invalidate is the server's InodeNotify, which drops an inode's cached pages. mountGated sets it
 	// before serving, so every reader starts after it; nil without a mount.
 	invalidate func(node uint64, off, length int64) fuse.Status
+}
+
+// closed reports whether file operations are refused.
+func (k *keyGate) closed() bool {
+	return k.suspended.Load() || k.halted.Load()
+}
+
+// halt suspends file operations until the mount is remounted.
+func (k *keyGate) halt() {
+	if k.halted.Swap(true) {
+		return
+	}
+	if !k.suspended.Swap(true) {
+		k.dropCache()
+	}
+	if k.onHalt != nil {
+		go k.onHalt()
+	}
+}
+
+// panicHandler answers a FUSE handler's panic by halting gate: serving on from the state the panic left
+// is unsafe, and crashing ends the mount, leaving a plain directory for writers to fill. Without a gate it re-panics.
+func panicHandler(gate *keyGate, mountpoint string) func(any) fuse.Status {
+	return func(r any) fuse.Status {
+		if gate == nil {
+			panic(r)
+		}
+		gate.halt()
+		tlog.Fatal.Printf("Panic in a file operation: %v\n%s", r, debug.Stack())
+		tlog.Fatal.Printf("File operations on %s now fail (%v) until it is remounted.", mountpoint, suspendedErrno)
+		return suspendedStatus
+	}
 }
 
 // opened counts a handle the filesystem just opened. An open that passed the gate before it closed may
@@ -43,7 +80,7 @@ func (k *keyGate) opened(node uint64) {
 		k.open = make(map[uint64]int)
 	}
 	k.open[node]++
-	late := k.suspended.Load()
+	late := k.closed()
 	k.mu.Unlock()
 	if late {
 		k.drop([]uint64{node})
@@ -97,7 +134,7 @@ type gatedFS struct {
 // refused reports whether to fail an operation. A refusal counts as activity, so -idle does not unmount
 // a suspended mount that is still being used.
 func (g *gatedFS) refused() bool {
-	if !g.gate.suspended.Load() {
+	if !g.gate.closed() {
 		return false
 	}
 	if g.isIdle != nil {
@@ -123,14 +160,14 @@ func gateCtl(fs ctlsocksrv.Interface, gate *keyGate) ctlsocksrv.Interface {
 
 // The control socket reports an errno only from an *os.PathError.
 func (g gatedCtl) EncryptPath(p string) (string, error) {
-	if g.gate.suspended.Load() {
+	if g.gate.closed() {
 		return "", &os.PathError{Op: "EncryptPath", Path: p, Err: suspendedErrno}
 	}
 	return g.Interface.EncryptPath(p)
 }
 
 func (g gatedCtl) DecryptPath(p string) (string, error) {
-	if g.gate.suspended.Load() {
+	if g.gate.closed() {
 		return "", &os.PathError{Op: "DecryptPath", Path: p, Err: suspendedErrno}
 	}
 	return g.Interface.DecryptPath(p)
@@ -339,21 +376,22 @@ func (g *gatedFS) Lseek(c <-chan struct{}, in *fuse.LseekIn, out *fuse.LseekOut)
 	return g.RawFileSystem.Lseek(c, in, out)
 }
 
-// writeback reports whether a write flushes pages dirtied through a mapping. Refusing it would only
-// discard them, and with no writeback cache negotiated no other write carries the flag.
-func writeback(in *fuse.WriteIn) bool {
-	return in.WriteFlags&fuse.WRITE_CACHE != 0
+// writeback reports whether a write flushes pages dirtied through a mapping, which a suspension lets
+// through: refusing would only discard them, and with no writeback cache negotiated no other write carries
+// the flag. A halted mount refuses them too.
+func (g *gatedFS) writeback(in *fuse.WriteIn) bool {
+	return in.WriteFlags&fuse.WRITE_CACHE != 0 && !g.gate.halted.Load()
 }
 
 func (g *gatedFS) Write(c <-chan struct{}, in *fuse.WriteIn, data []byte) (uint32, fuse.Status) {
-	if !writeback(in) && g.refused() {
+	if !g.writeback(in) && g.refused() {
 		return 0, suspendedStatus
 	}
 	return g.RawFileSystem.Write(c, in, data)
 }
 
 func (g *gatedFS) Writev(c <-chan struct{}, in *fuse.WriteIn, data [][]byte) (uint32, fuse.Status) {
-	if !writeback(in) && g.refused() {
+	if !g.writeback(in) && g.refused() {
 		return 0, suspendedStatus
 	}
 	return g.RawFileSystem.Writev(c, in, data)

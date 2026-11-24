@@ -655,8 +655,9 @@ Write execution trace to file. View the trace using "go tool trace FILE".
 Applies to: all actions.
 
 #### -wpanic
-When encountering a warning, panic and exit immediately. This is
-useful in regression testing.
+When encountering a warning, panic and exit immediately. Inside a file
+operation the panic halts the mount instead (see KEY-SERVICE HEARTBEAT).
+This is useful in regression testing.
 
 Applies to: all actions.
 
@@ -764,7 +765,11 @@ refused in it or has failed three intervals in a row, and reports a mount to the
 key service as it does. So unblocking an instance, re-allowing its DN or ending
 an outage brings it back within one interval, with no remount. A mount
 suspended because another host changed its key ring (see `-sharedstorage`)
-resumes only when remounted. Suspending also
+resumes only when remounted. So does one **halted** by a panic in a file
+operation, which suspends it rather than crashing it; a halted mount also
+refuses writing back memory-mapped files and every key rotation, and its
+heartbeats report the halt, which the gateway shows once it no longer refuses
+the instance. Suspending also
 has the kernel drop the cached pages of files still open, so a memory mapping
 made before it fails (SIGBUS) instead of reading or changing them. Until a
 file's pages are dropped, which normally takes milliseconds, a mapping can still

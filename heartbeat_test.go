@@ -143,6 +143,9 @@ func newTestMonitor(t *testing.T, r *keyRotator, hb *fakeHeartbeater) (m *keySer
 	if hb != nil {
 		m.hb = hb
 	}
+	if r != nil {
+		r.gate = m.gate
+	}
 	return m, &code
 }
 
@@ -234,6 +237,55 @@ func TestResumeReportsAMount(t *testing.T) {
 	assertServing(t, m, code, true)
 }
 
+// A panic in a file operation halts the mount: that operation and every later one answer EACCES, no
+// answered heartbeat resumes it, and nothing rotates its key. The halt is reported at once and replaces
+// every beat after but the unmount report. Without a gate, as under fsck, it re-panics.
+func TestPanicHaltsTheMount(t *testing.T) {
+	hb := &fakeHeartbeater{}
+	r := newTestRotator(t, "")
+	m, code := newTestMonitor(t, r, hb)
+	m.tick()
+	reported := make(chan struct{})
+	m.gate.onHalt = func() { m.reportHalt(); close(reported) }
+	if st := panicHandler(m.gate, "/mnt")("boom"); st != suspendedStatus {
+		t.Errorf("the panicking operation = %v, want %v", st, suspendedStatus)
+	}
+	<-reported
+	panicHandler(m.gate, "/mnt")("again")
+	hb.answer = model.TKFSHeartbeatResponse{Command: model.TKFSCommandRekey}
+	for range 2 {
+		m.tick()
+		assertServing(t, m, code, true)
+	}
+	_, _ = m.report(model.TKFSEventMount)
+	m.mountReported = true
+	m.reportUnmount()
+	want := []model.TKFSHeartbeatEvent{model.TKFSEventNone, model.TKFSEventHalted, model.TKFSEventHalted,
+		model.TKFSEventHalted, model.TKFSEventHalted, model.TKFSEventUnmount}
+	if !slices.Equal(hb.events, want) {
+		t.Errorf("events = %v, want %v: the halt at once, once per halt, in place of every beat but the unmount", hb.events, want)
+	}
+	if _, err := r.rotate(); !errors.Is(err, errHalted) {
+		t.Errorf("rotate after the halt = %v, want %v", err, errHalted)
+	}
+	assertReported(t, r, hb, []uint16{0, 0, 0, 0, 0, 0})
+	if n := len(loadRing(t, r).Keys); n != 1 {
+		t.Errorf("the ring holds %d keys; a halted mount must not add one", n)
+	}
+	// A heartbeat that clears the suspension just as the panic lands must not reopen it either.
+	m.gate.suspended.Store(false)
+	if !m.gate.closed() {
+		t.Error("a halted gate opened when the key service's suspension cleared")
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Error("with no gate the panic must propagate")
+		}
+	}()
+	panicHandler(nil, "/mnt")("boom")
+}
+
 type fakeCtl struct{}
 
 func (fakeCtl) EncryptPath(p string) (string, error) { return "enc:" + p, nil }
@@ -323,6 +375,33 @@ func TestGatedFS(t *testing.T) {
 		if got := call(); got == suspendedStatus {
 			t.Errorf("%s while open = %v, want it passed through", name, got)
 		}
+		gate.halted.Store(true)
+		if got := call(); got != suspendedStatus {
+			t.Errorf("%s while halted = %v, want %v", name, got, suspendedStatus)
+		}
+		gate.halted.Store(false)
+	}
+}
+
+// Writing back pages dirtied through a mapping passes a suspension, which would only discard them, but
+// not a halt.
+func TestGatedWriteback(t *testing.T) {
+	var gate keyGate
+	g := &gatedFS{RawFileSystem: fuse.NewDefaultRawFileSystem(), gate: &gate}
+	in := &fuse.WriteIn{WriteFlags: fuse.WRITE_CACHE}
+	gate.suspended.Store(true)
+	if _, st := g.Write(nil, in, nil); st == suspendedStatus {
+		t.Error("writeback refused while suspended")
+	}
+	if _, st := g.Writev(nil, in, nil); st == suspendedStatus {
+		t.Error("vectored writeback refused while suspended")
+	}
+	gate.halted.Store(true)
+	if _, st := g.Write(nil, in, nil); st != suspendedStatus {
+		t.Errorf("writeback while halted = %v, want %v", st, suspendedStatus)
+	}
+	if _, st := g.Writev(nil, in, nil); st != suspendedStatus {
+		t.Errorf("vectored writeback while halted = %v, want %v", st, suspendedStatus)
 	}
 }
 
