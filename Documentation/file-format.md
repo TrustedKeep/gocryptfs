@@ -94,7 +94,7 @@ implies a root diriv; a leftover diriv with no ring is replaced by the next firs
 Symlink target
 --------------
 
-	base64( key-ring index 2B || nonce 16B || ciphertext || tag 16B )
+	base64( key-ring index 2B || nonce 12B || ciphertext || tag 16B )
 
 The index is inside the base64 so the stored target stays a single token with no separator to
 parse. The empty target is stored as the empty string and carries no index.
@@ -102,34 +102,28 @@ parse. The empty target is stored as the empty string and carries no index.
 Xattr value
 -----------
 
-	key-ring index 2B || nonce 16B || ciphertext || tag 16B
+	key-ring index 2B || nonce 12B || ciphertext || tag 16B
 
 Raw bytes, not base64. The empty value is stored empty and carries no index.
 
 Data block, default AES-GCM mode
 --------------------------------
 
-	16 bytes GCM IV (nonce)
+	12 bytes GCM IV (nonce), random
 	1-4096 bytes encrypted data
 	16 bytes GHASH
 
-Overhead = (16+16)/4096 = 1/128 = 0.78125 %
+Overhead = (12+16)/4096 = 0.68 %
 
-Data block, AES-SIV mode
-------------------------
-
-AES-SIV is used when the `AESSIV` feature flag is set in `gocryptfs.conf`.
-
-	16 bytes nonce
-	16 bytes SIV
-	1-4096 bytes encrypted data
-
-Overhead = (16+16)/4096 = 1/128 = 0.78125 %
+The IV is drawn by Go's `cipher.NewGCMWithRandomNonce`, the only GCM construction the Go FIPS 140-3
+module approves; NIST SP 800-38D allows 2^32 such IVs per key. Symlink targets and xattr values use
+the same 12-byte IV. A config from the earlier 128-bit IVs carries the `GCMIV128` feature flag,
+which this version does not know, so it refuses that filesystem.
 
 Data block, XChaCha20-Poly1305
 ------------------------------
 
-Enabled via `-init -xchacha`
+Enabled via `-init -xchacha`. Symlink targets and xattr values carry its 24-byte nonce.
 
 	24 bytes nonce
 	1-4096 bytes encrypted data
@@ -147,22 +141,22 @@ Examples
 
 Total: 0 bytes
 
-1-byte file, AES-GCM and AES-SIV mode
--------------------------------------
+1-byte file, AES-GCM mode
+-------------------------
 
 	Header     20 bytes
-	Data block 33 bytes
+	Data block 29 bytes
 
-Total: 53 bytes
+Total: 49 bytes
 
-5000-byte file, , AES-GCM and AES-SIV mode
-------------------------------------------
+5000-byte file, AES-GCM mode
+----------------------------
 
 	Header       20 bytes
-	Data block 4128 bytes
-	Data block  936 bytes
+	Data block 4124 bytes
+	Data block  932 bytes
 
-Total: 5084 bytes
+Total: 5076 bytes
 
 1-byte file, XChaCha20-Poly1305 mode
 ------------------------------------

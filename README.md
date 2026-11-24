@@ -154,8 +154,8 @@ Storage Overhead
 ----------------
 
 * Empty files take 0 bytes on disk
-* 18 byte file header for non-empty files (2 bytes version, 16 bytes random file id)
-* 32 bytes of storage overhead per 4kB block (16 byte nonce, 16 bytes auth tag)
+* 20 byte file header for non-empty files (2 bytes version, 2 bytes key-ring index, 16 bytes random file id)
+* 28 bytes of storage overhead per 4kB block (12 byte nonce, 16 bytes auth tag)
 
 [file-format.md](Documentation/file-format.md) contains a more detailed description.
 

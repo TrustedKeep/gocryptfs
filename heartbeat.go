@@ -38,7 +38,7 @@ var firstHeartbeatBudget = 45 * time.Second
 
 // defaultRotateOpThreshold is how many encrypt operations one data key covers before the mount
 // rotates to a fresh one — about 4.4 TB at the default block size. A quarter of NIST's 2^32 bound
-// for random nonces, which is conservative here because these nonces are counter-derived.
+// for random 96-bit IVs.
 const defaultRotateOpThreshold = 1 << 30
 
 // resolveRotateOpThreshold maps a -rotate-op-threshold value onto the threshold to use. Zero is

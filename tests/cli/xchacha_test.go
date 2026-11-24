@@ -21,9 +21,6 @@ func TestInitXchacha(t *testing.T) {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	if c.IsFeatureFlagSet(configfile.FlagGCMIV128) {
-		t.Error("GCMIV128 flag should be off")
-	}
 	if !c.IsFeatureFlagSet(configfile.FlagXChaCha20Poly1305) {
 		t.Error("XChaCha20Poly1305 flag should be on")
 	}

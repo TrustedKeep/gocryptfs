@@ -84,10 +84,6 @@ func Create(args *CreateArgs) error {
 	// Feature flags
 	if args.XChaCha20Poly1305 {
 		cf.setFeatureFlag(FlagXChaCha20Poly1305)
-	} else {
-		// 128-bit IVs are mandatory for AES-GCM (default is 96!) and AES-SIV,
-		// XChaCha20Poly1305 uses even an even longer IV of 192 bits.
-		cf.setFeatureFlag(FlagGCMIV128)
 	}
 	if args.PlaintextNames {
 		cf.setFeatureFlag(FlagPlaintextNames)

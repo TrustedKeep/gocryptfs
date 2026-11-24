@@ -470,8 +470,7 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, rotator *k
 
 // keySets is what a mount's key ring unwraps to.
 type keySets struct {
-	// core is the newest entry's, which is what contentenc reads IVLen and the nonce generator
-	// from.
+	// core is the newest entry's, which is what contentenc reads IVLen from.
 	core *cryptocore.CryptoCore
 	// aeads and emeCiphers are indexed by ring index.
 	aeads      []cipher.AEAD

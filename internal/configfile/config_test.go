@@ -49,7 +49,7 @@ func TestCreateConfDefault(t *testing.T) {
 	}
 	// Check that all expected feature flags are set
 	want := []flagIota{
-		FlagGCMIV128, FlagDirIV, FlagEMENames, FlagLongNames,
+		FlagDirIV, FlagEMENames, FlagLongNames,
 		FlagRaw64,
 	}
 	for _, f := range want {
@@ -69,14 +69,8 @@ func TestCreateConfPlaintextnames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Check that all expected feature flags are set
-	want := []flagIota{
-		FlagGCMIV128,
-	}
-	for _, f := range want {
-		if !c.IsFeatureFlagSet(f) {
-			t.Errorf("Feature flag %q should be set but is not", knownFlags[f])
-		}
+	if !c.IsFeatureFlagSet(FlagPlaintextNames) {
+		t.Errorf("FeatureFlags = %v, want PlaintextNames", c.FeatureFlags)
 	}
 }
 
@@ -100,7 +94,7 @@ func TestCreateConfLongNameMax(t *testing.T) {
 
 func TestIsFeatureFlagKnown(t *testing.T) {
 	// Test a few hardcoded values
-	testKnownFlags := []string{"DirIV", "PlaintextNames", "EMENames", "GCMIV128", "LongNames"}
+	testKnownFlags := []string{"DirIV", "PlaintextNames", "EMENames", "LongNames"}
 	// And also everything in knownFlags (yes, it is likely that we end up with
 	// some duplicates. Does not matter.)
 	for _, f := range knownFlags {
@@ -113,9 +107,11 @@ func TestIsFeatureFlagKnown(t *testing.T) {
 		}
 	}
 
-	f := "StrangeFeatureFlag"
-	if isFeatureFlagKnown(f) {
-		t.Errorf("flag %q should be NOT known", f)
+	// GCMIV128 (128-bit GCM IVs) and AESSIV name content ciphers this fork does not have.
+	for _, f := range []string{"StrangeFeatureFlag", "GCMIV128", "AESSIV"} {
+		if isFeatureFlagKnown(f) {
+			t.Errorf("flag %q should be NOT known", f)
+		}
 	}
 }
 
@@ -125,9 +121,8 @@ func TestIsFeatureFlagKnown(t *testing.T) {
 func TestValidateExitCodes(t *testing.T) {
 	good := func() *ConfFile {
 		return &ConfFile{
-			Version:      contentenc.CurrentVersion,
-			FeatureFlags: []string{knownFlags[FlagGCMIV128]},
-			NodeID:       "node-1",
+			Version: contentenc.CurrentVersion,
+			NodeID:  "node-1",
 		}
 	}
 	if err := good().Validate(); err != nil {
@@ -152,11 +147,13 @@ func TestValidateExitCodes(t *testing.T) {
 		t.Errorf("old format: exit code = %d, want DeprecatedFS (%d)", got, exitcodes.DeprecatedFS)
 	}
 
-	// Contradictory flags, current version: malformed, not deprecated.
-	bad := good()
-	bad.FeatureFlags = append(bad.FeatureFlags, knownFlags[FlagXChaCha20Poly1305])
-	if got := codeOf(t, bad.Validate()); got != exitcodes.LoadConf {
-		t.Errorf("conflicting flags: exit code = %d, want LoadConf (%d)", got, exitcodes.LoadConf)
+	// A content cipher this fork does not have is an unknown flag: malformed, not deprecated.
+	for _, f := range []string{"GCMIV128", "AESSIV"} {
+		bad := good()
+		bad.FeatureFlags = append(bad.FeatureFlags, f)
+		if got := codeOf(t, bad.Validate()); got != exitcodes.LoadConf {
+			t.Errorf("%s: exit code = %d, want LoadConf (%d)", f, got, exitcodes.LoadConf)
+		}
 	}
 
 	unknown := good()
@@ -197,9 +194,8 @@ func TestCreateAssignsNoIdentity(t *testing.T) {
 // that is never sent.
 func TestValidateRequiresNodeID(t *testing.T) {
 	good := ConfFile{
-		Version:      contentenc.CurrentVersion,
-		FeatureFlags: []string{knownFlags[FlagGCMIV128]},
-		NodeID:       "node-1",
+		Version: contentenc.CurrentVersion,
+		NodeID:  "node-1",
 	}
 	if err := good.Validate(); err != nil {
 		t.Fatalf("baseline config should validate: %v", err)

@@ -1,12 +1,11 @@
 package cryptocore
 
 import (
+	"crypto/cipher"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"log"
-	"sync"
-
-	"github.com/TrustedKeep/tkutils/v2/crypto"
 )
 
 // RandBytes gets "n" random bytes from /dev/urandom or panics
@@ -27,41 +26,31 @@ func RandUint64() uint64 {
 	return binary.BigEndian.Uint64(b)
 }
 
-type nonceGenerator struct {
-	nonceLen  int // bytes
-	nonceChan chan []byte
+// randomNonceAEAD gives an AEAD the shape of cipher.NewGCMWithRandomNonce: Seal draws a random
+// nonce and prepends it, Open reads it from the front, and both take a nil nonce.
+type randomNonceAEAD struct {
+	aead cipher.AEAD
 }
 
-var (
-	nonceGeneratorsLock sync.Mutex
-	nonceGenerators     = make(map[int]*nonceGenerator)
-)
+func (a randomNonceAEAD) NonceSize() int { return 0 }
 
-// newNonceGenerator returns the process-wide generator for "nonceLen"-byte nonces, creating it on
-// first use. Memoized because a mount builds one CryptoCore per key-ring entry, and a generator per
-// core would park N-1 goroutines on pre-generated nonces for keys nothing writes under.
-func newNonceGenerator(nonceLen int) *nonceGenerator {
-	nonceGeneratorsLock.Lock()
-	defer nonceGeneratorsLock.Unlock()
-	if ng := nonceGenerators[nonceLen]; ng != nil {
-		return ng
+func (a randomNonceAEAD) Overhead() int { return a.aead.NonceSize() + a.aead.Overhead() }
+
+func (a randomNonceAEAD) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
+	if len(nonce) != 0 {
+		log.Panic("randomNonceAEAD: non-empty nonce")
 	}
-	ng := &nonceGenerator{
-		nonceLen:  nonceLen,
-		nonceChan: make(chan []byte, 500),
-	}
-	go ng.gen()
-	nonceGenerators[nonceLen] = ng
-	return ng
+	nonce = RandBytes(a.aead.NonceSize())
+	return a.aead.Seal(append(dst, nonce...), nonce, plaintext, additionalData)
 }
 
-func (n *nonceGenerator) gen() {
-	for {
-		n.nonceChan <- crypto.NextNonce(n.nonceLen)
+func (a randomNonceAEAD) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte, error) {
+	if len(nonce) != 0 {
+		log.Panic("randomNonceAEAD: non-empty nonce")
 	}
-}
-
-// Get a random "nonceLen"-byte nonce
-func (n *nonceGenerator) Get() []byte {
-	return <-n.nonceChan
+	n := a.aead.NonceSize()
+	if len(ciphertext) < n+a.aead.Overhead() {
+		return nil, errors.New("randomNonceAEAD: ciphertext too short")
+	}
+	return a.aead.Open(dst, ciphertext[:n], ciphertext[n:], additionalData)
 }

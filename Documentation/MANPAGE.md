@@ -63,7 +63,7 @@ human consumption, stripping out sensitive data.
 Example:
 
     $ gocryptfs -info my_cipherdir
-    FeatureFlags:      GCMIV128 DirIV EMENames LongNames Raw64
+    FeatureFlags:      DirIV EMENames LongNames Raw64
 
 There is no key material to strip: the wrapped data key lives in the separate
 `KR` key-ring file, not in the config.

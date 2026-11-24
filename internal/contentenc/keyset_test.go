@@ -168,7 +168,7 @@ func TestOpCount(t *testing.T) {
 // snapshot rather than clear the live one: a reader must see either the old valid set or the
 // all-nil one. Run under -race with concurrent readers.
 //
-// Reads only. A write after a wipe still panics, because doEncryptBlock treats an unresolvable
+// Reads only. A write after a wipe still panics, because EncryptBlock treats an unresolvable
 // write index as a caller bug; nothing may be writing once the FUSE server is down.
 func TestWipeConcurrent(t *testing.T) {
 	cc := cryptocore.New(make([]byte, cryptocore.KeyLen), cryptocore.BackendGoGCM, DefaultIVBits)

@@ -22,11 +22,9 @@ import (
 const (
 	// DefaultBS is the default plaintext block size
 	DefaultBS = 4096
-	// DefaultIVBits is the default length of IV, in bits.
-	// We always use 128-bit IVs for file content, but the
-	// master key in the config file is encrypted with a 96-bit IV for
-	// gocryptfs v1.2 and earlier. v1.3 switched to 128 bit.
-	DefaultIVBits = 128
+	// DefaultIVBits is the AES-GCM IV length, in bits: the random 96-bit IV of
+	// cipher.NewGCMWithRandomNonce.
+	DefaultIVBits = 96
 )
 
 // keySet is an immutable snapshot of the content keys this mount holds. A nil entry is a key the
@@ -50,8 +48,8 @@ func newKeySet(aeads []cipher.AEAD) *keySet {
 
 // ContentEnc is used to encipher and decipher file content.
 type ContentEnc struct {
-	// cryptoCore is the core the mount was built with. Only IVLen and IVGenerator are read from
-	// it, and both are properties of the backend rather than of a key, so a rotation does not
+	// cryptoCore is the core the mount was built with. Only IVLen is read from
+	// it, and that is a property of the backend rather than of a key, so a rotation does not
 	// replace it. Those reads are unsynchronized and on the hot path, so Wipe must never nil it.
 	cryptoCore *cryptocore.CryptoCore
 	// keys is read on every block by many goroutines and grows while mounted, so rotation
@@ -61,7 +59,7 @@ type ContentEnc struct {
 	addKeyLock sync.Mutex
 	// plainBS is the plaintext block size. Usually 4096 bytes.
 	plainBS uint64
-	// cipherBS is the ciphertext block size. Usually 4128 bytes.
+	// cipherBS is the ciphertext block size. Usually 4124 bytes.
 	// `cipherBS - plainBS`is the per-block overhead
 	// (use BlockOverhead() to calculate it for you!)
 	cipherBS uint64
@@ -71,7 +69,7 @@ type ContentEnc struct {
 	allZeroNonce []byte
 
 	// Ciphertext block "sync.Pool" pool. Always returns cipherBS-sized byte
-	// slices (usually 4128 bytes).
+	// slices (usually 4124 bytes).
 	cBlockPool bPool
 	// Plaintext block pool. Always returns plainBS-sized byte slices
 	// (usually 4096 bytes).
@@ -157,7 +155,7 @@ func (be *ContentEnc) OpCount() uint64 {
 // CheckKey reports why content under key-ring index keyIdx cannot be encrypted or decrypted by this
 // mount, or nil when it can. A file's header names its own index, which may be one the mount never
 // had or no longer holds after Wipe, so a write to an existing file checks it here first:
-// doEncryptBlock treats an unusable index as a bug and panics.
+// EncryptBlock treats an unusable index as a bug and panics.
 func (be *ContentEnc) CheckKey(keyIdx uint16) error {
 	_, err := be.aeadForKey(keyIdx)
 	return err
@@ -248,9 +246,6 @@ func (be *ContentEnc) DecryptBlock(ciphertext []byte, blockNo uint64, fileID []b
 		// http://www.spinics.net/lists/kernel/msg2370127.html
 		return nil, errors.New("all-zero nonce")
 	}
-	ciphertextOrig := ciphertext
-	ciphertext = ciphertext[be.cryptoCore.IVLen:]
-
 	aead, err := be.aeadForKey(keyIdx)
 	if err != nil {
 		return nil, err
@@ -260,11 +255,11 @@ func (be *ContentEnc) DecryptBlock(ciphertext []byte, blockNo uint64, fileID []b
 	plaintext := be.pBlockPool.Get()
 	plaintext = plaintext[:0]
 	aData := concatAD(blockNo, fileID)
-	plaintext, err = aead.Open(plaintext, nonce, ciphertext, aData)
+	plaintext, err = aead.Open(plaintext, nil, ciphertext, aData)
 
 	if err != nil {
-		tlog.Debug.Printf("DecryptBlock: %s, len=%d", err.Error(), len(ciphertextOrig))
-		tlog.Debug.Println(hex.Dump(ciphertextOrig))
+		tlog.Debug.Printf("DecryptBlock: %s, len=%d", err.Error(), len(ciphertext))
+		tlog.Debug.Println(hex.Dump(ciphertext))
 		return nil, err
 	}
 
@@ -338,26 +333,14 @@ func (be *ContentEnc) doEncryptBlocks(in [][]byte, out [][]byte, firstBlockNo ui
 // blockNo and fileID are used as associated data.
 // The output is nonce + ciphertext + tag.
 func (be *ContentEnc) EncryptBlock(plaintext []byte, blockNo uint64, fileID []byte, keyIdx uint16) []byte {
-	// Get a fresh random nonce
-	nonce := be.cryptoCore.IVGenerator.Get()
-	// Only the write key's draws are counted: rotation is additive, so a write to a file created
-	// before a rotation stays under that file's own key and no rotation can bound it.
-	if ks := be.keys.Load(); keyIdx == ks.writeIdx {
-		ks.ops.Add(1)
-	}
-	return be.doEncryptBlock(plaintext, blockNo, fileID, nonce, keyIdx)
-}
-
-// doEncryptBlock is the backend for EncryptBlock and EncryptBlockNonce.
-// blockNo and fileID are used as associated data.
-// The output is nonce + ciphertext + tag.
-func (be *ContentEnc) doEncryptBlock(plaintext []byte, blockNo uint64, fileID []byte, nonce []byte, keyIdx uint16) []byte {
 	// Empty block?
 	if len(plaintext) == 0 {
 		return plaintext
 	}
-	if len(nonce) != be.cryptoCore.IVLen {
-		log.Panic("wrong nonce length")
+	// Only the write key's draws are counted: rotation is additive, so a write to a file created
+	// before a rotation stays under that file's own key and no rotation can bound it.
+	if ks := be.keys.Load(); keyIdx == ks.writeIdx {
+		ks.ops.Add(1)
 	}
 	// Callers only encrypt under a key the mount holds: new content uses WriteKeyIdx(), and a
 	// write to an existing file checks its header's index with CheckKey first. An unresolvable
@@ -365,17 +348,12 @@ func (be *ContentEnc) doEncryptBlock(plaintext []byte, blockNo uint64, fileID []
 	// where it is the header talking.
 	aead, err := be.aeadForKey(keyIdx)
 	if err != nil {
-		log.Panicf("doEncryptBlock: %v", err)
+		log.Panicf("EncryptBlock: %v", err)
 	}
 	// Block is authenticated with block number and file ID
 	aData := concatAD(blockNo, fileID)
-	// Get a cipherBS-sized block of memory, copy the nonce into it and truncate to
-	// nonce length
-	cBlock := be.cBlockPool.Get()
-	copy(cBlock, nonce)
-	cBlock = cBlock[0:len(nonce)]
-	// Encrypt plaintext and append to nonce
-	ciphertext := aead.Seal(cBlock, nonce, plaintext, aData)
+	// Seal draws the nonce and writes it ahead of the ciphertext.
+	ciphertext := aead.Seal(be.cBlockPool.Get()[:0], nil, plaintext, aData)
 	overhead := int(be.BlockOverhead())
 	if len(plaintext)+overhead != len(ciphertext) {
 		log.Panicf("unexpected ciphertext length: plaintext=%d, overhead=%d, ciphertext=%d",

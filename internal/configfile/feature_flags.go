@@ -10,17 +10,11 @@ const (
 	// FlagEMENames indicates EME (ECB-Mix-ECB) filename encryption.
 	// This flag is mandatory since gocryptfs v1.0.
 	FlagEMENames
-	// FlagGCMIV128 indicates 128-bit GCM IVs.
-	// This flag is mandatory since gocryptfs v1.0,
-	// except when XChaCha20Poly1305 is used.
-	FlagGCMIV128
 	// FlagLongNames allows file names longer than 175 bytes.
 	FlagLongNames
 	// FlagLongNameMax sets a custom name length limit, names longer than that
 	// will be hashed.
 	FlagLongNameMax
-	// FlagAESSIV selects an AES-SIV based crypto backend.
-	FlagAESSIV
 	// FlagRaw64 enables raw (unpadded) base64 encoding for file names
 	FlagRaw64
 	// FlagXChaCha20Poly1305 means we use XChaCha20-Poly1305 file content encryption
@@ -36,10 +30,8 @@ var knownFlags = map[flagIota]string{
 	FlagPlaintextNames:    "PlaintextNames",
 	FlagDirIV:             "DirIV",
 	FlagEMENames:          "EMENames",
-	FlagGCMIV128:          "GCMIV128",
 	FlagLongNames:         "LongNames",
 	FlagLongNameMax:       "LongNameMax",
-	FlagAESSIV:            "AESSIV",
 	FlagRaw64:             "Raw64",
 	FlagXChaCha20Poly1305: "XChaCha20Poly1305",
 }

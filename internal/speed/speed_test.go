@@ -36,7 +36,7 @@ func BenchmarkGoGCMDecrypt(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	gGCM, err := cipher.NewGCMWithNonceSize(gAES, 16)
+	gGCM, err := cipher.NewGCMWithRandomNonce(gAES)
 	if err != nil {
 		b.Fatal(err)
 	}

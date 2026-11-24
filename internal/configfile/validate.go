@@ -38,25 +38,6 @@ func (cf *ConfFile) Validate() error {
 			return badConf("unknown feature flag %q", flag)
 		}
 	}
-	// File content encryption
-	{
-		if cf.IsFeatureFlagSet(FlagXChaCha20Poly1305) && cf.IsFeatureFlagSet(FlagAESSIV) {
-			return badConf("can't have both XChaCha20Poly1305 and AESSIV feature flags")
-		}
-		if cf.IsFeatureFlagSet(FlagAESSIV) && !cf.IsFeatureFlagSet(FlagGCMIV128) {
-
-			return badConf("AESSIV requires GCMIV128 feature flag")
-		}
-		if cf.IsFeatureFlagSet(FlagXChaCha20Poly1305) && cf.IsFeatureFlagSet(FlagGCMIV128) {
-			return badConf("XChaCha20Poly1305 conflicts with GCMIV128 feature flag")
-		}
-		// The absence of other flags means AES-GCM (oldest algorithm)
-		if !cf.IsFeatureFlagSet(FlagXChaCha20Poly1305) && !cf.IsFeatureFlagSet(FlagAESSIV) {
-			if !cf.IsFeatureFlagSet(FlagGCMIV128) {
-				return badConf("AES-GCM requires GCMIV128 feature flag")
-			}
-		}
-	}
 	// Filename encryption
 	{
 		if cf.IsFeatureFlagSet(FlagPlaintextNames) {

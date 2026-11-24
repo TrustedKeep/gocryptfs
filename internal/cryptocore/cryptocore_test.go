@@ -5,17 +5,35 @@ import (
 	"testing"
 )
 
-// "New" should accept at least these param combinations
+// Every backend must prepend its own random nonce, and New must refuse any other IV length.
 func TestCryptoCoreNew(t *testing.T) {
 	key := make([]byte, KeyLen)
-	c := New(key, BackendGoGCM, 96)
-	if c.IVLen != 12 {
-		t.Fail()
+	for _, b := range []AEADTypeEnum{BackendGoGCM, BackendXChaCha20Poly1305} {
+		c := New(key, b, b.NonceSize*8)
+		if c.IVLen != b.NonceSize || c.AEADCipher.NonceSize() != 0 || c.AEADCipher.Overhead() != b.NonceSize+AuthTagLen {
+			t.Errorf("%s: IVLen=%d NonceSize=%d Overhead=%d", b, c.IVLen, c.AEADCipher.NonceSize(), c.AEADCipher.Overhead())
+		}
+		ad := []byte("ad")
+		ct1 := c.AEADCipher.Seal(nil, nil, []byte("x"), ad)
+		ct2 := c.AEADCipher.Seal(nil, nil, []byte("x"), ad)
+		if bytes.Equal(ct1[:b.NonceSize], ct2[:b.NonceSize]) {
+			t.Errorf("%s: two seals drew the same nonce", b)
+		}
+		if pt, err := c.AEADCipher.Open(nil, nil, ct1, ad); err != nil || string(pt) != "x" {
+			t.Errorf("%s: Open = %q, %v", b, pt, err)
+		}
+		if _, err := c.AEADCipher.Open(nil, nil, ct1[:b.NonceSize+AuthTagLen-1], ad); err == nil {
+			t.Errorf("%s: Open accepted a truncated ciphertext", b)
+		}
 	}
-	c = New(key, BackendGoGCM, 128)
-	if c.IVLen != 16 {
-		t.Fail()
-	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("New accepted 128-bit GCM IVs")
+			}
+		}()
+		New(key, BackendGoGCM, 128)
+	}()
 }
 
 // The EME (filename) key and the content key must both be derived, and must differ from each
@@ -55,25 +73,9 @@ func TestCryptoCoreDistinctPerEntry(t *testing.T) {
 	if bytes.Equal(hkdfDerive(k1, hkdfInfoGCMContent, KeyLen), hkdfDerive(k2, hkdfInfoGCMContent, KeyLen)) {
 		t.Error("two master keys derived the same content key")
 	}
-	c1 := New(k1, BackendGoGCM, 128)
-	c2 := New(k2, BackendGoGCM, 128)
-	nonce := make([]byte, c1.IVLen)
-	nonce[0] = 1
-	if bytes.Equal(c1.AEADCipher.Seal(nil, nonce, []byte("x"), nil), c2.AEADCipher.Seal(nil, nonce, []byte("x"), nil)) {
-		t.Error("two cores encrypt identically")
-	}
-}
-
-// N cores must share one nonce source per length. A generator per core would park a goroutine
-// holding 500 pre-generated nonces for every key that is never written under.
-func TestNonceGeneratorMemoized(t *testing.T) {
-	if newNonceGenerator(16) != newNonceGenerator(16) {
-		t.Error("same nonce length handed out two generators")
-	}
-	if newNonceGenerator(16) == newNonceGenerator(24) {
-		t.Error("different nonce lengths share a generator")
-	}
-	if n := len(newNonceGenerator(24).Get()); n != 24 {
-		t.Errorf("nonce length = %d, want 24", n)
+	c1 := New(k1, BackendGoGCM, 96)
+	c2 := New(k2, BackendGoGCM, 96)
+	if _, err := c2.AEADCipher.Open(nil, nil, c1.AEADCipher.Seal(nil, nil, []byte("x"), nil), nil); err == nil {
+		t.Error("one core opened the other's ciphertext")
 	}
 }

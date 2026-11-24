@@ -1,5 +1,4 @@
-// Package cryptocore wraps OpenSSL and Go GCM crypto and provides
-// a nonce generator.
+// Package cryptocore builds the content AEAD and the EME name cipher from a master key.
 package cryptocore
 
 import (
@@ -39,7 +38,7 @@ func (a AEADTypeEnum) String() string {
 
 // BackendGoGCM specifies the Go based AES-256-GCM backend.
 // "AES-GCM-256-Go" in gocryptfs -speed.
-var BackendGoGCM = AEADTypeEnum{"AES-GCM-256", "Go", 16}
+var BackendGoGCM = AEADTypeEnum{"AES-GCM-256", "Go", 12}
 
 // BackendXChaCha20Poly1305 specifies XChaCha20-Poly1305-Go.
 // "XChaCha20-Poly1305-Go" in gocryptfs -speed.
@@ -49,13 +48,12 @@ var BackendXChaCha20Poly1305 = AEADTypeEnum{"XChaCha20-Poly1305", "Go", chacha20
 type CryptoCore struct {
 	// EME is used for filename encryption.
 	EMECipher *eme.EMECipher
-	// GCM or Chacha - This is used for content encryption.
+	// AEADCipher encrypts file content. Seal draws a random nonce and prepends it, and Open reads
+	// it back from the front, so callers pass a nil nonce to both.
 	AEADCipher cipher.AEAD
 	// Which backend is behind AEADCipher?
 	AEADBackend AEADTypeEnum
-	// GCM needs unique IVs (nonces)
-	IVGenerator *nonceGenerator
-	// IVLen in bytes
+	// IVLen is the length in bytes of the nonce AEADCipher prepends.
 	IVLen int
 }
 
@@ -73,10 +71,6 @@ type CryptoCore struct {
 // AES-CTR keystream. Were they the same key, a filename block that collided with a
 // nonce‖counter value would expose that GCM keystream block as EME ciphertext on disk, which
 // decrypts file content. Two independent derived keys remove that path entirely.
-//
-// Even though the "GCMIV128" feature flag is now mandatory, we must still
-// support 96-bit IVs here because they were used for encrypting the master
-// key in gocryptfs.conf up to gocryptfs v1.2. v1.3 switched to 128 bits.
 func New(key []byte, aeadType AEADTypeEnum, IVBitLen int) *CryptoCore {
 	tlog.Debug.Printf("cryptocore.New: key=%d bytes, aeadType=%v, IVBitLen=%d",
 		len(key), aeadType, IVBitLen)
@@ -84,8 +78,8 @@ func New(key []byte, aeadType AEADTypeEnum, IVBitLen int) *CryptoCore {
 	if len(key) != KeyLen {
 		log.Panicf("Unsupported key length of %d bytes", len(key))
 	}
-	if IVBitLen != 96 && IVBitLen != 128 && IVBitLen != chacha20poly1305.NonceSizeX*8 {
-		log.Panicf("Unsupported IV length of %d bits", IVBitLen)
+	if IVBitLen != aeadType.NonceSize*8 {
+		log.Panicf("%s must use %d-bit IVs, you wanted %d", aeadType, aeadType.NonceSize*8, IVBitLen)
 	}
 
 	// Initialize EME for filename encryption.
@@ -111,21 +105,20 @@ func New(key []byte, aeadType AEADTypeEnum, IVBitLen int) *CryptoCore {
 		if err != nil {
 			log.Panic(err)
 		}
-		if aeadCipher, err = cipher.NewGCMWithNonceSize(blockCipher, IVBitLen/8); err != nil {
+		// The only GCM construction the Go FIPS 140-3 module approves for caller-chosen keys.
+		if aeadCipher, err = cipher.NewGCMWithRandomNonce(blockCipher); err != nil {
 			log.Panic(err)
 		}
 		for i := range gcmKey {
 			gcmKey[i] = 0
 		}
 	} else if aeadType == BackendXChaCha20Poly1305 {
-		if IVBitLen != chacha20poly1305.NonceSizeX*8 {
-			log.Panicf("XChaCha20-Poly1305 must use 192-bit IVs, you wanted %d", IVBitLen)
-		}
 		chaKey := hkdfDerive(key, hkdfInfoXChaChaPoly1305Content, chacha20poly1305.KeySize)
-		var err error
-		if aeadCipher, err = chacha20poly1305.NewX(chaKey); err != nil {
+		x, err := chacha20poly1305.NewX(chaKey)
+		if err != nil {
 			log.Panic(err)
 		}
+		aeadCipher = randomNonceAEAD{x}
 		for i := range chaKey {
 			chaKey[i] = 0
 		}
@@ -133,16 +126,15 @@ func New(key []byte, aeadType AEADTypeEnum, IVBitLen int) *CryptoCore {
 		log.Panicf("unknown cipher backend %q", aeadType)
 	}
 
-	if aeadCipher.NonceSize()*8 != IVBitLen {
-		log.Panicf("Mismatched aeadCipher.NonceSize*8=%d and IVBitLen=%d bits",
-			aeadCipher.NonceSize()*8, IVBitLen)
+	if aeadCipher.NonceSize() != 0 || aeadCipher.Overhead() != IVBitLen/8+AuthTagLen {
+		log.Panicf("%s: NonceSize=%d Overhead=%d, want 0 and %d",
+			aeadType, aeadCipher.NonceSize(), aeadCipher.Overhead(), IVBitLen/8+AuthTagLen)
 	}
 
 	return &CryptoCore{
 		EMECipher:   emeCipher,
 		AEADCipher:  aeadCipher,
 		AEADBackend: aeadType,
-		IVGenerator: newNonceGenerator(IVBitLen / 8),
 		IVLen:       IVBitLen / 8,
 	}
 }

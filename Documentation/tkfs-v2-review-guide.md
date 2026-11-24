@@ -1,6 +1,6 @@
 # TKFS v2 Review Guide
 
-As of 2026-11-20. Living version: [TKFS v2 Review Guide](https://claude.ai/code/artifact/b55011d0-b567-41f6-bfcc-31332661db70).
+As of 2026-11-23. Living version: [TKFS v2 Review Guide](https://claude.ai/code/artifact/b55011d0-b567-41f6-bfcc-31332661db70).
 
 TKFS v2 swaps TrustedBoundary for TrustedGateway and replaces per-file envelope keys with one KEK-wrapped data key per filesystem. On that base it adds key rotation, remote rekey, heartbeat revocation, optional EC2 instance binding and a gatehouse admin UI. Phases 0 to 5 are merged into each repo's `feature/tkfs-v2`; shared storage (Phase 3.5) is still in progress.
 
