@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,6 +19,7 @@ import (
 	"github.com/rfjakob/gocryptfs/v2/ctlsock"
 	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
 	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
+	"github.com/rfjakob/gocryptfs/v2/internal/cryptocore"
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 	"github.com/rfjakob/gocryptfs/v2/internal/nametransform"
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
@@ -55,9 +55,9 @@ func rotate(t *testing.T, sock string) uint16 {
 }
 
 // TestRotateContentAndNames is the end-to-end shape of rotation: everything written before the
-// rotation stays readable under the key that wrote it, everything written after uses the new one,
-// and a remount — which rebuilds every key from the ring rather than reusing anything in memory —
-// still sees both.
+// rotation stays readable under the key that wrote it, everything written after uses the new one
+// (an append to an old file included), and a remount — which rebuilds every key from the ring
+// rather than reusing anything in memory — still sees both.
 func TestRotateContentAndNames(t *testing.T) {
 	cDir := test_helpers.InitFS(t, "-mock-kms")
 	os.Chmod(cDir, 0777)
@@ -86,6 +86,13 @@ func TestRotateContentAndNames(t *testing.T) {
 	}
 	oldXattr := []byte("xattr under the first key")
 	if err := xattr.LSet(oldFile, "user.rotationtest", oldXattr); err != nil {
+		test_helpers.UnmountPanic(pDir)
+		t.Fatal(err)
+	}
+	// A full block and a partial one, so the append below re-seals one block and leaves the other.
+	mixedFile := filepath.Join(pDir, "mixed.txt")
+	mixedContent := bytes.Repeat([]byte("a"), contentenc.DefaultBS+10)
+	if err := os.WriteFile(mixedFile, mixedContent, 0600); err != nil {
 		test_helpers.UnmountPanic(pDir)
 		t.Fatal(err)
 	}
@@ -123,14 +130,31 @@ func TestRotateContentAndNames(t *testing.T) {
 		test_helpers.UnmountPanic(pDir)
 		t.Fatal(err)
 	}
+	appended := bytes.Repeat([]byte("b"), contentenc.DefaultBS)
+	if err := appendFile(mixedFile, appended); err != nil {
+		test_helpers.UnmountPanic(pDir)
+		t.Fatal(err)
+	}
+	mixedContent = append(mixedContent, appended...)
+	for _, tc := range []struct {
+		what string
+		got  []uint16
+		want []uint16
+	}{
+		{"old.txt", blockKeyIdxs(t, backingPath(t, cDir, sock, "old.txt")), []uint16{0}},
+		{"new.txt", blockKeyIdxs(t, backingPath(t, cDir, sock, "new.txt")), []uint16{1}},
+		{"olddir/late.txt", blockKeyIdxs(t, backingPath(t, cDir, sock, "olddir/late.txt")), []uint16{1}},
+		{"mixed.txt", blockKeyIdxs(t, backingPath(t, cDir, sock, "mixed.txt")), []uint16{0, 1, 1}},
+	} {
+		if !slices.Equal(tc.got, tc.want) {
+			t.Errorf("%s: block key-ring indexes %v, want %v", tc.what, tc.got, tc.want)
+		}
+	}
 	for _, tc := range []struct {
 		what string
 		got  uint16
 		want uint16
 	}{
-		{"old.txt header", headerKeyIdx(t, backingPath(t, cDir, sock, "old.txt")), 0},
-		{"new.txt header", headerKeyIdx(t, backingPath(t, cDir, sock, "new.txt")), 1},
-		{"olddir/late.txt header", headerKeyIdx(t, backingPath(t, cDir, sock, "olddir/late.txt")), 1},
 		{"old.link target", symlinkKeyIdx(t, backingPath(t, cDir, sock, "old.link")), 0},
 		{"new.link target", symlinkKeyIdx(t, backingPath(t, cDir, sock, "new.link")), 1},
 		{"old.txt xattr value", xattrValueKeyIdx(t, backingPath(t, cDir, sock, "old.txt")), 0},
@@ -160,6 +184,7 @@ func TestRotateContentAndNames(t *testing.T) {
 		{newFile, newContent},
 		{oldDirFile, []byte("in the old directory")},
 		{lateFile, []byte("late arrival")},
+		{mixedFile, mixedContent},
 	} {
 		got, err := os.ReadFile(tc.path)
 		if err != nil {
@@ -358,23 +383,31 @@ func TestXattrNameWithoutMarkerIsRefused(t *testing.T) {
 	}
 }
 
-// headerKeyIdx returns the key-ring index in the file header of the cipher file "cPath".
-func headerKeyIdx(t *testing.T, cPath string) uint16 {
+// blockKeyIdxs returns the key-ring index each data block of the cipher file "cPath" names.
+func blockKeyIdxs(t *testing.T, cPath string) (idxs []uint16) {
 	t.Helper()
-	f, err := os.Open(cPath)
+	data, err := os.ReadFile(cPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	buf := make([]byte, contentenc.HeaderLen)
-	if _, err := io.ReadFull(f, buf); err != nil {
-		t.Fatal(err)
+	cipherBS := contentenc.DefaultBS + contentenc.KeyIdxLen + contentenc.DefaultIVBits/8 + cryptocore.AuthTagLen
+	for off := contentenc.HeaderLen; off < len(data); off += cipherBS {
+		idxs = append(idxs, binary.BigEndian.Uint16(data[off:]))
 	}
-	h, err := contentenc.ParseHeader(buf)
+	return idxs
+}
+
+// appendFile appends "data" to the file "path".
+func appendFile(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
-	return h.KeyIdx
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // symlinkKeyIdx returns the key-ring index prefixed to the encrypted target of the cipher symlink "cPath".

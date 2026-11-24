@@ -25,6 +25,9 @@ const (
 	// DefaultIVBits is the AES-GCM IV length, in bits: the random 96-bit IV of
 	// cipher.NewGCMWithRandomNonce.
 	DefaultIVBits = 96
+	// KeyIdxLen is the big-endian uint16 key-ring index in front of every ciphertext block, naming
+	// the key that sealed it.
+	KeyIdxLen = 2
 )
 
 // keySet is an immutable snapshot of the content keys this mount holds. A nil entry is a key the
@@ -46,6 +49,19 @@ func newKeySet(aeads []cipher.AEAD) *keySet {
 	return &keySet{aeads: aeads, ops: new(atomic.Uint64), writeIdx: uint16(len(aeads) - 1)}
 }
 
+// aead selects the content AEAD for a key-ring index. The index comes from the block on disk and is
+// therefore untrusted input, so one this mount has no key for is an error, not a panic.
+func (ks *keySet) aead(keyIdx uint16) (cipher.AEAD, error) {
+	if int(keyIdx) >= len(ks.aeads) {
+		return nil, fmt.Errorf("content is encrypted under key-ring index %d, but this mount holds %d key(s)", keyIdx, len(ks.aeads))
+	}
+	aead := ks.aeads[keyIdx]
+	if aead == nil {
+		return nil, fmt.Errorf("this mount no longer holds the key for key-ring index %d, so this content is unreadable", keyIdx)
+	}
+	return aead, nil
+}
+
 // ContentEnc is used to encipher and decipher file content.
 type ContentEnc struct {
 	// cryptoCore is the core the mount was built with. Only IVLen is read from
@@ -55,11 +71,12 @@ type ContentEnc struct {
 	// keys is read on every block by many goroutines and grows while mounted, so rotation
 	// swaps in a whole new snapshot instead of mutating one under the readers.
 	keys atomic.Pointer[keySet]
-	// addKeyLock serializes the read-copy-store in AddKey against a concurrent rotation.
-	addKeyLock sync.Mutex
+	// writeLock is held shared for a whole encryption and exclusively by AddKey and Wipe, so once a
+	// rotation returns nothing is still sealing under the outgoing key.
+	writeLock sync.RWMutex
 	// plainBS is the plaintext block size. Usually 4096 bytes.
 	plainBS uint64
-	// cipherBS is the ciphertext block size. Usually 4124 bytes.
+	// cipherBS is the ciphertext block size. Usually 4126 bytes.
 	// `cipherBS - plainBS`is the per-block overhead
 	// (use BlockOverhead() to calculate it for you!)
 	cipherBS uint64
@@ -69,7 +86,7 @@ type ContentEnc struct {
 	allZeroNonce []byte
 
 	// Ciphertext block "sync.Pool" pool. Always returns cipherBS-sized byte
-	// slices (usually 4124 bytes).
+	// slices (usually 4126 bytes).
 	cBlockPool bPool
 	// Plaintext block pool. Always returns plainBS-sized byte slices
 	// (usually 4096 bytes).
@@ -91,7 +108,7 @@ func New(cc *cryptocore.CryptoCore, aeads []cipher.AEAD, plainBS uint64) *Conten
 	if fuse.MAX_KERNEL_WRITE%plainBS != 0 {
 		log.Panicf("unaligned MAX_KERNEL_WRITE=%d", fuse.MAX_KERNEL_WRITE)
 	}
-	cipherBS := plainBS + uint64(cc.IVLen) + cryptocore.AuthTagLen
+	cipherBS := plainBS + KeyIdxLen + uint64(cc.IVLen) + cryptocore.AuthTagLen
 	// Take IV and GHASH overhead into account.
 	cReqSize := int(fuse.MAX_KERNEL_WRITE / plainBS * cipherBS)
 	// Unaligned reads (happens during fsck, could also happen with O_DIRECT?)
@@ -124,19 +141,17 @@ func (be *ContentEnc) CipherBS() uint64 {
 	return be.cipherBS
 }
 
-// WriteKeyIdx is the key-ring index new content is encrypted under, stamped into every new file
-// header and into the symlink/xattr prefixes. Reads must never use it — they honour whatever
-// index the object they found carries.
+// WriteKeyIdx is the key-ring index new content is encrypted under. Reads must never use it: they
+// honour whatever index the block they found carries.
 func (be *ContentEnc) WriteKeyIdx() uint16 {
 	return be.keys.Load().writeIdx
 }
 
-// AddKey installs a newly rotated key as the write key and returns its index. Copy-on-write:
-// in-flight readers keep the snapshot they loaded. This is rotation's entry point on the
-// content side.
+// AddKey installs a newly rotated key as the write key and returns its index, once no encryption
+// is still running under the outgoing one. Readers are not waited for: they keep the snapshot they loaded.
 func (be *ContentEnc) AddKey(aead cipher.AEAD) uint16 {
-	be.addKeyLock.Lock()
-	defer be.addKeyLock.Unlock()
+	be.writeLock.Lock()
+	defer be.writeLock.Unlock()
 	old := be.keys.Load()
 	aeads := make([]cipher.AEAD, len(old.aeads), len(old.aeads)+1)
 	copy(aeads, old.aeads)
@@ -152,33 +167,9 @@ func (be *ContentEnc) OpCount() uint64 {
 	return be.keys.Load().ops.Load()
 }
 
-// CheckKey reports why content under key-ring index keyIdx cannot be encrypted or decrypted by this
-// mount, or nil when it can. A file's header names its own index, which may be one the mount never
-// had or no longer holds after Wipe, so a write to an existing file checks it here first:
-// EncryptBlock treats an unusable index as a bug and panics.
-func (be *ContentEnc) CheckKey(keyIdx uint16) error {
-	_, err := be.aeadForKey(keyIdx)
-	return err
-}
-
-// aeadForKey selects the content AEAD for a key-ring index. On the read path keyIdx comes from a
-// file header and is therefore untrusted input, so an index this mount has no key for is an
-// error, not a panic.
-func (be *ContentEnc) aeadForKey(keyIdx uint16) (cipher.AEAD, error) {
+// DecryptBlocks decrypts a number of blocks, each under the key-ring index it names.
+func (be *ContentEnc) DecryptBlocks(ciphertext []byte, firstBlockNo uint64, fileID []byte) ([]byte, error) {
 	ks := be.keys.Load()
-	if int(keyIdx) >= len(ks.aeads) {
-		return nil, fmt.Errorf("content is encrypted under key-ring index %d, but this mount holds %d key(s)", keyIdx, len(ks.aeads))
-	}
-	aead := ks.aeads[keyIdx]
-	if aead == nil {
-		return nil, fmt.Errorf("this mount no longer holds the key for key-ring index %d, so this content is unreadable", keyIdx)
-	}
-	return aead, nil
-}
-
-// DecryptBlocks decrypts a number of blocks that were encrypted under key-ring index keyIdx
-// (from the file header).
-func (be *ContentEnc) DecryptBlocks(ciphertext []byte, firstBlockNo uint64, fileID []byte, keyIdx uint16) ([]byte, error) {
 	cBuf := bytes.NewBuffer(ciphertext)
 	var err error
 	pBuf := bytes.NewBuffer(be.PReqPool.Get()[:0])
@@ -186,7 +177,7 @@ func (be *ContentEnc) DecryptBlocks(ciphertext []byte, firstBlockNo uint64, file
 	for cBuf.Len() > 0 {
 		cBlock := cBuf.Next(int(be.cipherBS))
 		var pBlock []byte
-		pBlock, err = be.DecryptBlock(cBlock, blockNo, fileID, keyIdx)
+		pBlock, err = be.decryptBlock(cBlock, blockNo, fileID, ks)
 		if err != nil {
 			break
 		}
@@ -221,7 +212,11 @@ func concatAD(blockNo uint64, fileID []byte) (aData []byte) {
 //
 // Corner case: A full-sized block of all-zero ciphertext bytes is translated
 // to an all-zero plaintext block, i.e. file hole passthrough.
-func (be *ContentEnc) DecryptBlock(ciphertext []byte, blockNo uint64, fileID []byte, keyIdx uint16) ([]byte, error) {
+func (be *ContentEnc) DecryptBlock(ciphertext []byte, blockNo uint64, fileID []byte) ([]byte, error) {
+	return be.decryptBlock(ciphertext, blockNo, fileID, be.keys.Load())
+}
+
+func (be *ContentEnc) decryptBlock(ciphertext []byte, blockNo uint64, fileID []byte, ks *keySet) ([]byte, error) {
 	// Empty block?
 	if len(ciphertext) == 0 {
 		return ciphertext, nil
@@ -233,20 +228,22 @@ func (be *ContentEnc) DecryptBlock(ciphertext []byte, blockNo uint64, fileID []b
 		return make([]byte, be.plainBS), nil
 	}
 
-	if len(ciphertext) < be.cryptoCore.IVLen {
+	if len(ciphertext) < KeyIdxLen+be.cryptoCore.IVLen {
 		tlog.Warn.Printf("DecryptBlock: Block is too short: %d bytes", len(ciphertext))
 		return nil, errors.New("block is too short")
 	}
+	keyIdx := binary.BigEndian.Uint16(ciphertext)
+	sealed := ciphertext[KeyIdxLen:]
 
 	// Extract nonce
-	nonce := ciphertext[:be.cryptoCore.IVLen]
+	nonce := sealed[:be.cryptoCore.IVLen]
 	if bytes.Equal(nonce, be.allZeroNonce) {
 		// Bug in tmpfs?
 		// https://github.com/rfjakob/gocryptfs/issues/56
 		// http://www.spinics.net/lists/kernel/msg2370127.html
 		return nil, errors.New("all-zero nonce")
 	}
-	aead, err := be.aeadForKey(keyIdx)
+	aead, err := ks.aead(keyIdx)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +252,7 @@ func (be *ContentEnc) DecryptBlock(ciphertext []byte, blockNo uint64, fileID []b
 	plaintext := be.pBlockPool.Get()
 	plaintext = plaintext[:0]
 	aData := concatAD(blockNo, fileID)
-	plaintext, err = aead.Open(plaintext, nil, ciphertext, aData)
+	plaintext, err = aead.Open(plaintext, nil, sealed, aData)
 
 	if err != nil {
 		tlog.Debug.Printf("DecryptBlock: %s, len=%d", err.Error(), len(ciphertext))
@@ -273,7 +270,7 @@ const encryptMaxSplit = 2
 
 // encryptBlocksParallel splits the plaintext into parts and encrypts them
 // in parallel.
-func (be *ContentEnc) encryptBlocksParallel(plaintextBlocks [][]byte, ciphertextBlocks [][]byte, firstBlockNo uint64, fileID []byte, keyIdx uint16) {
+func (be *ContentEnc) encryptBlocksParallel(plaintextBlocks [][]byte, ciphertextBlocks [][]byte, firstBlockNo uint64, fileID []byte, ks *keySet) {
 	ncpu := runtime.NumCPU()
 	if ncpu > encryptMaxSplit {
 		ncpu = encryptMaxSplit
@@ -293,7 +290,7 @@ func (be *ContentEnc) encryptBlocksParallel(plaintextBlocks [][]byte, ciphertext
 				// incurs a 1 % performance penalty.
 				high = len(plaintextBlocks)
 			}
-			be.doEncryptBlocks(plaintextBlocks[low:high], ciphertextBlocks[low:high], firstBlockNo+uint64(low), fileID, keyIdx)
+			be.doEncryptBlocks(plaintextBlocks[low:high], ciphertextBlocks[low:high], firstBlockNo+uint64(low), fileID, ks)
 			wg.Done()
 		}(i)
 	}
@@ -303,13 +300,16 @@ func (be *ContentEnc) encryptBlocksParallel(plaintextBlocks [][]byte, ciphertext
 // EncryptBlocks is like EncryptBlock but takes multiple plaintext blocks.
 // Returns a byte slice from CReqPool - so don't forget to return it
 // to the pool.
-func (be *ContentEnc) EncryptBlocks(plaintextBlocks [][]byte, firstBlockNo uint64, fileID []byte, keyIdx uint16) []byte {
+func (be *ContentEnc) EncryptBlocks(plaintextBlocks [][]byte, firstBlockNo uint64, fileID []byte) []byte {
+	be.writeLock.RLock()
+	defer be.writeLock.RUnlock()
+	ks := be.keys.Load()
 	ciphertextBlocks := make([][]byte, len(plaintextBlocks))
 	// For large writes, we parallelize encryption.
 	if len(plaintextBlocks) >= 32 && runtime.NumCPU() >= 2 {
-		be.encryptBlocksParallel(plaintextBlocks, ciphertextBlocks, firstBlockNo, fileID, keyIdx)
+		be.encryptBlocksParallel(plaintextBlocks, ciphertextBlocks, firstBlockNo, fileID, ks)
 	} else {
-		be.doEncryptBlocks(plaintextBlocks, ciphertextBlocks, firstBlockNo, fileID, keyIdx)
+		be.doEncryptBlocks(plaintextBlocks, ciphertextBlocks, firstBlockNo, fileID, ks)
 	}
 	// Concatenate ciphertext into a single byte array.
 	tmp := be.CReqPool.Get()
@@ -323,37 +323,39 @@ func (be *ContentEnc) EncryptBlocks(plaintextBlocks [][]byte, firstBlockNo uint6
 }
 
 // doEncryptBlocks is called by EncryptBlocks to do the actual encryption work
-func (be *ContentEnc) doEncryptBlocks(in [][]byte, out [][]byte, firstBlockNo uint64, fileID []byte, keyIdx uint16) {
+func (be *ContentEnc) doEncryptBlocks(in [][]byte, out [][]byte, firstBlockNo uint64, fileID []byte, ks *keySet) {
 	for i, v := range in {
-		out[i] = be.EncryptBlock(v, firstBlockNo+uint64(i), fileID, keyIdx)
+		out[i] = be.encryptBlock(v, firstBlockNo+uint64(i), fileID, ks)
 	}
 }
 
-// EncryptBlock - Encrypt plaintext using a random nonce, under key-ring index keyIdx.
+// EncryptBlock - Encrypt plaintext using a random nonce, under the write key.
 // blockNo and fileID are used as associated data.
-// The output is nonce + ciphertext + tag.
-func (be *ContentEnc) EncryptBlock(plaintext []byte, blockNo uint64, fileID []byte, keyIdx uint16) []byte {
+// The output is keyIdx + nonce + ciphertext + tag.
+func (be *ContentEnc) EncryptBlock(plaintext []byte, blockNo uint64, fileID []byte) []byte {
+	be.writeLock.RLock()
+	defer be.writeLock.RUnlock()
+	return be.encryptBlock(plaintext, blockNo, fileID, be.keys.Load())
+}
+
+func (be *ContentEnc) encryptBlock(plaintext []byte, blockNo uint64, fileID []byte, ks *keySet) []byte {
 	// Empty block?
 	if len(plaintext) == 0 {
 		return plaintext
 	}
-	// Only the write key's draws are counted: rotation is additive, so a write to a file created
-	// before a rotation stays under that file's own key and no rotation can bound it.
-	if ks := be.keys.Load(); keyIdx == ks.writeIdx {
-		ks.ops.Add(1)
+	// Only Wipe leaves the write key nil, and nothing writes after it.
+	aead := ks.aeads[ks.writeIdx]
+	if aead == nil {
+		log.Panicf("EncryptBlock: the write key (index %d) has been wiped", ks.writeIdx)
 	}
-	// Callers only encrypt under a key the mount holds: new content uses WriteKeyIdx(), and a
-	// write to an existing file checks its header's index with CheckKey first. An unresolvable
-	// index here is a caller bug, not a property of the data — unlike on the decrypt side,
-	// where it is the header talking.
-	aead, err := be.aeadForKey(keyIdx)
-	if err != nil {
-		log.Panicf("EncryptBlock: %v", err)
-	}
-	// Block is authenticated with block number and file ID
+	ks.ops.Add(1)
+	// Block is authenticated with block number and file ID. The key index is not: the tag already
+	// binds the key that sealed the block.
 	aData := concatAD(blockNo, fileID)
+	cBlock := be.cBlockPool.Get()[:KeyIdxLen]
+	binary.BigEndian.PutUint16(cBlock, ks.writeIdx)
 	// Seal draws the nonce and writes it ahead of the ciphertext.
-	ciphertext := aead.Seal(be.cBlockPool.Get()[:0], nil, plaintext, aData)
+	ciphertext := aead.Seal(cBlock, nil, plaintext, aData)
 	overhead := int(be.BlockOverhead())
 	if len(plaintext)+overhead != len(ciphertext) {
 		log.Panicf("unexpected ciphertext length: plaintext=%d, overhead=%d, ciphertext=%d",
@@ -392,8 +394,8 @@ func (be *ContentEnc) MergeBlocks(oldData []byte, newData []byte, offset int) []
 // It publishes an all-nil snapshot rather than clearing the live one, so a reader that overlaps a
 // wipe sees either the old valid set or the all-nil one, never a torn read.
 func (be *ContentEnc) Wipe() {
-	be.addKeyLock.Lock()
-	defer be.addKeyLock.Unlock()
+	be.writeLock.Lock()
+	defer be.writeLock.Unlock()
 	if ks := be.keys.Load(); ks != nil {
 		be.keys.Store(newKeySet(make([]cipher.AEAD, len(ks.aeads))))
 	}

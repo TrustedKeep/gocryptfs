@@ -669,7 +669,7 @@ func TestFlushOpCountsRetriesAFailedRotation(t *testing.T) {
 	m, code := newTestMonitor(t, r, nil)
 	m.opThreshold = 1
 	for i := 1; i <= heartbeatFailureLimit; i++ {
-		r.cEnc.EncryptBlock(make([]byte, 16), 0, nil, r.cEnc.WriteKeyIdx())
+		r.cEnc.EncryptBlock(make([]byte, 16), 0, nil)
 		m.tick()
 		assertServing(t, m, code, i == heartbeatFailureLimit)
 	}
@@ -681,7 +681,7 @@ func TestFlushOpCountsPersistFailureSuspends(t *testing.T) {
 	r := newTestRotator(t, "")
 	m, code := newTestMonitor(t, r, nil)
 	m.opThreshold = 1 << 20
-	r.cEnc.EncryptBlock(make([]byte, 16), 0, nil, r.cEnc.WriteKeyIdx())
+	r.cEnc.EncryptBlock(make([]byte, 16), 0, nil)
 	dir := filepath.Dir(r.configPath)
 	if err := os.Chmod(dir, 0500); err != nil {
 		t.Fatal(err)
@@ -727,7 +727,7 @@ func TestRotationFailuresCountOncePerTick(t *testing.T) {
 	m, code := newTestMonitor(t, r, hb)
 	m.opThreshold = 1
 	for i := 1; i < heartbeatFailureLimit; i++ {
-		r.cEnc.EncryptBlock(make([]byte, 16), 0, nil, r.cEnc.WriteKeyIdx())
+		r.cEnc.EncryptBlock(make([]byte, 16), 0, nil)
 		m.tick()
 		assertServing(t, m, code, false)
 	}
@@ -836,7 +836,7 @@ func TestFlushOpCountsBeforeMountRotationFailureIsFatal(t *testing.T) {
 	failGenerate(r)
 	m, code := newTestMonitor(t, r, nil)
 	m.opThreshold = 1
-	r.cEnc.EncryptBlock(make([]byte, 16), 0, nil, r.cEnc.WriteKeyIdx())
+	r.cEnc.EncryptBlock(make([]byte, 16), 0, nil)
 	m.flushOpCountsBeforeMount()
 	if *code != exitcodes.RotateFailed {
 		t.Errorf("exit code = %d, want %d", *code, exitcodes.RotateFailed)

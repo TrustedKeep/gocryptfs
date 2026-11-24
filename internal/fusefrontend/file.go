@@ -82,10 +82,9 @@ func (f *File) intFd() int {
 	return int(f.fd.Fd())
 }
 
-// readFileID loads the file header from disk and extracts the file ID plus the key-ring index
-// the file's content is encrypted under.
+// readFileID loads the file header from disk and extracts the file ID.
 // Returns io.EOF if the file is empty.
-func (f *File) readFileID() ([]byte, uint16, error) {
+func (f *File) readFileID() ([]byte, error) {
 	// We read +1 byte to determine if the file has actual content
 	// and not only the header. A header-only file will be considered empty.
 	// This makes File ID poisoning more difficult.
@@ -98,23 +97,21 @@ func (f *File) readFileID() ([]byte, uint16, error) {
 				f.qIno.Ino, n, readLen)
 			f.rootNode.reportMitigatedCorruption(fmt.Sprint(f.qIno.Ino))
 		}
-		return nil, 0, err
+		return nil, err
 	}
 	buf = buf[:contentenc.HeaderLen]
 	h, err := contentenc.ParseHeader(buf)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	return h.ID, h.KeyIdx, nil
+	return h.ID, nil
 }
 
-// createHeader creates a new random header and writes it to disk, stamped with the key-ring
-// index new content is written under.
-// Returns the new file ID and that key-ring index.
+// createHeader creates a new random header and writes it to disk.
+// Returns the new file ID.
 // The caller must hold fileIDLock.Lock().
-func (f *File) createHeader() (fileID []byte, keyIdx uint16, err error) {
-	keyIdx = f.rootNode.contentEnc.WriteKeyIdx()
-	h := contentenc.RandomHeader(keyIdx)
+func (f *File) createHeader() (fileID []byte, err error) {
+	h := contentenc.RandomHeader()
 	buf := h.Pack()
 	// Prevent partially written (=corrupt) header by preallocating the space beforehand
 	if !f.rootNode.args.NoPrealloc && f.rootNode.quirks&syscallcompat.QuirkBrokenFalloc == 0 {
@@ -123,15 +120,15 @@ func (f *File) createHeader() (fileID []byte, keyIdx uint16, err error) {
 			if !syscallcompat.IsENOSPC(err) {
 				tlog.Warn.Printf("ino%d: createHeader: prealloc failed: %s\n", f.qIno.Ino, err.Error())
 			}
-			return nil, 0, err
+			return nil, err
 		}
 	}
 	// Actually write header
 	_, err = f.fd.WriteAt(buf, 0)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	return h.ID, keyIdx, err
+	return h.ID, err
 }
 
 // doRead - read "length" plaintext bytes from plaintext offset "off" and append
@@ -144,18 +141,16 @@ func (f *File) createHeader() (fileID []byte, keyIdx uint16, err error) {
 // Called by Read() for normal reading,
 // by Write() and Truncate() via doWrite() for Read-Modify-Write.
 func (f *File) doRead(dst []byte, off uint64, length uint64) ([]byte, syscall.Errno) {
-	// Get the file ID and its key-ring index, either from the open file table, or from disk.
+	// Get the file ID, either from the open file table, or from disk.
 	var fileID []byte
-	var keyIdx uint16
 	f.fileTableEntry.IDLock.Lock()
 	if f.fileTableEntry.ID != nil {
 		// Use the cached value in the file table
 		fileID = f.fileTableEntry.ID
-		keyIdx = f.fileTableEntry.KeyIdx
 	} else {
 		// Not cached, we have to read it from disk.
 		var err error
-		fileID, keyIdx, err = f.readFileID()
+		fileID, err = f.readFileID()
 		if err != nil {
 			f.fileTableEntry.IDLock.Unlock()
 			if err == io.EOF {
@@ -172,7 +167,6 @@ func (f *File) doRead(dst []byte, off uint64, length uint64) ([]byte, syscall.Er
 		}
 		// Save into the file table
 		f.fileTableEntry.ID = fileID
-		f.fileTableEntry.KeyIdx = keyIdx
 	}
 	f.fileTableEntry.IDLock.Unlock()
 	if fileID == nil {
@@ -208,7 +202,7 @@ func (f *File) doRead(dst []byte, off uint64, length uint64) ([]byte, syscall.Er
 	tlog.Debug.Printf("ReadAt offset=%d bytes (%d blocks), want=%d, got=%d", alignedOffset, firstBlockNo, alignedLength, n)
 
 	// Decrypt it
-	plaintext, err := f.rootNode.contentEnc.DecryptBlocks(ciphertext, firstBlockNo, fileID, keyIdx)
+	plaintext, err := f.rootNode.contentEnc.DecryptBlocks(ciphertext, firstBlockNo, fileID)
 	f.rootNode.contentEnc.CReqPool.Put(ciphertext)
 	if err != nil {
 		corruptBlockNo := firstBlockNo + f.rootNode.contentEnc.PlainOffToBlockNo(uint64(len(plaintext)))
@@ -270,34 +264,22 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 	// readers and writers. No need to take IDLock.
 	//
 	// If the file ID is not cached, read it from disk
-	var err error
 	if f.fileTableEntry.ID == nil {
 		var err error
-		fileID, keyIdx, err := f.readFileID()
+		fileID, err := f.readFileID()
 		// Write a new file header if the file is empty
 		if err == io.EOF {
-			fileID, keyIdx, err = f.createHeader()
-			if err != nil {
-				return 0, fs.ToErrno(err)
-			}
-			f.fileTableEntry.ID = fileID
-			f.fileTableEntry.KeyIdx = keyIdx
+			fileID, err = f.createHeader()
 			fileWasEmpty = true
 		} else if err != nil {
 			// Other errors mean readFileID() found a corrupt header
 			tlog.Warn.Printf("doWrite %d: corrupt header: %v", f.qIno.Ino, err)
 			return 0, syscall.EIO
-		} else {
-			f.fileTableEntry.ID = fileID
-			f.fileTableEntry.KeyIdx = keyIdx
 		}
-	}
-	// An existing file stays under the key its header names. If this mount cannot use that key
-	// (wiped, or past the ring), the write fails like a read of the file would, rather than reaching
-	// the encrypt path, which panics on it.
-	if err = f.rootNode.contentEnc.CheckKey(f.fileTableEntry.KeyIdx); err != nil {
-		tlog.Warn.Printf("doWrite %d: %v", f.qIno.Ino, err)
-		return 0, syscall.EIO
+		if err != nil {
+			return 0, fs.ToErrno(err)
+		}
+		f.fileTableEntry.ID = fileID
 	}
 	// Handle payload data
 	dataBuf := bytes.NewBuffer(data)
@@ -323,9 +305,10 @@ func (f *File) doWrite(data []byte, off int64) (uint32, syscall.Errno) {
 		toEncrypt[i] = blockData
 	}
 	// Encrypt all blocks
-	ciphertext := f.rootNode.contentEnc.EncryptBlocks(toEncrypt, blocks[0].BlockNo, f.fileTableEntry.ID, f.fileTableEntry.KeyIdx)
+	ciphertext := f.rootNode.contentEnc.EncryptBlocks(toEncrypt, blocks[0].BlockNo, f.fileTableEntry.ID)
 	// Preallocate so we cannot run out of space in the middle of the write.
 	// This prevents partially written (=corrupt) blocks.
+	var err error
 	cOff := blocks[0].BlockCipherOff()
 	// f.fd.WriteAt & syscallcompat.EnospcPrealloc take int64 offsets!
 	if cOff > math.MaxInt64 {

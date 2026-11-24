@@ -375,10 +375,10 @@ mounts left at or past the threshold rotates before this one writes anything.
 It is flushed once more at unmount so a mount shorter than one interval still
 contributes what it spent; that final flush never rotates.
 
-Only writes under the *current* key are counted. Rotation is additive — a new
-key is appended to the ring, subsequent writes use it, and nothing already
-written is re-encrypted — so a file created before a rotation keeps writing under
-its original key, which no later rotation can bound.
+Every write is under the *current* key, so the count covers all of them. Rotation
+is additive — a new key is appended to the ring and nothing already written is
+re-encrypted — so a file written before a rotation keeps its untouched blocks under
+the old key, while every block a later write touches is sealed under the new one.
 
 0 means unset and uses the default; there is no value that disables automatic
 rotation, and a negative one is a usage error. `-ro` suppresses it, because a

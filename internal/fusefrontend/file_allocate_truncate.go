@@ -197,12 +197,11 @@ func (f *File) truncateGrowFile(oldPlainSz uint64, newPlainSz uint64) syscall.Er
 	if newPlainSz%f.rootNode.contentEnc.PlainBS() == 0 {
 		// The file was empty, so it did not have a header. Create one.
 		if oldPlainSz == 0 {
-			id, keyIdx, err := f.createHeader()
+			id, err := f.createHeader()
 			if err != nil {
 				return fs.ToErrno(err)
 			}
 			f.fileTableEntry.ID = id
-			f.fileTableEntry.KeyIdx = keyIdx
 		}
 		cSz := int64(f.rootNode.contentEnc.PlainSizeToCipherSize(newPlainSz))
 		err := syscall.Ftruncate(f.intFd(), cSz)

@@ -16,7 +16,7 @@ The work spans four repos: **gocryptfs** (the TKFS client), **gatehouse** (Trust
 
 New in v2:
 
-- **Rotation**: new files, directories, symlinks and xattr values use the newest key; existing files keep theirs, and old data stays readable.
+- **Rotation**: every write uses the newest key, including a write to an existing file; old data stays readable. Existing directories keep their name key, and an inode with xattrs keeps its xattr-name key.
 - **Remote rekey**: an admin asks the gateway; the instance picks it up on its next heartbeat.
 - **Revocation**: an ACL removal or a block takes effect at the next heartbeat and suspends the filesystem: it stays mounted, file operations fail with EACCES, and it resumes once the key service answers again.
 - **Instance binding**: a gateway can require each instance to prove which EC2 machine it runs on.
@@ -187,13 +187,13 @@ sequenceDiagram
 
 ## Rotation, rekey and heartbeat
 
-Rotation appends a new data key to `KR` under the same KEK. New files, directories, symlinks and xattr values use it; an existing file keeps writing under the key in its header. Nothing is re-encrypted, and old data stays readable under the key that wrote it. A ring index is the entry's position in `KR`, so the ring is append-only.
+Rotation appends a new data key to `KR` under the same KEK. Every content write uses it, an append to or overwrite of an existing file included, and so do new directories, symlinks and xattr values. Each data block names the key that sealed it, so a file can hold blocks under several keys. Nothing is re-encrypted, and old data stays readable under the key that wrote it. A ring index is the entry's position in `KR`, so the ring is append-only.
 
 Every encrypted object names its key index explicitly. There is no trial decryption, and a missing index is an error, never a default of 0.
 
 | Object | Key half | Where the index lives |
 |---|---|---|
-| File content | content | `KeyIdx` in the 20-byte file header |
+| File content | content | Cleartext 2-byte prefix on each data block |
 | Symlink target | content | Cleartext 2-byte prefix ahead of the ciphertext |
 | Xattr value | content | Cleartext 2-byte prefix ahead of the ciphertext |
 | Filename | name (EME) | The directory's `gocryptfs.diriv`, now 18 bytes |
@@ -228,7 +228,7 @@ sequenceDiagram
   G->>K: KekWrap under the instance's KEK
   K-->>G: data key, KEK ciphertext, CreatedAt
   G-->>T: TransitWrappedKey, Ciphertext, CreatedAt
-  T->>T: append KR entry, new files use the new index
+  T->>T: append KR entry, every write now uses the new index
   T->>G: report heartbeat with the new KeyIdx, sent at once
   G->>K: upsert, directive now satisfied
   K-->>G: no command
@@ -263,7 +263,7 @@ A running mount is never unmounted by the key service (`keygate.go`): an unmount
 
 systemd units should set `RestartPreventExitStatus=33 35`, so a mount that failed to start on an outage (36) restarts and a refusal does not.
 
-Rotation is forward-only. A file keeps its content key and a directory its name key, so the root directory's names never rotate. Rotation also does not contain a KEK compromise, since one KEK wraps every entry; the answer to that is a new instance.
+Rotation is forward-only. A data block keeps its key until a write touches it, a directory keeps its name key, and an inode keeps the xattr-name key of its first xattr, so the root directory's names never rotate. Rotation also does not contain a KEK compromise, since one KEK wraps every entry; the answer to that is a new instance.
 
 ## Shared storage (in progress)
 
@@ -357,7 +357,7 @@ The KEK model makes a stolen cipherdir useless without the key service and gives
 | The mountpoint while nothing is mounted | Before the first mount, after a crash or a failure before mounting, and after a stop or an `-idle` unmount, the mountpoint is an ordinary directory, so a writer that does not notice puts plaintext on the local disk. The next mount refuses a non-empty mountpoint (exit 10), but only after the fact | `chattr +i` on the empty mountpoint, documented in MANPAGE.md |
 | A suspended mount keeps its keys | Suspension refuses file operations and drops open files' cached pages, but does not wipe the data keys from memory | Unmount the instance on the host |
 | Transit wrap is passive-only | The transport key is not bound to the mTLS identity, so an active middlebox that rewrites bodies is out of scope | TLS to the gateway |
-| Rotation is forward-only | Existing files and directories keep their keys; a KEK compromise is not contained by rotation | New instance and copy the data |
+| Rotation is forward-only | Blocks no write has touched since, existing directories' names and existing inodes' xattr names keep their keys; a KEK compromise is not contained by rotation | New instance and copy the data |
 | Binding is trust on first use | Anything that can read IMDS on the paired machine can replay its static proof; Forget reopens pairing | IMDSv2 required (`HttpTokens=required`) with hop limit 1, which also keeps bridged containers off IMDS, so TKFS must run on the host or with host networking |
 | `-mock-kms` | No heartbeat, so no revocation or rekey, and its KEKs sit in plaintext in a temp-dir file; tests on it cannot catch those regressions | The docker test stack. A mock filesystem mounts only when `-mock-kms` is given again |
 
@@ -373,7 +373,7 @@ Start in gocryptfs `mount.go` and follow the key from `KR` to the cipher cores; 
 | gocryptfs | `heartbeat.go` (`keyServiceMonitor`), `rotate.go` (`keyRotator`), `keygate.go` (`keyGate`, `gatedFS`) | Three-strike and immediate-suspension rules for heartbeats and rotations, which operations a suspension refuses and which cached pages it drops, and which pre-mount failures exit 33, 34, 35 or 36 |
 | gocryptfs | `internal/configfile/keyring.go`, `config_file.go`, `validate.go` | Append-only ring; every entry shares one KeyID; empty ring only before the first mount |
 | gocryptfs | `internal/contentenc/`, `internal/nametransform/diriv.go`, `names.go`, `internal/fusefrontend/node_xattr.go`, `root_node.go` | Explicit key index on every object; no default of 0; 18-byte diriv; xattr marker |
-| gocryptfs | `internal/fusefrontend/file.go` (`doWrite`), `internal/ctlsocksrv/ctlsock_serve.go`, `internal/exitcodes/exitcodes.go` | A write under a key the mount lacks is EIO, not a panic; ctlsock `Rotate`; exit codes 31 to 36 |
+| gocryptfs | `internal/contentenc/content.go` (`encryptBlock`), `internal/fusefrontend/file.go` (`doWrite`), `internal/ctlsocksrv/ctlsock_serve.go`, `internal/exitcodes/exitcodes.go` | Every write seals under the write key; over a block the mount cannot read, a full-block write re-seals it and a partial one is EIO, not a panic; ctlsock `Rotate`; exit codes 31 to 36 |
 | gocryptfs | `internal/tkc/`: `gateway.go`, `gwconnect.go`, `search_connect.go`, `machine.go`, `mock_gwconnect.go` | Transit unwrap; mapping of 403, 409, 401, TLS certificate alerts and 404/501 to the errors that pick the exit code; identity proof fetch |
 | tkutils | `model/`: `tkfsdatakey.go`, `transit.go`, `tkfspolicy.go`, `tkfsidentity.go`, `tkfscontrol.go`, `tkfsinstance.go`; `awsidentity/`; `tcutils/restartable_http.go` | Wire types; RSA-OAEP transit and `ValidateTransportKey`; blocklist matching; the rekey rule (`OutstandingFor`); PKCS#7 verify and its 8 KiB cap; listener cert-refresh retries |
 | keep | `tcv/tkfs.go`, `tcv/object_keywrap.go`, `tenants/tenant_mgr_tkfs*.go` (`TKFSKekWrap`, `TKFSKekUnwrap`), `tenant_mgr_keywrap.go`, `tenant_mgr_paths.go` | The single `TKFSPermissionCheck`; one KEK per instance, resolved by id only under `tkfs/k/`, never in MCSE's `kek/key` |

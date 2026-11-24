@@ -1,8 +1,6 @@
 package fusefrontend
 
 import (
-	"encoding/binary"
-	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -164,29 +162,6 @@ func (rn *RootNode) isFiltered(child string) bool {
 	return false
 }
 
-// keyIdxPrefixLen is the length of the big-endian uint16 key-ring index that symlink targets and
-// xattr values carry in front of their ciphertext. They are encrypted like a content block but
-// have no file header, so without it decrypt would have to guess which key wrote them.
-const keyIdxPrefixLen = 2
-
-// prependKeyIdx returns keyIdx || cData.
-func prependKeyIdx(keyIdx uint16, cData []byte) []byte {
-	out := make([]byte, keyIdxPrefixLen+len(cData))
-	binary.BigEndian.PutUint16(out, keyIdx)
-	copy(out[keyIdxPrefixLen:], cData)
-	return out
-}
-
-// splitKeyIdx is the inverse of prependKeyIdx. Callers must have handled the empty case first:
-// an empty value carries no ciphertext and therefore no index. A prefix with nothing behind
-// it is corruption, not an empty value, so it has to fail rather than decrypt to nothing.
-func splitKeyIdx(blob []byte) (keyIdx uint16, cData []byte, err error) {
-	if len(blob) <= keyIdxPrefixLen {
-		return 0, nil, fmt.Errorf("too short to carry a key-ring index plus ciphertext: %d bytes", len(blob))
-	}
-	return binary.BigEndian.Uint16(blob), blob[keyIdxPrefixLen:], nil
-}
-
 // decryptSymlinkTarget: "cData64" is base64-decoded and decrypted
 // like file contents (GCM).
 // The empty string decrypts to the empty string.
@@ -196,15 +171,11 @@ func (rn *RootNode) decryptSymlinkTarget(cData64 string) (string, error) {
 	if cData64 == "" {
 		return "", nil
 	}
-	blob, err := rn.nameTransform.B64DecodeString(cData64)
+	cData, err := rn.nameTransform.B64DecodeString(cData64)
 	if err != nil {
 		return "", err
 	}
-	keyIdx, cData, err := splitKeyIdx(blob)
-	if err != nil {
-		return "", err
-	}
-	data, err := rn.contentEnc.DecryptBlock(cData, 0, nil, keyIdx)
+	data, err := rn.contentEnc.DecryptBlock(cData, 0, nil)
 	if err != nil {
 		return "", err
 	}
@@ -265,12 +236,9 @@ func (rn *RootNode) encryptSymlinkTarget(data string) (cData64 string) {
 	if data == "" {
 		return ""
 	}
-
-	keyIdx := rn.contentEnc.WriteKeyIdx()
-	cData := rn.contentEnc.EncryptBlock([]byte(data), 0, nil, keyIdx)
-	// Inside the base64, so the stored target stays a single token with no separator to parse
-	// and the index sits at a fixed offset.
-	return rn.nameTransform.B64EncodeToString(prependKeyIdx(keyIdx, cData))
+	cData := rn.contentEnc.EncryptBlock([]byte(data), 0, nil)
+	cData64 = rn.nameTransform.B64EncodeToString(cData)
+	return cData64
 }
 
 // encryptXattrValue encrypts the xattr value "data".
@@ -281,9 +249,7 @@ func (rn *RootNode) encryptXattrValue(data []byte) (cData []byte) {
 	if len(data) == 0 {
 		return []byte{}
 	}
-
-	keyIdx := rn.contentEnc.WriteKeyIdx()
-	return prependKeyIdx(keyIdx, rn.contentEnc.EncryptBlock(data, 0, nil, keyIdx))
+	return rn.contentEnc.EncryptBlock(data, 0, nil)
 }
 
 // decryptXattrValue decrypts the xattr value "cData".
@@ -291,11 +257,7 @@ func (rn *RootNode) decryptXattrValue(cData []byte) (data []byte, err error) {
 	if len(cData) == 0 {
 		return []byte{}, nil
 	}
-	keyIdx, cData, err := splitKeyIdx(cData)
-	if err != nil {
-		return nil, err
-	}
-	return rn.contentEnc.DecryptBlock(cData, 0, nil, keyIdx)
+	return rn.contentEnc.DecryptBlock(cData, 0, nil)
 }
 
 // encryptXattrName transforms "user.foo" to "user.gocryptfs.a5sAd4XAa47f5as6dAf"

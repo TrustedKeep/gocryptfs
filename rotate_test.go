@@ -292,7 +292,7 @@ func opCounts(t *testing.T, r *keyRotator) (c []uint64) {
 // encrypt draws n nonces under the write key.
 func encrypt(r *keyRotator, n int) {
 	for range n {
-		r.cEnc.EncryptBlock([]byte("x"), 0, nil, r.cEnc.WriteKeyIdx())
+		r.cEnc.EncryptBlock([]byte("x"), 0, nil)
 	}
 }
 

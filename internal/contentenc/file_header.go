@@ -2,7 +2,7 @@ package contentenc
 
 // Per-file header
 //
-// Format: [ "Version" uint16 big endian ] [ "KeyIdx" uint16 big endian ] [ "Id" 16 random bytes ]
+// Format: [ "Version" uint16 big endian ] [ "Id" 16 random bytes ]
 
 import (
 	"bytes"
@@ -17,30 +17,21 @@ import (
 const (
 	// CurrentVersion is the current On-Disk-Format version. TKFS v2 (the KEK wrapped-key model)
 	// bumps it from the gocryptfs-v1 value of 2 to 3 as a hard format break: the content AAD no
-	// longer carries the per-file envelope tail, and the header gained KeyIdx — so v1/v2
-	// filesystems are intentionally unreadable and fail closed. (Distinct from any hypothetical
-	// upstream v3.)
+	// longer carries the per-file envelope tail, and every data block names its key-ring index —
+	// so v1/v2 filesystems are intentionally unreadable and fail closed. (Distinct from any
+	// hypothetical upstream v3.)
 	CurrentVersion = 3
 
 	headerVersionLen = 2  // uint16
-	headerKeyIdxLen  = 2  // uint16
 	headerIDLen      = 16 // 128 bit random file id
 	// HeaderLen is the total header length
-	HeaderLen = headerVersionLen + headerKeyIdxLen + headerIDLen
-
-	headerKeyIdxOff = headerVersionLen
-	headerIDOff     = headerKeyIdxOff + headerKeyIdxLen
+	HeaderLen = headerVersionLen + headerIDLen
 )
 
 // FileHeader represents the header stored on each non-empty file.
 type FileHeader struct {
 	Version uint16
-	// KeyIdx selects the key-ring entry this file's content is encrypted under. Rotation
-	// appends entries and stamps the index of the then-active key into each new file's
-	// header, which is what lets old files stay readable under the key they were written
-	// with.
-	KeyIdx uint16
-	ID     []byte
+	ID      []byte
 }
 
 // Pack - serialize fileHeader object
@@ -50,8 +41,7 @@ func (h *FileHeader) Pack() []byte {
 	}
 	buf := make([]byte, HeaderLen)
 	binary.BigEndian.PutUint16(buf[0:headerVersionLen], h.Version)
-	binary.BigEndian.PutUint16(buf[headerKeyIdxOff:headerIDOff], h.KeyIdx)
-	copy(buf[headerIDOff:], h.ID)
+	copy(buf[headerVersionLen:], h.ID)
 	return buf
 
 }
@@ -74,10 +64,7 @@ func ParseHeader(buf []byte) (*FileHeader, error) {
 		return nil, fmt.Errorf("ParseHeader: invalid version, want=%d have=%d. Header hexdump: %s",
 			CurrentVersion, h.Version, hex.EncodeToString(buf))
 	}
-	// KeyIdx is range-checked where the key is selected (ContentEnc.aeadForKey), not here: a
-	// ring that has shrunk is a key-availability problem, not a malformed header.
-	h.KeyIdx = binary.BigEndian.Uint16(buf[headerKeyIdxOff:headerIDOff])
-	h.ID = buf[headerIDOff:]
+	h.ID = buf[headerVersionLen:]
 	if bytes.Equal(h.ID, allZeroFileID) {
 		return nil, fmt.Errorf("ParseHeader: file id is all-zero. Header hexdump: %s",
 			hex.EncodeToString(buf))
@@ -85,12 +72,10 @@ func ParseHeader(buf []byte) (*FileHeader, error) {
 	return &h, nil
 }
 
-// RandomHeader - create new fileHeader object with random Id, stamped with the key-ring index
-// the file's content will be encrypted under.
-func RandomHeader(keyIdx uint16) *FileHeader {
+// RandomHeader - create new fileHeader object with random Id
+func RandomHeader() *FileHeader {
 	var h FileHeader
 	h.Version = CurrentVersion
-	h.KeyIdx = keyIdx
 	h.ID = cryptocore.RandBytes(headerIDLen)
 	return &h
 }

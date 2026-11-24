@@ -41,9 +41,9 @@ func TestXchacha(t *testing.T) {
 	if err := syscall.Stat(cDir+"/1byte", &st); err != nil {
 		t.Fatal(err)
 	}
-	// header (2 byte version + 2 byte key index + 16 byte file id) + 192 bit xchacha iv
+	// header (2 byte version + 16 byte file id) + 2 byte key-ring index + 192 bit xchacha iv
 	// + 1 byte payload + 16 byte mac
-	if st.Size != contentenc.HeaderLen+24+1+16 {
+	if st.Size != contentenc.HeaderLen+contentenc.KeyIdxLen+24+1+16 {
 		t.Errorf("wrong size %d", st.Size)
 	}
 
@@ -54,9 +54,9 @@ func TestXchacha(t *testing.T) {
 	if err := syscall.Stat(cDir+"/1MiB", &st); err != nil {
 		t.Fatal(err)
 	}
-	// header (2 byte version + 2 byte key index + 16 byte file id)
-	// + (192 bit xchacha iv + 4096 byte payload + 16 byte mac)*256
-	if st.Size != contentenc.HeaderLen+(24+4096+16)*256 {
+	// header (2 byte version + 16 byte file id)
+	// + (2 byte key-ring index + 192 bit xchacha iv + 4096 byte payload + 16 byte mac)*256
+	if st.Size != contentenc.HeaderLen+(contentenc.KeyIdxLen+24+4096+16)*256 {
 		t.Errorf("wrong size %d", st.Size)
 	}
 }

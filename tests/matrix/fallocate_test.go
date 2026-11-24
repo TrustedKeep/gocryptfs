@@ -167,9 +167,9 @@ func TestFallocate(t *testing.T) {
 	if testcase.isSet("-xchacha") {
 		ivLen = chacha20poly1305.NonceSizeX
 	}
-	cipherBS := int64(contentenc.DefaultBS) + ivLen + cryptocore.AuthTagLen
-	// 8192 = HeaderLen + cipherBS (full block) + (partial plain + ivLen + tag)
-	plain := int64(contentenc.DefaultBS) + 8192 - contentenc.HeaderLen - cipherBS - ivLen - cryptocore.AuthTagLen
+	cipherBS := int64(contentenc.DefaultBS) + contentenc.KeyIdxLen + ivLen + cryptocore.AuthTagLen
+	// 8192 = HeaderLen + cipherBS (full block) + (key index + partial plain + ivLen + tag)
+	plain := int64(contentenc.DefaultBS) + 8192 - contentenc.HeaderLen - cipherBS - contentenc.KeyIdxLen - ivLen - cryptocore.AuthTagLen
 	err = syscallcompat.Fallocate(fd, FALLOC_DEFAULT, 0, plain)
 	if err != nil {
 		t.Fatal(err)

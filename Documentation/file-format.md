@@ -38,7 +38,7 @@ is refused at load.
 
 | Object | Key | Where the index is |
 |---|---|---|
-| Regular file content | content | `KeyIdx` in the 20-byte file header |
+| Regular file content | content | 2-byte prefix on each data block |
 | Symlink target | content | 2-byte prefix inside the base64 blob |
 | Xattr value | content | 2-byte prefix on the raw value |
 | Filename | name (EME) | the directory's `gocryptfs.diriv` |
@@ -60,15 +60,13 @@ Header
 ------
 
 	 2 bytes header version (big endian uint16, currently 3)
-	 2 bytes key-ring index (big endian uint16)
 	16 bytes file id
 
-The key-ring index is deliberately **not** covered by the AEAD's associated data: the
-authentication tag already binds the key that was actually used, so authenticating the selector
-would add nothing.
+The header carries no key-ring index: each data block names its own.
 
-Header version 3 is a TKFS-only format and is a hard break from upstream gocryptfs's version 2
-(18-byte header, no key-ring index). Version 2 filesystems are refused, not migrated.
+Header version 3 is a TKFS-only format and is a hard break from upstream gocryptfs's version 2,
+whose header has the same layout but whose blocks carry no key-ring index. Version 2 filesystems
+are refused, not migrated.
 
 gocryptfs.diriv
 ---------------
@@ -109,11 +107,21 @@ Raw bytes, not base64. The empty value is stored empty and carries no index.
 Data block, default AES-GCM mode
 --------------------------------
 
+	 2 bytes key-ring index (big endian uint16)
 	12 bytes GCM IV (nonce), random
 	1-4096 bytes encrypted data
 	16 bytes GHASH
 
-Overhead = (12+16)/4096 = 0.68 %
+Overhead = (2+12+16)/4096 = 0.73 %
+
+Every block is sealed under the write key of the moment and names it. A write re-seals each block
+it touches, including the one a read-modify-write merges into, under the current key; blocks it
+does not touch keep theirs. After a rotation a file can therefore hold blocks under several keys,
+all readable and only the newest written to.
+
+The key-ring index is deliberately **not** covered by the AEAD's associated data: the
+authentication tag already binds the key that was actually used, so authenticating the selector
+would add nothing.
 
 The IV is drawn by Go's `cipher.NewGCMWithRandomNonce`, the only GCM construction the Go FIPS 140-3
 module approves; NIST SP 800-38D allows 2^32 such IVs per key. Symlink targets and xattr values use
@@ -125,11 +133,12 @@ Data block, XChaCha20-Poly1305
 
 Enabled via `-init -xchacha`. Symlink targets and xattr values carry its 24-byte nonce.
 
+	 2 bytes key-ring index (big endian uint16)
 	24 bytes nonce
 	1-4096 bytes encrypted data
 	16 bytes Poly1305 tag
 
-Overhead = (24+16)/4096 = 0.98 %
+Overhead = (2+24+16)/4096 = 1.03 %
 
 Examples
 ========
@@ -144,36 +153,36 @@ Total: 0 bytes
 1-byte file, AES-GCM mode
 -------------------------
 
-	Header     20 bytes
-	Data block 29 bytes
+	Header     18 bytes
+	Data block 31 bytes
 
 Total: 49 bytes
 
 5000-byte file, AES-GCM mode
 ----------------------------
 
-	Header       20 bytes
-	Data block 4124 bytes
-	Data block  932 bytes
+	Header       18 bytes
+	Data block 4126 bytes
+	Data block  934 bytes
 
-Total: 5076 bytes
+Total: 5078 bytes
 
 1-byte file, XChaCha20-Poly1305 mode
 ------------------------------------
 
-	Header     20 bytes
-	Data block 41 bytes
+	Header     18 bytes
+	Data block 43 bytes
 
 Total: 61 bytes
 
 5000-byte file, XChaCha20-Poly1305 mode
 ---------------------------------------
 
-	Header       20 bytes
-	Data block 4136 bytes
-	Data block  944 bytes
+	Header       18 bytes
+	Data block 4138 bytes
+	Data block  946 bytes
 
-Total: 5100 bytes
+Total: 5102 bytes
 
 See Also
 ========
