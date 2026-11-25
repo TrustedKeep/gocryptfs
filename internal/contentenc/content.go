@@ -277,14 +277,9 @@ func (be *ContentEnc) encryptBlocksParallel(plaintextBlocks [][]byte, ciphertext
 	}
 	groupSize := len(plaintextBlocks) / ncpu
 	var wg sync.WaitGroup
-	panics := make([]any, ncpu)
 	for i := 0; i < ncpu; i++ {
 		wg.Add(1)
 		go func(i int) {
-			defer wg.Done()
-			// A worker's panic is re-raised on the caller's goroutine, where the FUSE server's panic
-			// handler halts the mount; raised here it would crash the process.
-			defer func() { panics[i] = recover() }()
 			low := i * groupSize
 			high := (i + 1) * groupSize
 			if i == ncpu-1 {
@@ -296,14 +291,10 @@ func (be *ContentEnc) encryptBlocksParallel(plaintextBlocks [][]byte, ciphertext
 				high = len(plaintextBlocks)
 			}
 			be.doEncryptBlocks(plaintextBlocks[low:high], ciphertextBlocks[low:high], firstBlockNo+uint64(low), fileID, ks)
+			wg.Done()
 		}(i)
 	}
 	wg.Wait()
-	for _, r := range panics {
-		if r != nil {
-			panic(r)
-		}
-	}
 }
 
 // EncryptBlocks is like EncryptBlock but takes multiple plaintext blocks.

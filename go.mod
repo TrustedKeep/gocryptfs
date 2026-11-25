@@ -3,7 +3,7 @@ module github.com/rfjakob/gocryptfs/v2
 go 1.27
 
 require (
-	github.com/TrustedKeep/tkutils/v2 v2.16.4-0.20261124234024-3d33f978e6d4
+	github.com/TrustedKeep/tkutils/v2 v2.16.3-0.20261119002152-dc83a590deb5
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/google/uuid v1.6.0
 	github.com/hanwen/go-fuse/v2 v2.12.1

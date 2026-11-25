@@ -19,7 +19,6 @@ New in v2:
 - **Rotation**: every write uses the newest key, including a write to an existing file; old data stays readable. Existing directories keep their name key, and an inode with xattrs keeps its xattr-name key.
 - **Remote rekey**: an admin asks the gateway; the instance picks it up on its next heartbeat.
 - **Revocation**: an ACL removal or a block takes effect at the next heartbeat and suspends the filesystem: it stays mounted, file operations fail with EACCES, and it resumes once the key service answers again.
-- **Halt on panic**: a panic in a file operation suspends the filesystem until it is remounted instead of crashing it, and its heartbeats report the halt, which the gateway UI shows as Halted.
 - **Instance binding**: a gateway can require each instance to prove which EC2 machine it runs on.
 - **Admin UI**: a TKFS page in gatehouse for instances, access control, trusted CAs and binding.
 
@@ -151,7 +150,7 @@ keep stores TKFS state per tenant under `tkfs`, in six objects:
 |---|---|---|---|
 | `tkfs/ca` | `TKFSTrustedCAs` | Client CA set | Every gateway, for the listener's trust pool |
 | `tkfs/p` | `TKFSPolicy` | ACL (a set of DNs), blocklist, identity certs | keep on every call; gateways fetch only the identity certs |
-| `tkfs/i/<kekID>/<id>` | `TKFSInstance` | Registry record of one DN, NodeID and machine: key index, last mount and unmount reports, host and whether it verified, route, whether it reports a halt | Written when the instance first appears, mounts, unmounts, changes key, changes whether its machine verifies or reports a halt; another machine is another instance; read by a rekey request for `PastIdx`; shown in the admin UI |
+| `tkfs/i/<kekID>/<id>` | `TKFSInstance` | Registry record of one DN, NodeID and machine: key index, last mount and unmount reports, host and whether it verified, route | Written when the instance first appears, mounts, unmounts, changes key or changes whether its machine verifies; another machine is another instance; read by a rekey request for `PastIdx`; shown in the admin UI |
 | `tkfs/r/<kekID>/<id>` | `TKFSRekeyDirective` | Pending rekey for one instance: `PastIdx`, `RequestedAt` | Each heartbeat of that instance |
 | `tkfs/b/<kekID>` | `TKFSBinding` | The machine an instance is paired with | Gateways requiring binding; keep on the `-search` route |
 | `tkfs/k/<kekID>` | `TenantKek` | The instance's KEK, kept apart from MCSE's `kek/key` so neither service can name the other's | Every generate and unwrap; each heartbeat checks it exists |
@@ -253,8 +252,6 @@ A rekey or op-counter rotation that cannot get a new key is retried at the next 
 
 A running mount is never unmounted by the key service (`keygate.go`): an unmounted mountpoint is an ordinary directory, so a writer that does not notice would put plaintext on the local disk. Suspended, it stays mounted and keeps beating, but every operation fails with EACCES, stat and statfs of the mountpoint included, as do the control socket's EncryptPath and DecryptPath; only release, flush and fsync of what is already open, and the kernel's writeback of pages a mapping has dirtied (refusing it would discard them), still work. It also has the kernel drop the cached pages of files still open (go-fuse ≥ 2.11 makes that notify safe against unmount), so a mapping made before faults instead of reading or changing them; until a file's drop finishes, its mapped pages can still be changed and written back. It resumes at the end of the first interval whose heartbeat is answered, unless a demanded rotation was refused in it or has failed three intervals in a row, with no remount, and reports a mount event as it does, which stamps the record's last-mounted time. An outage spanning three heartbeats (possible after 10 minutes, certain after 15) therefore suspends every filesystem in the tenant that uses the failed service, and they resume within an interval of it ending.
 
-A panic in a file operation halts the mount (`panicHandler`): it suspends the same way, but also refuses mapped-page writeback and every rotation (`errHalted`), never resumes whatever the key service answers, and sends `TKFSEventHalted` in place of every heartbeat but the unmount report until it is remounted. keep and the gateway refuse those beats from a blocked or unbound instance like any other, so its halt shows only once it is allowed again.
-
 | Exit code | Meaning |
 |---|---|
 | 31 | The health-check port could not be bound |
@@ -340,7 +337,7 @@ gatehouse's cobblestone UI gains a TKFS page with four tabs, in `cobblestone/src
 
 | Tab | Shows | Actions |
 |---|---|---|
-| Instances | One row per instance (a KEK's DN, NodeID and machine), plus one per pairing whose KEK has no instance. Status: Halted (a running mount that reports a panic; outranks Blocked and Refused, and has its own banner), Active or Unmounted (the later of the instance's last mount and unmount reports; a record is created mounted), Blocked, Refused (the UI's prediction under binding; the tooltip says whether the filesystem is not bound, the machine is unverified or it is another machine) or No record. Halted, Blocked and Refused instances that are mounted stay mounted with their file operations failing. A Last Mounted column; a Host column when keep supports binding (the machine its identity document names, marked unverified until an identity cert verifies it, binding on or off), and a Binding column (Bound, Not bound, Search mount) when this node requires it | Rekey (rows with a record), Block, Forget (an instance), or unbind (a row with no instance) |
+| Instances | One row per instance (a KEK's DN, NodeID and machine), plus one per pairing whose KEK has no instance. Status: Active or Unmounted (the later of the instance's last mount and unmount reports; a record is created mounted), Blocked, Refused (the UI's prediction under binding; the tooltip says whether the filesystem is not bound, the machine is unverified or it is another machine) or No record. Blocked and Refused instances that are mounted stay mounted with their file operations failing. A Last Mounted column; a Host column when keep supports binding (the machine its identity document names, marked unverified until an identity cert verifies it, binding on or off), and a Binding column (Bound, Not bound, Search mount) when this node requires it | Rekey (rows with a record), Block, Forget (an instance), or unbind (a row with no instance) |
 | Access Control | Allowed DNs and the blocklist | Add or remove a DN; add or remove a block on DN, NodeID or KekID |
 | Trusted CAs | The listener's client CA set; a warning when it is empty | Upload a PEM CA cert or chain (any non-CA cert refuses the upload); remove by fingerprint |
 | Instance Binding | Whether this gateway node requires binding (read-only) and the identity certs | Add or remove an identity cert |

@@ -240,21 +240,3 @@ func TestWipeConcurrent(t *testing.T) {
 		t.Error("a block must not decrypt after a wipe")
 	}
 }
-
-// A panic in one of EncryptBlocks' parallel workers reaches the caller, where the FUSE server's panic
-// handler can halt the mount; left on the worker it would crash the process.
-func TestEncryptBlocksParallelPanicReachesTheCaller(t *testing.T) {
-	cc := cryptocore.New(make([]byte, cryptocore.KeyLen), cryptocore.BackendGoGCM, DefaultIVBits)
-	be := New(cc, []cipher.AEAD{newTestAEAD(1)}, DefaultBS)
-	be.Wipe()
-	blocks := make([][]byte, 40)
-	for i := range blocks {
-		blocks[i] = make([]byte, DefaultBS)
-	}
-	defer func() {
-		if recover() == nil {
-			t.Error("encrypting under a wiped key did not panic")
-		}
-	}()
-	be.EncryptBlocks(blocks, 0, make([]byte, headerIDLen))
-}

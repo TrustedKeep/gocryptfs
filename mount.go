@@ -142,7 +142,6 @@ func doMount(args *argContainer) {
 		exit:        os.Exit,
 		gate:        args._keyGate,
 	}
-	args._keyGate.onHalt = m.reportHalt
 	// Registered after the wipe so it runs before it: a mount that lived less than one interval
 	// would otherwise contribute nothing to the budget its writes spent.
 	defer m.flushOpCountsAtUnmount()
@@ -446,7 +445,6 @@ func initFuseFrontend(args *argContainer) (rootNode fs.InodeEmbedder, rotator *k
 		tlog.Fatal.Printf("%v", err)
 		os.Exit(exitcodes.Other)
 	}
-	rotator.gate = args._keyGate
 
 	// We have opened the socket early so that we cannot fail here after
 	// asking the user for the password
@@ -721,8 +719,10 @@ func initGoFuse(rootNode fs.InodeEmbedder, args *argContainer, beforeExit func()
 		EnableAcl: args.acl,
 		// Attempt to directly call mount(2) before trying fusermount. This means we
 		// can do without fusermount if running as root.
-		DirectMount:  true,
-		PanicHandler: panicHandler(args._keyGate, args.mountpoint),
+		DirectMount: true,
+		// A handler panic crashes the mount, as before go-fuse 2.11, instead of answering EIO and serving
+		// on with whatever state the panic left behind.
+		PanicHandler: func(r any) fuse.Status { panic(r) },
 	}
 
 	mOpts := &fuseOpts.MountOptions

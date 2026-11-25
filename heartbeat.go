@@ -95,25 +95,10 @@ type keyServiceMonitor struct {
 // unmountReportBudget bounds how long ending a mount waits to report it.
 var unmountReportBudget = 5 * time.Second
 
-// report sends one heartbeat carrying event and the key this mount writes under. Once the mount has halted,
-// every beat but the unmount report carries TKFSEventHalted instead.
+// report sends one heartbeat carrying event and the key this mount writes under.
 func (m *keyServiceMonitor) report(event model.TKFSHeartbeatEvent) (model.TKFSHeartbeatResponse, error) {
-	if event != model.TKFSEventUnmount && m.gate.halted.Load() {
-		event = model.TKFSEventHalted
-	}
 	idx, createdAt := m.rotator.writeKey()
 	return m.hb.Heartbeat(event, idx, createdAt)
-}
-
-// reportHalt tells the key service at once that this mount has halted, rather than at the next heartbeat,
-// which carries it too. It is best effort.
-func (m *keyServiceMonitor) reportHalt() {
-	if m.hb == nil {
-		return
-	}
-	if _, err := m.report(model.TKFSEventHalted); err != nil {
-		tlog.Info.Printf("Could not report the halt to the key service: %v", err)
-	}
 }
 
 // reportUnmount tells the key service, once and within unmountReportBudget, that a mount it heard of is
@@ -337,9 +322,9 @@ func (m *keyServiceMonitor) countHeartbeat(err error) {
 	m.suspendIfDue()
 }
 
-// due reports whether either failure count is at heartbeatFailureLimit, or the mount is halted.
+// due reports whether either failure count is at heartbeatFailureLimit.
 func (m *keyServiceMonitor) due() bool {
-	return m.gate.halted.Load() || m.failures >= heartbeatFailureLimit || m.rotateFailures >= heartbeatFailureLimit
+	return m.failures >= heartbeatFailureLimit || m.rotateFailures >= heartbeatFailureLimit
 }
 
 // suspendIfDue suspends file operations as soon as a count reaches its limit. Only the end of a tick
