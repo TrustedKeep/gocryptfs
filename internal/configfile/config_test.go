@@ -2,13 +2,21 @@ package configfile
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
+
+	"github.com/rfjakob/gocryptfs/v2/internal/contentenc"
+	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 )
 
-func TestLoadV2Feature(t *testing.T) {
+// TestLoadOldFormatRejected verifies the v3 format break: an old format-2 config (pre-KEK) is
+// rejected fail-closed rather than silently mounted.
+func TestLoadOldFormatRejected(t *testing.T) {
 	_, err := Load("config_test/PlaintextNames.conf")
-	if err != nil {
-		t.Errorf("Could not load v2 PlaintextNames config file: %v", err)
+	if err == nil {
+		t.Error("expected old format-2 config to be rejected, but Load succeeded")
+	} else if testing.Verbose() {
+		fmt.Println(err)
 	}
 }
 
@@ -21,8 +29,17 @@ func TestLoadV2StrangeFeature(t *testing.T) {
 	}
 }
 
+// testCreateArgs returns CreateArgs with the required NodeID. Create writes no key ring — the
+// first mount generates the data key.
+func testCreateArgs(filename string) *CreateArgs {
+	return &CreateArgs{
+		Filename: filename,
+		NodeID:   "test-node",
+	}
+}
+
 func TestCreateConfDefault(t *testing.T) {
-	err := Create(&CreateArgs{Filename: "config_test/tmp.conf"})
+	err := Create(testCreateArgs("config_test/tmp.conf"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,8 +49,8 @@ func TestCreateConfDefault(t *testing.T) {
 	}
 	// Check that all expected feature flags are set
 	want := []flagIota{
-		FlagGCMIV128, FlagDirIV, FlagEMENames, FlagLongNames,
-		FlagRaw64, FlagHKDF,
+		FlagDirIV, FlagEMENames, FlagLongNames,
+		FlagRaw64,
 	}
 	for _, f := range want {
 		if !c.IsFeatureFlagSet(f) {
@@ -43,34 +60,24 @@ func TestCreateConfDefault(t *testing.T) {
 }
 
 func TestCreateConfPlaintextnames(t *testing.T) {
-	err := Create(&CreateArgs{
-		Filename:       "config_test/tmp.conf",
-		PlaintextNames: true})
-	if err != nil {
+	args := testCreateArgs("config_test/tmp.conf")
+	args.PlaintextNames = true
+	if err := Create(args); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Load("config_test/tmp.conf")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Check that all expected feature flags are set
-	want := []flagIota{
-		FlagGCMIV128, FlagHKDF,
-	}
-	for _, f := range want {
-		if !c.IsFeatureFlagSet(f) {
-			t.Errorf("Feature flag %q should be set but is not", knownFlags[f])
-		}
+	if !c.IsFeatureFlagSet(FlagPlaintextNames) {
+		t.Errorf("FeatureFlags = %v, want PlaintextNames", c.FeatureFlags)
 	}
 }
 
 func TestCreateConfLongNameMax(t *testing.T) {
-	args := &CreateArgs{
-		Filename:    "config_test/tmp.conf",
-		LongNameMax: 100,
-	}
-	err := Create(args)
-	if err != nil {
+	args := testCreateArgs("config_test/tmp.conf")
+	args.LongNameMax = 100
+	if err := Create(args); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Load("config_test/tmp.conf")
@@ -87,7 +94,7 @@ func TestCreateConfLongNameMax(t *testing.T) {
 
 func TestIsFeatureFlagKnown(t *testing.T) {
 	// Test a few hardcoded values
-	testKnownFlags := []string{"DirIV", "PlaintextNames", "EMENames", "GCMIV128", "LongNames"}
+	testKnownFlags := []string{"DirIV", "PlaintextNames", "EMENames", "LongNames"}
 	// And also everything in knownFlags (yes, it is likely that we end up with
 	// some duplicates. Does not matter.)
 	for _, f := range knownFlags {
@@ -100,8 +107,102 @@ func TestIsFeatureFlagKnown(t *testing.T) {
 		}
 	}
 
-	f := "StrangeFeatureFlag"
-	if isFeatureFlagKnown(f) {
-		t.Errorf("flag %q should be NOT known", f)
+	// GCMIV128 (128-bit GCM IVs) and AESSIV name content ciphers this fork does not have.
+	for _, f := range []string{"StrangeFeatureFlag", "GCMIV128", "AESSIV"} {
+		if isFeatureFlagKnown(f) {
+			t.Errorf("flag %q should be NOT known", f)
+		}
+	}
+}
+
+// A validation failure must carry the exit code that matches WHY it failed. An old on-disk format
+// is DeprecatedFS ("migrate this filesystem"); a self-contradictory config is LoadConf. Reporting
+// the second as the first told operators to migrate a filesystem that was merely corrupt.
+func TestValidateExitCodes(t *testing.T) {
+	good := func() *ConfFile {
+		return &ConfFile{
+			Version: contentenc.CurrentVersion,
+			NodeID:  "node-1",
+		}
+	}
+	if err := good().Validate(); err != nil {
+		t.Fatalf("baseline config should validate: %v", err)
+	}
+
+	codeOf := func(t *testing.T, err error) int {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		e, ok := err.(exitcodes.Err)
+		if !ok {
+			t.Fatalf("error does not carry an exit code: %v", err)
+		}
+		return e.Code()
+	}
+
+	old := good()
+	old.Version = contentenc.CurrentVersion - 1
+	if got := codeOf(t, old.Validate()); got != exitcodes.DeprecatedFS {
+		t.Errorf("old format: exit code = %d, want DeprecatedFS (%d)", got, exitcodes.DeprecatedFS)
+	}
+
+	// A content cipher this fork does not have is an unknown flag: malformed, not deprecated.
+	for _, f := range []string{"GCMIV128", "AESSIV"} {
+		bad := good()
+		bad.FeatureFlags = append(bad.FeatureFlags, f)
+		if got := codeOf(t, bad.Validate()); got != exitcodes.LoadConf {
+			t.Errorf("%s: exit code = %d, want LoadConf (%d)", f, got, exitcodes.LoadConf)
+		}
+	}
+
+	unknown := good()
+	unknown.FeatureFlags = append(unknown.FeatureFlags, "NoSuchFlag")
+	if got := codeOf(t, unknown.Validate()); got != exitcodes.LoadConf {
+		t.Errorf("unknown flag: exit code = %d, want LoadConf (%d)", got, exitcodes.LoadConf)
+	}
+}
+
+// A filesystem gets no identity at -init: its KekID is the KEK id the first mount records in the
+// key ring, so a freshly created config has none and must still validate.
+func TestCreateAssignsNoIdentity(t *testing.T) {
+	conf := filepath.Join(t.TempDir(), "gocryptfs.conf")
+	if err := Create(testCreateArgs(conf)); err != nil {
+		t.Fatal(err)
+	}
+	cf, err := Load(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cf.Validate(); err != nil {
+		t.Errorf("a config that has never mounted must validate: %v", err)
+	}
+	if cf.NodeID != "test-node" {
+		t.Errorf("NodeID = %q, want the one that was passed in", cf.NodeID)
+	}
+	// No ring, so no identity — "no keys yet" and "no identity yet" are the same fact.
+	kr, err := LoadKeyRing(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id := kr.KekID(); id != "" {
+		t.Errorf("identity = %q, want empty before the first generate", id)
+	}
+}
+
+// A config with no NodeID is refused at load: a blocklist entry naming a node cannot match a field
+// that is never sent.
+func TestValidateRequiresNodeID(t *testing.T) {
+	good := ConfFile{
+		Version: contentenc.CurrentVersion,
+		NodeID:  "node-1",
+	}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("baseline config should validate: %v", err)
+	}
+	noNode := good
+	noNode.NodeID = ""
+	if err := noNode.Validate(); err == nil {
+		t.Error("a config with no NodeID must be rejected")
 	}
 }

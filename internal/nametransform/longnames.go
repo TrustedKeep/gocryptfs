@@ -127,12 +127,12 @@ func DeleteLongNameAt(dirfd int, hashName string) error {
 func (n *NameTransform) WriteLongNameAt(dirfd int, hashName string, plainName string) (err error) {
 	plainName = filepath.Base(plainName)
 
-	// Encrypt the basename
-	dirIV, err := n.ReadDirIVAt(dirfd)
+	// Encrypt the basename under the directory's key
+	dirIV, keyIdx, err := n.ReadDirIVAt(dirfd)
 	if err != nil {
 		return err
 	}
-	cName, err := n.EncryptName(plainName, dirIV)
+	cName, err := n.EncryptName(plainName, dirIV, keyIdx)
 	if err != nil {
 		return err
 	}

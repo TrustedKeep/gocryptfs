@@ -46,7 +46,9 @@ action is to mount a filesystem (see SYNOPSIS).
 
 #### -fsck
 Check CIPHERDIR for consistency. If corruption is found, the
-exit code is 26.
+exit code is 26. Like a mount, it unwraps every key-ring entry, and an entry
+that fails ends it with a mount's exit code. It refuses a mounted filesystem
+with exit code 32.
 
 #### -h, -help
 Print a short help text that shows the more-often used options.
@@ -61,10 +63,10 @@ human consumption, stripping out sensitive data.
 Example:
 
     $ gocryptfs -info my_cipherdir
-    Creator:      gocryptfs v2.0-beta2
-    FeatureFlags: GCMIV128 HKDF DirIV EMENames LongNames Raw64
-    EncryptedKey: 64B
-    ScryptObject: Salt=32B N=65536 R=8 P=1 KeyLen=32
+    FeatureFlags:      DirIV EMENames LongNames Raw64
+
+There is no key material to strip: the wrapped data key lives in the separate
+`KR` key-ring file, not in the config.
 
 #### -init
 Initialize encrypted directory.
@@ -106,22 +108,25 @@ secure with deterministic nonces.
 Run `gocryptfs -speed` to find out if and how much slower.
 
 #### -deterministic-names
-Disable file name randomisation and creation of `gocryptfs.diriv` files.
-This can prevent sync conflicts when synchronising files, but
-leaks information about identical file names across directories
+Disable file name randomisation. This can prevent sync conflicts when
+synchronising files, but leaks information about identical file names across
+directories
 ("Identical names leak" in https://nuetzlich.net/gocryptfs/comparison/#file-names ).
 
-The resulting `gocryptfs.conf` has "DirIV" missing from "FeatureFlags".
+`gocryptfs.diriv` files are still created, with an all-zero IV instead of a random one.
+The file also carries the key-ring index of the key that directory's names are encrypted
+under, which is what lets key rotation apply to filenames, so it cannot be omitted. As a
+consequence the leak is bounded by the key: after a rotation, the same plaintext name in
+two directories created under different keys encrypts to two different ciphertext names.
+
+The resulting `gocryptfs.conf` has "DirIV" missing from "FeatureFlags", which now means
+"the IV is fixed-zero" rather than "no diriv files exist".
 
 #### -devrandom
 Obsolete and ignored on gocryptfs v2.2 and later.
 
 See https://github.com/rfjakob/gocryptfs/commit/f3c777d5eaa682d878c638192311e52f9c204294
 and https://github.com/rfjakob/gocryptfs/issues/596 for background info.
-
-#### -hkdf
-Use HKDF to derive separate keys for content and name encryption from
-the master key. Default true.
 
 #### -longnamemax
 
@@ -150,8 +155,13 @@ Do not encrypt file names and symlink targets.
 
 #### -raw64
 Use unpadded base64 encoding for file names. This gets rid of the
-trailing "\\=\\=". A filesystem created with this option can only be
-mounted using gocryptfs v1.2 and higher. Default true.
+trailing "\\=\\=". Default true.
+
+Note this flag has no effect in TKFS: every filesystem is created with the
+Raw64 feature flag set, and a mount takes the encoding from the config file
+rather than from the command line. Upstream keeps it reachable for config-less
+mounts (`-masterkey`, `-zerokey`), neither of which exists here, so there is no
+path on which it can matter. It is kept for upstream parity.
 
 #### -xchacha
 Use XChaCha20-Poly1305 file content encryption. This should be much faster
@@ -213,7 +223,9 @@ Only works when mounting as root, otherwise you get this error from fusermount3:
 
 #### -ctlsock string
 Create a control socket at the specified location. The socket can be
-used to decrypt and encrypt paths inside the filesystem. When using
+used to decrypt and encrypt paths inside the filesystem, and to trigger
+a key rotation (send `{"Rotate": true}`; the reply carries the new
+`KeyIdx`; refused on a "-ro" mount). When using
 this option, make sure that the directory you place the socket in is
 not world-accessible. For example, `/run/user/UID/my.socket` would
 be suitable.
@@ -258,6 +270,16 @@ same name. By default, CIPHERDIR is used.
 
 #### -fusedebug
 Enable fuse library debug output.
+
+#### -health-check-port int
+Serve an HTTP liveness endpoint on this port (default 8000); any request gets
+200 OK once the filesystem is mounted and ready. **The mount fails if the port
+cannot be bound**, because a mount nobody can probe is invisible to whatever is
+supervising it, and the usual cause is another mount on the same host holding it.
+
+0 means unset and uses the default, exactly as if the flag were absent. Pass a
+**negative** value to disable the endpoint, which is what you want when stacking
+several mounts on one host.
 
 #### -i duration, -idle duration
 Only for forward mode: automatically unmount the filesystem if it has been idle
@@ -343,6 +365,33 @@ Mountpoints will appear as empty directories.
 
 Limitation: Mounted single files (yes this is possible) are NOT hidden.
 
+#### -rotate-op-threshold int
+Encrypt operations under one data key before the mount rotates to a fresh one
+(default 1073741824, i.e. 2^30, which is roughly 4.4 TB at the default 4 KiB
+block size). The count is persisted in the key ring against the active entry, so
+it spans mounts rather than restarting with each one. It is checked on the
+heartbeat timer and once before the filesystem is served, so a count earlier
+mounts left at or past the threshold rotates before this one writes anything.
+It is flushed once more at unmount so a mount shorter than one interval still
+contributes what it spent; that final flush never rotates.
+
+Every write is under the *current* key, so the count covers all of them. Rotation
+is additive — a new key is appended to the ring and nothing already written is
+re-encrypted — so a file written before a rotation keeps its untouched blocks under
+the old key, while every block a later write touches is sealed under the new one.
+
+0 means unset and uses the default; there is no value that disables automatic
+rotation, and a negative one is a usage error. `-ro` suppresses it, because a
+read-only mount performs no encrypt operations and may not write the cipherdir.
+
+**Failing to keep the count suspends the mount** (see KEY-SERVICE HEARTBEAT)
+rather than carrying on under a key whose budget nothing can account for:
+either the counter could not be persisted, or the threshold rotation failed,
+three intervals in a row. A refusal, or a key ring that cannot take or persist
+the new key, suspends it at once. The usual causes are an unreachable gateway
+and an unwritable cipherdir. Before mounting, the same failures end the mount
+(**exit code 34**, or 33 for a refusal, 35 for a `-sharedstorage` refusal).
+
 #### -rw, -ro
 Mount the filesystem read-write (`-rw`, default) or read-only (`-ro`).
 If both are specified, `-ro` takes precedence.
@@ -387,16 +436,27 @@ gocryptfs on shared storage does not receive as much testing as the
 usual (exclusive) use-case. Please test your workload in advance
 and report any problems you may hit.
 
+It does not permit a second mount of a mounted filesystem: its key ring has one
+writer, so a second mount on the same host is refused (exit code 32). On NFS,
+EFS or SMB that lock does not reach other hosts, so mount such a cipherdir from
+one host at a time. A mount that finds the key ring changed under it, when it
+next rotates or counts operations, is suspended until it is remounted rather
+than writing it; two hosts writing it at the same moment can still lose an
+entry. A writable mount that cannot take the lock at all fails.
+
+It cannot be used with instance binding, which pins a filesystem to one
+machine. A gateway that requires binding refuses a `-sharedstorage` mount: at
+mount with **exit code 35**, and a running mount whose heartbeat, rekey or
+op-counter rotation reaches such a gateway, for example behind a load balancer
+or after a gateway restart, is suspended; a refused `-ctlsock` `Rotate` only
+returns the error. `-search` and `-mock-kms` mounts are never refused for it.
+
 More info: https://github.com/rfjakob/gocryptfs/issues/156
 
 #### -suid, -nosuid
 Enable (`-suid`) or disable (`-nosuid`) suid and sgid executables in a gocryptfs
 mount (default: `-nosuid`). If both are specified, `-nosuid` takes precedence.
 You need root permissions to use `-suid`.
-
-#### -zerokey
-Use all-zero dummy master key. This options is only intended for
-automated testing as it does not provide any security.
 
 COMMON OPTIONS
 ==============
@@ -503,7 +563,7 @@ Applies to: all actions.
 #### -o COMMA-SEPARATED-OPTIONS
 For compatibility with mount(1), options are also accepted as
 "-o COMMA-SEPARATED-OPTIONS" at the end of the command line.
-For example, "-o q,zerokey" is equivalent to passing "-q -zerokey".
+For example, "-o q,nosyslog" is equivalent to passing "-q -nosyslog".
 
 Note that you can only use options that are understood by gocryptfs
 with "-o". If you want to pass special flags to the kernel, you should
@@ -513,7 +573,7 @@ understand along to the kernel.
 
 Example:
 
-    gocryptfs /tmp/foo /tmp/bar -o q,zerokey
+    gocryptfs /tmp/foo /tmp/bar -o q,nosyslog
 
 Applies to: all actions.
 
@@ -641,6 +701,117 @@ ENVIRONMENT VARIABLES
 
 If `NO_COLOR` is set (regardless of value), colored output is disabled (see https://no-color.org/).
 
+KEY-SERVICE HEARTBEAT
+=====================
+
+A mount reports itself to its key service every five minutes — the
+TrustedGateway by default, keep directly under `-search`. The heartbeat
+registers the instance, the key-ring index it is writing under and the key
+service's creation time for that key, carries back
+any rekey an operator has asked for, is how the key service tells it that its
+authorization is gone, and is what paces the `-rotate-op-threshold` counter
+flush. The interval is not configurable: it sets the window a revoked instance
+can keep serving for, and that is not a knob.
+
+**Rekeying is pulled, not pushed.** An operator asks the gateway, and the
+instance collects the request on its next heartbeat and rotates. The request is
+complete once the instance reports a newer key than it had when the request was
+made; a rotation it makes after the request for another reason, such as the
+`-ctlsock` `Rotate` command or the op counter, completes it too. Nothing dials
+the mount, so it listens on no inbound port for this. A rekey that arrives
+while the instance is down is collected when it returns. A rotation that cannot
+get a new key is retried at the next heartbeat; three failures in a row suspend
+the mount rather than leaving it writing under a key it was told to stop using.
+A refusal suspends it at once, as does a key ring that cannot take or persist
+the new key. `-ro` suppresses the rotation, as it does
+the op counter's, and the request stays pending for a writable mount.
+
+**The first heartbeat is sent before anything is mounted.** A key service that
+refuses it, or rejects the instance's token, fails the mount outright (**exit
+code 33**), with no mountpoint ever attached. Anything else is tried up to
+four times, five seconds apart, with no retry starting after 45 seconds. A key service still
+unreachable, or still answering 404 for the route, then fails the mount with
+**exit code 36**, or 33 if it was rejecting the instance's certificate. The
+key-ring unwrap, or a first mount's key generation, comes first: a refusal or
+rejected credentials there is also exit code 33, not retried, and any other
+failure is an outage, exit code 36, after three tries for an unwrap. Every
+retained key-ring entry must unwrap, or the mount fails. A key
+service that cannot answer a heartbeat cannot revoke this instance either, so it
+does not get to serve one. A rekey that heartbeat brings back is carried out
+before the filesystem is served.
+
+Once mounted, a refusal — a blocklist entry naming the instance, or its DN
+removed from the ACL (gateway mounts only; `-search` has no ACL) — suspends the
+mount on the heartbeat that carries it. Merely *failing to reach* the key
+service is survivable twice, and the third consecutive failure suspends it too. A
+404 or 501 counts as failing to reach it (under `-search`, only when every keep
+host answers so), and so does a keep node that is still unsealing, which
+answers with a redirect to its unseal page. Removing the instance's CA from the gateway's trust set is one of those failures, not a refusal: the TLS handshake
+fails, so it takes three heartbeats. A heartbeat the key service answers but
+cannot record also counts as a failure, not as a success: revocation acts
+through that record, so a mount missing from it is one nobody can stop.
+
+**A running mount is never unmounted by the key service.** An unmounted
+mountpoint is an ordinary directory, and anything a writer put there would land
+on the local disk unencrypted. Suspended, the mount stays up and keeps its
+heartbeat, but every operation on it fails with EACCES ("Permission denied"),
+`stat` and `statfs` of the mountpoint included, so clients can tell something is
+wrong. So do the `-ctlsock` `EncryptPath` and `DecryptPath` commands; only
+closing and syncing files already open, and saving what a program already wrote
+into a memory-mapped file, still work. It resumes at the end of the
+first interval whose heartbeat is answered, unless a demanded rotation was
+refused in it or has failed three intervals in a row, and reports a mount to the
+key service as it does. So unblocking an instance, re-allowing its DN or ending
+an outage brings it back within one interval, with no remount. A mount
+suspended because another host changed its key ring (see `-sharedstorage`)
+resumes only when remounted. Suspending also
+has the kernel drop the cached pages of files still open, so a memory mapping
+made before it fails (SIGBUS) instead of reading or changing them. Until a
+file's pages are dropped, which normally takes milliseconds, a mapping can still
+change them.
+
+Suspension cannot cover the times nothing is mounted: before the first mount,
+after a crash or a failure before mounting, and after a stop or an `-idle`
+unmount, the mountpoint is an ordinary directory again. Make it immutable while
+it is empty (`chattr +i MOUNTPOINT`, as root) so that writes into it fail instead
+of landing on the local disk unencrypted; mounting over it still works.
+
+`-mock-kms` is the one mount with no heartbeat, and so neither revocation nor
+rekeying. A filesystem created with `-mock-kms`, which keeps plaintext keys on
+local disk, mounts only when `-mock-kms` is given again (otherwise exit code 1).
+
+INSTANCE BINDING
+================
+
+Every call to the gateway carries this machine's EC2 instance-identity
+document, signed by AWS with RSA-2048 (the instance metadata service's
+`rsa2048` signature), read on the first call and kept for the mount's life.
+Once an operator has given the key service AWS's signing certificate for the
+region, a gateway configured to require binding pairs each filesystem with
+the first EC2 instance to mount it through such a gateway, and
+refuses every call not from that instance, so a copied cipherdir and client
+certificate stop working anywhere else. Only a mount pairs: such a gateway
+refuses an unpaired filesystem's heartbeat and rotation, so a mount already
+running when binding is turned on is suspended at its next heartbeat and must
+be remounted by hand, which pairs it. A gateway that does
+not require binding pairs nothing. `-search` mounts reach keep directly, send
+no document and are never paired.
+
+Off EC2 there is no document: the mount warns once and carries on. A gateway
+that requires binding refuses such a mount, and one on any instance but its
+own: with **exit code 33** at mount, or by suspending it on the next heartbeat.
+It refuses a `-sharedstorage` mount the same way, with **exit code 35** at
+mount. A pairing cannot be moved, so a filesystem moved to a new instance is
+refused there until an administrator
+forgets the instance in the gateway; its next mount then pairs it with the new
+instance. Forgetting a mounted instance suspends that mount at its next
+heartbeat, and remounting it pairs it again. Containers need IMDSv1,
+or IMDSv2 with a hop limit of 2 or more.
+
+With `-mock-aws` (given at `-init`) the mount proves a fixed, fake instance
+signed by a test key instead, which only a key service given that test key's
+certificate accepts.
+
 EXIT CODES
 ==========
 
@@ -652,7 +823,17 @@ EXIT CODES
 23: could not read gocryptfs.conf  
 24: could not write gocryptfs.conf (on "-init" or "-password")  
 26: fsck found errors  
+31: the health-check port could not be bound  
+32: the filesystem is already mounted by another gocryptfs process  
+33: before mounting, the key service refused this instance or rejected its credentials  
+34: before mounting, the key operation counter could not be persisted, or a rotation failed other than by a refusal — the op threshold's or a rekey's  
+35: before mounting, a gateway that requires instance binding refused this `-sharedstorage` mount  
+36: before mounting, the first heartbeat, a key-ring unwrap or a first mount's key generation failed other than by a refusal  
 other: please check the error message
+
+Once mounted, none of these end the mount; it is suspended instead. A systemd
+unit should set `RestartPreventExitStatus=33 35`, so a mount refused at start is
+not restarted into the same answer.
 
 See also: https://github.com/rfjakob/gocryptfs/blob/master/internal/exitcodes/exitcodes.go
 

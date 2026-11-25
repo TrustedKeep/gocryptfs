@@ -1,11 +1,11 @@
 package cryptocore
 
 import (
+	"crypto/cipher"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"log"
-
-	"github.com/TrustedKeep/tkutils/v2/crypto"
 )
 
 // RandBytes gets "n" random bytes from /dev/urandom or panics
@@ -26,27 +26,31 @@ func RandUint64() uint64 {
 	return binary.BigEndian.Uint64(b)
 }
 
-type nonceGenerator struct {
-	nonceLen  int // bytes
-	nonceChan chan []byte
+// randomNonceAEAD gives an AEAD the shape of cipher.NewGCMWithRandomNonce: Seal draws a random
+// nonce and prepends it, Open reads it from the front, and both take a nil nonce.
+type randomNonceAEAD struct {
+	aead cipher.AEAD
 }
 
-func newNonceGenerator(nonceLen int) *nonceGenerator {
-	ng := &nonceGenerator{
-		nonceLen:  nonceLen,
-		nonceChan: make(chan []byte, 500),
+func (a randomNonceAEAD) NonceSize() int { return 0 }
+
+func (a randomNonceAEAD) Overhead() int { return a.aead.NonceSize() + a.aead.Overhead() }
+
+func (a randomNonceAEAD) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
+	if len(nonce) != 0 {
+		log.Panic("randomNonceAEAD: non-empty nonce")
 	}
-	go ng.gen()
-	return ng
+	nonce = RandBytes(a.aead.NonceSize())
+	return a.aead.Seal(append(dst, nonce...), nonce, plaintext, additionalData)
 }
 
-func (n *nonceGenerator) gen() {
-	for {
-		n.nonceChan <- crypto.NextNonce(n.nonceLen)
+func (a randomNonceAEAD) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte, error) {
+	if len(nonce) != 0 {
+		log.Panic("randomNonceAEAD: non-empty nonce")
 	}
-}
-
-// Get a random "nonceLen"-byte nonce
-func (n *nonceGenerator) Get() []byte {
-	return <-n.nonceChan
+	n := a.aead.NonceSize()
+	if len(ciphertext) < n+a.aead.Overhead() {
+		return nil, errors.New("randomNonceAEAD: ciphertext too short")
+	}
+	return a.aead.Open(dst, ciphertext[:n], ciphertext[n:], additionalData)
 }

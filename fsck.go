@@ -258,13 +258,18 @@ func (ck *fsckObj) xattrs(relPath string) {
 func fsck(args *argContainer) (exitcode int) {
 	args.allow_other = false
 	args.ro = true
+	// A running mount can rotate the ring under the check, so fsck refuses one.
+	cf, ringLock := openKeyRing(args)
+	defer ringLock.Close()
 	var err error
 	args.mountpoint, err = os.MkdirTemp("", "gocryptfs.fsck.")
 	if err != nil {
 		tlog.Fatal.Printf("fsck: TmpDir: %v", err)
 		os.Exit(exitcodes.MountPoint)
 	}
-	pfs, wipeKeys := initFuseFrontend(args)
+	connectKeyService(args, cf)
+	// fsck mounts read-only and never rotates, so it drops the rotator.
+	pfs, _, wipeKeys := initFuseFrontend(args)
 	rn := pfs.(*fusefrontend.RootNode)
 	rn.MitigatedCorruptions = make(chan string)
 	ck := fsckObj{
@@ -280,7 +285,7 @@ func fsck(args *argContainer) (exitcode int) {
 		tlog.SwitchLoggerToSyslog()
 	}
 	// Mount
-	srv := initGoFuse(pfs, args)
+	srv := initGoFuse(pfs, args, nil)
 	// Handle SIGINT & SIGTERM
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt)

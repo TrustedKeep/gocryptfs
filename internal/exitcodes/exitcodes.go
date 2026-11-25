@@ -65,6 +65,28 @@ const (
 	// skip 29 (was ExcludeError, "-exclude" is not supported in this fork)
 	// DevNull means that /dev/null could not be opened
 	DevNull = 30
+	// HealthCheck - the health-check port could not be bound. Usually another mount already
+	// holds it; pass -health-check-port to move it, or a negative value to opt out.
+	HealthCheck = 31
+	// AlreadyMounted - another gocryptfs process already has this filesystem mounted. A key ring
+	// has one writer, so a second mount is refused rather than left to race the first.
+	AlreadyMounted = 32
+	// Revoked - before mounting, the key service refused this instance (a 403) or
+	// rejected its credentials (a 401, or a TLS alert refusing its certificate). Restarting gets the
+	// same answer. A running mount suspends its file operations instead.
+	Revoked = 33
+	// RotateFailed - before mounting, a rotation the op counter or a rekey demanded failed other than
+	// by a refusal, or the op count could not be persisted. A running mount suspends its file
+	// operations instead.
+	RotateFailed = 34
+	// SharedStorageRefused - before mounting, a gateway that requires instance binding, which a
+	// -sharedstorage mount cannot keep, refused it. Remount without -sharedstorage, or through a
+	// gateway that does not require binding.
+	SharedStorageRefused = 35
+	// KeyServiceUnreachable - before mounting, the first heartbeat, a key-ring unwrap or a first mount's
+	// key generation failed other than by a refusal. An outage, not a decision about this instance, so
+	// unlike 33 and 35 a restart may succeed.
+	KeyServiceUnreachable = 36
 )
 
 // Err wraps an error with an associated numeric exit code
@@ -79,6 +101,11 @@ func NewErr(msg string, code int) Err {
 		error: errors.New(msg),
 		code:  code,
 	}
+}
+
+// Code returns the exit code carried by the error.
+func (e Err) Code() int {
+	return e.code
 }
 
 // Exit extracts the numeric exit code from "err" (if available) and exits the

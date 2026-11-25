@@ -15,8 +15,12 @@ import (
 )
 
 const (
-	// CurrentVersion is the current On-Disk-Format version
-	CurrentVersion = 2
+	// CurrentVersion is the current On-Disk-Format version. TKFS v2 (the KEK wrapped-key model)
+	// bumps it from the gocryptfs-v1 value of 2 to 3 as a hard format break: the content AAD no
+	// longer carries the per-file envelope tail, and every data block names its key-ring index —
+	// so v1/v2 filesystems are intentionally unreadable and fail closed. (Distinct from any
+	// hypothetical upstream v3.)
+	CurrentVersion = 3
 
 	headerVersionLen = 2  // uint16
 	headerIDLen      = 16 // 128 bit random file id

@@ -26,6 +26,8 @@ gocryptfs.1
 .idea
 gocryptfs-xray
 __debug_bin*
+# A compiled test binary. The "*.test" rule above does not match this name, and it is ~22MB.
+gocryptfs.test-bin
 
 # Ignore macos specific files
 .DS_Store

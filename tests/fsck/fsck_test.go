@@ -1,72 +1,50 @@
 package fsck
 
 import (
-	"encoding/base64"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/pkg/xattr"
-
+	"github.com/rfjakob/gocryptfs/v2/internal/configfile"
 	"github.com/rfjakob/gocryptfs/v2/internal/exitcodes"
 	"github.com/rfjakob/gocryptfs/v2/tests/test_helpers"
 )
 
-func dec64(in string) (out []byte) {
-	out, err := base64.RawURLEncoding.DecodeString(in)
+func runFsck(t *testing.T, cDir string) int {
+	cmd := exec.Command(test_helpers.GocryptfsBinary, "-fsck", "-mock-kms", cDir)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return test_helpers.ExtractCmdExitCode(cmd.Run())
+}
+
+// TestFsckTKFS checks that fsck unwraps the ring like a mount does.
+func TestFsckTKFS(t *testing.T) {
+	cDir := test_helpers.InitFS(t)
+	pDir := cDir + ".mnt"
+	test_helpers.MountOrFatal(t, cDir, pDir)
+	if err := os.WriteFile(pDir+"/file", []byte("content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	test_helpers.UnmountPanic(pDir)
+	if code := runFsck(t, cDir); code != 0 {
+		t.Fatalf("fsck exited %d, want 0", code)
+	}
+}
+
+// TestFsckRefusesAMountedFilesystem holds the ring lock as a mount does; fsck must not run under it.
+func TestFsckRefusesAMountedFilesystem(t *testing.T) {
+	cDir := test_helpers.InitFS(t)
+	lock, err := configfile.LockKeyRing(filepath.Join(cDir, configfile.ConfDefaultName), 0)
 	if err != nil {
-		panic(err)
-	}
-	return out
-}
-
-func TestBrokenFsV14(t *testing.T) {
-	// git does not save extended attributes, so we apply them here.
-	// xattr_good
-	xattr.Set("broken_fs_v1.4/6nGs4Ugr3EAHd0KzkyLZ-Q",
-		"user.gocryptfs.0a5e7yWl0SGUGeWB0Sy2Kg",
-		dec64("hxnZvXSkDicfwVS9w4r1yYkFF61Qou6NaL-VhObYEdu6kuM"))
-	// xattr_corrupt_name
-	xattr.Set("broken_fs_v1.4/CMyUifVTjW5fsgXonWBT_RDkvLkdGrLttkZ45T3Oi3A",
-		"user.gocryptfs.0a5e7yWl0SGUGeWB0Sy2K0",
-		dec64("QHUMDTgbnl8Sv_A2dFQic_G2vN4_gmDna3651JAhF7OZ-YI"))
-	// xattr_corrupt_value
-	xattr.Set("broken_fs_v1.4/b00sbnGXGToadr01GHZaYQn8tjyRhe1OXNBZoQtMlcQ",
-		"user.gocryptfs.0a5e7yWl0SGUGeWB0Sy2Kg",
-		dec64("A0hvCePeKpL8bCpijhDKtf7cIijXYQsPnEbNJ84M2ONW0dd"))
-
-	cmd := exec.Command(test_helpers.GocryptfsBinary, "-fsck", "-extpass", "echo test", "broken_fs_v1.4")
-	outBin, err := cmd.CombinedOutput()
-	out := string(outBin)
-	t.Log(out)
-	code := test_helpers.ExtractCmdExitCode(err)
-	if code != exitcodes.FsckErrors {
-		t.Errorf("wrong exit code, have=%d want=%d", code, exitcodes.FsckErrors)
-	}
-}
-
-func TestMalleableBase64(t *testing.T) {
-	// Evil filenames. Cannot have them in git, because if we do,
-	//  go install github.com/rfjakob/gocryptfs/v2@latest
-	// fails with
-	//  g: malformed file path "tests/fsck/malleable_base64/27AG8t-XZH7G9ou2OSD_z\rg": invalid char '\r'
-	//  g: malformed file path "tests/fsck/malleable_base64/27AG8t-XZH7G9ou2OSD_z\rg": invalid char '\r'
-	if err := os.WriteFile("malleable_base64/27AG8t-XZH7G9ou2OSD_z\ng", nil, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile("malleable_base64/27AG8t-XZH7G9ou2OSD_z\rg", nil, 0644); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(test_helpers.GocryptfsBinary, "-fsck", "-extpass", "echo test", "malleable_base64")
-	outBin, err := cmd.CombinedOutput()
-	out := string(outBin)
-	t.Log(out)
-	code := test_helpers.ExtractCmdExitCode(err)
-	if code != exitcodes.FsckErrors {
-		t.Errorf("wrong exit code, have=%d want=%d", code, exitcodes.FsckErrors)
+	defer lock.Close()
+	if code := runFsck(t, cDir); code != exitcodes.AlreadyMounted {
+		t.Fatalf("fsck exited %d, want %d", code, exitcodes.AlreadyMounted)
 	}
 }
 
@@ -78,14 +56,12 @@ func TestTerabyteFile(t *testing.T) {
 	}
 	cDir := test_helpers.InitFS(t)
 	pDir := cDir + ".mnt"
-	test_helpers.MountOrFatal(t, cDir, pDir, "-extpass", "echo test")
-	defer test_helpers.UnmountErr(pDir)
+	test_helpers.MountOrFatal(t, cDir, pDir)
 	veryBigFile := pDir + "/veryBigFile"
 	fd, err := os.Create(veryBigFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer fd.Close()
 	var oneTiB int64 = 1024 * 1024 * 1024 * 1024
 	_, err = fd.WriteAt([]byte("foobar"), oneTiB)
 	if err != nil {
@@ -95,8 +71,10 @@ func TestTerabyteFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fd.Close()
+	test_helpers.UnmountPanic(pDir)
 	t.Logf("size=%d, running fsck", fi.Size())
-	cmd := exec.Command(test_helpers.GocryptfsBinary, "-fsck", "-extpass", "echo test", cDir)
+	cmd := exec.Command(test_helpers.GocryptfsBinary, "-fsck", "-mock-kms", cDir)
 	cmd.Stderr = os.Stderr
 	cmd.Stdout = os.Stdout
 	cmd.Start()
@@ -104,6 +82,9 @@ func TestTerabyteFile(t *testing.T) {
 		t.Error("timeout, sending SIGINT")
 		syscall.Kill(cmd.Process.Pid, syscall.SIGINT)
 	})
-	cmd.Wait()
+	code := test_helpers.ExtractCmdExitCode(cmd.Wait())
 	timer.Stop()
+	if code != 0 {
+		t.Errorf("fsck exited %d, want 0", code)
+	}
 }
