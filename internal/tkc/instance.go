@@ -15,7 +15,7 @@ var (
 
 // Connect establishes the KEK data-key connector. It is the first key-provider call and runs
 // exactly once. The connector depends on the mode:
-//   - search:  the TrustedSearch KMS over mTLS + tenant token (ramdisk-provisioned certs)
+//   - search:  keep, or Nexus when the ramdisk's gw.provider says so, over mTLS (ramdisk-provisioned certs)
 //   - mockKMS: an in-process bbolt-backed mock gateway (no live key service required)
 //   - default: TrustedGateway over mTLS (operator-provisioned certs)
 //

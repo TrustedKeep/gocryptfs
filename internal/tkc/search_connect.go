@@ -3,12 +3,16 @@ package tkc
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/build"
 	"io"
+	"io/fs"
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/TrustedKeep/tkutils/v2/diskutil"
@@ -33,7 +37,12 @@ const (
 	searchCAFile         = "gw.ca.pem"
 	searchTokenFile      = "gw.token"
 	searchHostsFile      = "gw.hosts.json"
+	searchProviderFile   = "gw.provider"
+	searchNamespaceFile  = "gw.namespace"
 )
+
+// searchProviderNexus is the gw.provider value that selects Nexus; no file, or any other value, selects keep.
+const searchProviderNexus = "nexus"
 
 // TrustedSearch KMS data-key routes. keep serves them under its /keepsvc prefix on the
 // management port; the client authenticates with the ramdisk mTLS cert plus a tenant token.
@@ -44,27 +53,56 @@ const (
 	searchHeartbeatPath = "/keepsvc/tenantdatakey/heartbeat"
 )
 
+// Nexus serves the same routes at its search listener's root, where each host carries its own port. The
+// caller's namespace travels in a header in place of the tenant token.
+const (
+	nexusGeneratePath    = "/tkfsdatakey/generate"
+	nexusUnwrapPath      = "/tkfsdatakey/unwrap"
+	nexusHeartbeatPath   = "/tkfsdatakey/heartbeat"
+	nexusNamespaceHeader = "Namespace"
+)
+
+// searchProvider is what differs on the wire between keep and Nexus; load picks one from the ramdisk.
+type searchProvider struct {
+	name string
+	// port is appended to each host; Nexus hosts carry their own.
+	port                        string
+	generate, unwrap, heartbeat string
+	// authHeader carries the connector's auth value: keep's tenant token, or the Nexus namespace.
+	authHeader string
+	// rejected is what a 401 means.
+	rejected string
+}
+
+var (
+	keepSearch = searchProvider{
+		name: "keep", port: ":" + strconv.Itoa(searchKMSPort),
+		generate: searchGeneratePath, unwrap: searchUnwrapPath, heartbeat: searchHeartbeatPath,
+		authHeader: kmsclient.HeaderTenantToken, rejected: "tenant token rejected",
+	}
+	nexusSearch = searchProvider{
+		name:     "Nexus",
+		generate: nexusGeneratePath, unwrap: nexusUnwrapPath, heartbeat: nexusHeartbeatPath,
+		authHeader: nexusNamespaceHeader, rejected: "client certificate not accepted",
+	}
+)
+
 const searchHTTPTimeout = 10 * time.Second
 
-// searchConnector is the -search client of the KEK data-key API. It talks to the TrustedSearch KMS
-// (keep) directly, authenticating with a tenant token as well as its mTLS client cert, both read from
-// the TrustedSearch ramdisk. Same generate/unwrap/heartbeat contract and per-call transit wrap as the
-// gateway connector.
-//
-// keep scopes the KEK to the instance's identity on this route exactly as on the gateway's, and applies
-// the same TKFS policy, so a filesystem reaches the same KEK whichever route it mounts through.
+// searchConnector is the -search client of the KEK data-key API, served by keep or, when the ramdisk's
+// gw.provider says so, by Nexus. keep shares its KEKs with the gateway route; Nexus keeps its own per namespace.
 type searchConnector struct {
 	nodeID   string
 	identity instanceIdentity
-	token    string
+	provider searchProvider
+	// auth is sent in provider.authHeader on every call unless empty, as it is for Nexus without a namespace.
+	auth     string
 	kmsHosts []string
 	client   *http.Client
 }
 
-// newSearchConnector loads the ramdisk-provisioned material and builds the mTLS client. lizard
-// writes the ramdisk before launching gocryptfs, so a missing/empty file set is a fatal
-// misconfiguration. Data-key calls happen only at mount start, so the material is read
-// once; a remount picks up rotated certs.
+// newSearchConnector reads the ramdisk lizard writes before launching gocryptfs; missing material is fatal.
+// Nothing but identity changes afterwards, so calls read the rest unlocked and new certs need a remount.
 func newSearchConnector(nodeID string) *searchConnector {
 	if nodeID == "" {
 		tlog.Fatal.Printf("search connector: NodeID is required")
@@ -89,6 +127,10 @@ func (s *searchConnector) load(ramdisk string) error {
 	read := func(name string) ([]byte, error) {
 		return os.ReadFile(fmt.Sprintf("%s/%s", ramdisk, name))
 	}
+	nexus, namespace, err := readSearchProvider(read)
+	if err != nil {
+		return err
+	}
 	certPEM, err := read(searchCertFile)
 	if err != nil {
 		return fmt.Errorf("reading search client cert: %w", err)
@@ -105,9 +147,13 @@ func (s *searchConnector) load(ramdisk string) error {
 	if len(bytes.TrimSpace(caPEM)) == 0 {
 		return fmt.Errorf("search CA is empty")
 	}
-	tokenBytes, err := read(searchTokenFile)
-	if err != nil {
-		return fmt.Errorf("reading search tenant token: %w", err)
+	provider, auth := nexusSearch, namespace
+	if !nexus {
+		token, err := read(searchTokenFile)
+		if err != nil {
+			return fmt.Errorf("reading search tenant token: %w", err)
+		}
+		provider, auth = keepSearch, string(bytes.TrimSpace(token))
 	}
 	hostsData, err := read(searchHostsFile)
 	if err != nil {
@@ -124,7 +170,7 @@ func (s *searchConnector) load(ramdisk string) error {
 	if err != nil {
 		return fmt.Errorf("building search TLS config: %w", err)
 	}
-	s.token = string(bytes.TrimSpace(tokenBytes))
+	s.provider, s.auth = provider, auth
 	s.kmsHosts = hosts
 	s.client = &http.Client{
 		Timeout: searchHTTPTimeout,
@@ -135,8 +181,35 @@ func (s *searchConnector) load(ramdisk string) error {
 			TLSClientConfig: tlsConfig,
 		},
 	}
-	tlog.Info.Printf("Loaded TrustedSearch mTLS material from %s (%d KMS hosts)", ramdisk, len(hosts))
+	switch {
+	case nexus && namespace == "":
+		tlog.Info.Printf("Loaded TrustedSearch mTLS material from %s (Nexus, no %s so Nexus's default namespace, %d hosts)", ramdisk, searchNamespaceFile, len(hosts))
+	case nexus:
+		tlog.Info.Printf("Loaded TrustedSearch mTLS material from %s (Nexus, namespace %q, %d hosts)", ramdisk, namespace, len(hosts))
+	default:
+		tlog.Info.Printf("Loaded TrustedSearch mTLS material from %s (keep, %d KMS hosts)", ramdisk, len(hosts))
+	}
 	return nil
+}
+
+// readSearchProvider reports whether the ramdisk selects Nexus, and with it any namespace to send. A missing
+// gw.provider is keep and a missing or blank gw.namespace sends none, but an unreadable file is an error.
+func readSearchProvider(read func(string) ([]byte, error)) (nexus bool, namespace string, err error) {
+	marker, err := read(searchProviderFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("reading search provider: %w", err)
+	}
+	if strings.TrimSpace(string(marker)) != searchProviderNexus {
+		return false, "", nil
+	}
+	ns, err := read(searchNamespaceFile)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, "", fmt.Errorf("reading search namespace: %w", err)
+	}
+	return true, strings.TrimSpace(string(ns)), nil
 }
 
 // GenerateTKFSDataKey mints a fresh KMS-wrapped master key, returned transit-wrapped to a
@@ -153,7 +226,7 @@ func (s *searchConnector) GenerateTKFSDataKey() (TKFSDataKey, error) {
 		TransportPubKey: pubPEM,
 	}
 	var out model.TKFSDataKeyGenerateResponse
-	if err := s.post(searchGeneratePath, req, &out); err != nil {
+	if err := s.post(s.provider.generate, req, &out); err != nil {
 		return TKFSDataKey{}, err
 	}
 	if out.KeyID == "" || len(out.Ciphertext) == 0 {
@@ -191,7 +264,7 @@ func (s *searchConnector) UnwrapTKFSDataKey(keyID string, ciphertext []byte) ([]
 		TransportPubKey: pubPEM,
 	}
 	var out model.TKFSDataKeyUnwrapResponse
-	if err := s.post(searchUnwrapPath, req, &out); err != nil {
+	if err := s.post(s.provider.unwrap, req, &out); err != nil {
 		return nil, err
 	}
 	dek, err := unwrapTransit(k, out.TransitWrappedKey)
@@ -210,7 +283,7 @@ func (s *searchConnector) Heartbeat(event model.TKFSHeartbeatEvent, keyIdx uint1
 		Event:        event,
 	}
 	var out model.TKFSHeartbeatResponse
-	if err := s.post(searchHeartbeatPath, req, &out); err != nil {
+	if err := s.post(s.provider.heartbeat, req, &out); err != nil {
 		return model.TKFSHeartbeatResponse{}, err
 	}
 	return out, nil
@@ -241,11 +314,9 @@ func keepRedirect(body []byte) string {
 	return r.Redirect
 }
 
-// post sends body as JSON to a KMS data-key route, trying the configured hosts in random order
-// until one answers. Each request carries the tenant token in addition to the mTLS client cert.
-// A 401/403 is returned immediately: another host will not fix an authorization failure. Anything else,
-// including a 404/501 or a sealed node's redirect, falls through to the next host, since one keep node
-// says nothing about the others; ErrNotImplemented is returned only when every host answered 404/501.
+// post sends body as JSON to the provider's route, trying the hosts in random order until one answers.
+// A 401/403 returns at once; anything else, including a 404/501 or a sealed keep node's redirect, tries the
+// next host, and ErrNotImplemented is returned only when every host answered 404/501.
 func (s *searchConnector) post(path string, body, out any) error {
 	if s.client == nil {
 		return fmt.Errorf("search client not initialized")
@@ -261,13 +332,15 @@ func (s *searchConnector) post(path string, body, out any) error {
 	notImplemented := 0
 	for _, idx := range rand.Perm(len(s.kmsHosts)) {
 		host := s.kmsHosts[idx]
-		url := fmt.Sprintf("https://%s:%d%s", host, searchKMSPort, path)
+		url := fmt.Sprintf("https://%s%s%s", host, s.provider.port, path)
 		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(buf))
 		if err != nil {
 			return err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set(kmsclient.HeaderTenantToken, s.token)
+		if s.auth != "" {
+			req.Header.Set(s.provider.authHeader, s.auth)
+		}
 		resp, err := s.client.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("search %s @ %s: %w", path, host, transportErr(err))
@@ -288,7 +361,7 @@ func (s *searchConnector) post(path string, body, out any) error {
 			// spend a retry budget on it.
 			return fmt.Errorf("search %s: not authorized (HTTP 403): %w: %s", path, ErrDenied, bytes.TrimSpace(respBody))
 		case resp.StatusCode == http.StatusUnauthorized:
-			return fmt.Errorf("search %s: not authorized (HTTP 401): tenant token rejected: %w: %s", path, ErrUnauthenticated, bytes.TrimSpace(respBody))
+			return fmt.Errorf("search %s: not authorized (HTTP 401): %s: %w: %s", path, s.provider.rejected, ErrUnauthenticated, bytes.TrimSpace(respBody))
 		case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotImplemented:
 			// A route this host does not serve; another may.
 			notImplemented++

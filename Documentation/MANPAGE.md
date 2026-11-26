@@ -705,7 +705,8 @@ KEY-SERVICE HEARTBEAT
 =====================
 
 A mount reports itself to its key service every five minutes — the
-TrustedGateway by default, keep directly under `-search`. The heartbeat
+TrustedGateway by default; under `-search`, keep, or Nexus when the
+TrustedSearch ramdisk selects it. The heartbeat
 registers the instance, the key-ring index it is writing under and the key
 service's creation time for that key, carries back
 any rekey an operator has asked for, is how the key service tells it that its
@@ -740,13 +741,14 @@ service that cannot answer a heartbeat cannot revoke this instance either, so it
 does not get to serve one. A rekey that heartbeat brings back is carried out
 before the filesystem is served.
 
-Once mounted, a refusal — a blocklist entry naming the instance, or its DN
-removed from the ACL (gateway mounts only; `-search` has no ACL) — suspends the
-mount on the heartbeat that carries it. Merely *failing to reach* the key
-service is survivable twice, and the third consecutive failure suspends it too. A
-404 or 501 counts as failing to reach it (under `-search`, only when every keep
-host answers so), and so does a keep node that is still unsealing, which
-answers with a redirect to its unseal page. Removing the instance's CA from the gateway's trust set is one of those failures, not a refusal: the TLS handshake
+Once mounted, a refusal — a blocklist entry naming the instance, its DN
+removed from the ACL (gateway mounts only; `-search` has no ACL), or its
+certificate's subject removed from Nexus's `[search] systemsubjects` (Nexus
+mounts only) — suspends the mount on the heartbeat that carries it. Merely
+*failing to reach* the key service is survivable twice, and the third
+consecutive failure suspends it too. A 404 or 501 counts as failing to reach it
+(under `-search`, only when every host answers so), and so does a keep node
+that is still unsealing, which answers with a redirect to its unseal page. Removing the instance's CA from the gateway's trust set is one of those failures, not a refusal: the TLS handshake
 fails, so it takes three heartbeats. A heartbeat the key service answers but
 cannot record also counts as a failure, not as a success: revocation acts
 through that record, so a mount missing from it is one nobody can stop.
@@ -794,8 +796,9 @@ certificate stop working anywhere else. Only a mount pairs: such a gateway
 refuses an unpaired filesystem's heartbeat and rotation, so a mount already
 running when binding is turned on is suspended at its next heartbeat and must
 be remounted by hand, which pairs it. A gateway that does
-not require binding pairs nothing. `-search` mounts reach keep directly, send
-no document and are never paired.
+not require binding pairs nothing. `-search` mounts reach keep, or Nexus when
+the TrustedSearch ramdisk selects it, without a gateway; they send no document
+and are never paired.
 
 Off EC2 there is no document: the mount warns once and carries on. A gateway
 that requires binding refuses such a mount, and one on any instance but its

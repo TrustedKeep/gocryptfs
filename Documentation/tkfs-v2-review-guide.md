@@ -53,7 +53,7 @@ flowchart LR
   op --> adm -- "proxy" --> state
 ```
 
-Besides the mTLS check against the trusted CA set, gatehouse decides instance binding, including refusing `-sharedstorage`, when `TKFSRequireBinding` is on. It also keeps TKFS KEK calls off S2S: it never relays one to a peer and refuses one a peer relays. A `-search` mount (not drawn) calls keep directly on :7070 with a tenant token, skipping the gateway and the ACL; the blocklist still applies, and keep refuses a paired instance there.
+Besides the mTLS check against the trusted CA set, gatehouse decides instance binding, including refusing `-sharedstorage`, when `TKFSRequireBinding` is on. It also keeps TKFS KEK calls off S2S: it never relays one to a peer and refuses one a peer relays. A `-search` mount (not drawn) calls keep directly on :7070 with a tenant token, or Nexus when the ramdisk's `gw.provider` is `nexus`, skipping the gateway and the ACL; the blocklist still applies, and keep refuses a paired instance there.
 
 ## Phases
 
@@ -81,7 +81,7 @@ A filesystem's keys live in `KR`, a ring of entries that each hold one 32-byte d
 
 - **One key, two halves.** `cryptocore.New` HKDF-derives an EME name key and an AEAD content key from each entry, as stock gocryptfs does. The v1 envelope code (`tk_aead_*`, `CEK`, envelope xattrs) is gone.
 - **The first mount generates, not `-init`.** `-init` writes the config and NodeID and never calls the key service. The first mount mints the key, writes the root `gocryptfs.diriv`, then persists the ring before anything uses the key.
-- **No plaintext key between client and key service.** Each generate and unwrap mints an ephemeral RSA-3072 transport key, and the gateway (keep, on `-search`) returns the data key RSA-OAEP-wrapped to it as `TransitWrappedKey`. See [Transit wrap](#transit-wrap).
+- **No plaintext key between client and key service.** Each generate and unwrap mints an ephemeral RSA-3072 transport key, and the gateway (keep or Nexus, on `-search`) returns the data key RSA-OAEP-wrapped to it as `TransitWrappedKey`. See [Transit wrap](#transit-wrap).
 - **Identity comes from the key.** keep mints one KEK on an instance's first generate, and its id is the instance's `KekID`. Every ring entry repeats it as `KeyID`, so `KeyID` never distinguishes entries; `Ciphertext` does.
 - **Hygiene.** Memory is locked, and each plaintext key is zeroized right after `cryptocore.New`.
 
@@ -124,7 +124,7 @@ A call succeeds when three things hold: its client CA is trusted, its DN is in t
 
 - **Listener.** gatehouse serves `generate`, `unwrap` and `heartbeat` on a dedicated mTLS port, 7083 by default (`TKFSDataKeyPort`). Its client-CA pool is the operator's trusted CA set, not the tenant PKI; keep refuses an upload holding any non-CA certificate. A supervisor starts the listener within seconds of the first CA reaching the gateway, reloads it when a CA is added, and rebuilds it, dropping open connections, when one is removed. It never loads an empty bundle, which would fail open: an empty set stops the listener once a keep read at least 30 seconds later confirms it.
 - **keep decides.** gatehouse forwards to keep, where `tcv.TKFSPermissionCheck` checks the ACL and blocklist on every call. TKFS calls use `ServiceTKFS`, which skips keep's MCSE collection check and resolves KEKs only in TKFS's own namespace.
-- **`-search` route.** TrustedSearch mounts call keep directly at `/keepsvc/tenantdatakey/*` on :7070 with a tenant token. keep skips the ACL there but applies the blocklist and refuses paired instances. The route is passed in by the handler, never read from the wire.
+- **`-search` route.** TrustedSearch mounts call keep directly at `/keepsvc/tenantdatakey/*` on :7070 with a tenant token. keep skips the ACL there but applies the blocklist and refuses paired instances. The route is passed in by the handler, never read from the wire. With `nexus` in the ramdisk's `gw.provider`, they call Nexus at `/tkfsdatakey/*` with a `Namespace` header instead; see [nexus-tkfs-v2-api.md](nexus-tkfs-v2-api.md).
 - **Hard and soft blocks.** The DN comes from the verified certificate, so a DN block is hard. A KekID block is hard for key access, because unwrap only works under the KEK that id names; it is soft only on heartbeats. NodeID is self-asserted, so a NodeID block only stops a cooperative instance.
 
 ```mermaid
@@ -179,7 +179,7 @@ sequenceDiagram
 
 - **Code.** tkutils `model/transit.go`. The client calls `NewTransportKey` and `TransitUnwrap` through `newTransport` and `unwrapTransit` in gocryptfs `internal/tkc/gwconnect.go`; the servers call `ValidateTransportKey` and `TransitWrap`.
 - **Validation.** `ValidateTransportKey` accepts only an RSA-2048, 3072 or 4096 key of the declared size, with exponent 65537. gatehouse checks it on every generate and unwrap before calling keep, so a bad key gets 400 and leaves no KEK or pairing behind; on `-search`, keep checks it before a mint.
-- **Who wraps.** On the gateway route gatehouse wraps, after keep returns the plaintext over OEC, so the keep-to-gatehouse hop is outside this layer. On the `-search` route keep wraps itself.
+- **Who wraps.** On the gateway route gatehouse wraps, after keep returns the plaintext over OEC, so the keep-to-gatehouse hop is outside this layer. On the `-search` route keep, or Nexus, wraps itself.
 - **What it stops.** Request or response logging, a TLS key log, or a dump of TLS buffers yields nothing usable.
 - **What it does not stop.** Anyone who can modify the decrypted request can swap in their own `TransportPubKey`, read the key, re-wrap it to the client's key and forward the reply. On an mTLS channel that needs a broken TLS layer, and anyone holding an allowed certificate can already unwrap a copied `KR` directly, unless the instance is paired and every gateway in the tenant requires binding.
 - **RSA only, by design.** A KEM cannot encrypt a chosen key, so a post-quantum transport would be a protocol change. `TransportAlg` already travels on the wire for that.
